@@ -152,3 +152,9 @@ configs/local/default.yaml
 
 # Aim logging
 .aim
+
+# Lock files
+*.lock
+
+# any csv files
+*.csv
