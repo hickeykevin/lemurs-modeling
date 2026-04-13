@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "LEMURS modeling package"
 requires-python = ">=3.12"
 dependencies = [
-    "torch>=2.0.0",
+    "torch>=2.11.0",
     "torchvision>=0.15.0",
     "lightning>=2.0.0",
     "torchmetrics>=0.11.4",
