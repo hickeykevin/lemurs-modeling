@@ -1,0 +1,2 @@
+_target_: src.data.components.label_aggregators.MeanAggregator
+threshold: null # Binarize predictions: set to 1 if mean answer is >= threshold, else null
