@@ -7,6 +7,7 @@ from src.data.components.health_dataset import HealthDataset
 from src.data.components.label_aggregators import LabelAggregator
 from src.data.components.samplers import TimeSampler
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import train_test_split
 
 class HealthDataModule(LightningDataModule):
@@ -30,6 +31,7 @@ class HealthDataModule(LightningDataModule):
         self,
         aggregator: LabelAggregator,
         sampler: TimeSampler,
+        scaler: Optional[Any] = None,
         modalities: List[str] = ["step"],
         modality_cols: Dict[str, str] = {"step": "steps"},
         question_ids: List[int] = [2],
@@ -45,6 +47,7 @@ class HealthDataModule(LightningDataModule):
         Args:
             aggregator (LabelAggregator): Strategy for aggregating multiple survey answers into one label.
             sampler (TimeSampler): Strategy for sampling time-series data relative to survey timestamps.
+            scaler (Optional[Any]): Optional scaler object (e.g. sklearn StandardScaler) to apply to features.
             modalities (List[str]): List of database tables to fetch (e.g. ["step", "calorie"]).
             modality_cols (Dict[str, str]): Mapping of table names to numeric value column names.
             question_ids (List[int]): List of survey question IDs to aggregate for the target.
@@ -115,14 +118,37 @@ class HealthDataModule(LightningDataModule):
                 right_on='id',
                 suffixes=('', '_survey')
             ).rename(columns={'timestamp': 'record_timestamp'})
-
             # 4. Perform splitting based on the selected evaluation strategy
             train_df, val_df, test_df = self._split_data(master_df)
 
-            # Instantiate final Dataset objects with the appropriately filtered data
-            self.data_train = HealthDataset(train_df, modality_dfs, self.hparams.modality_cols, self.hparams.sampler)
-            self.data_val = HealthDataset(val_df, modality_dfs, self.hparams.modality_cols, self.hparams.sampler)
-            self.data_test = HealthDataset(test_df, modality_dfs, self.hparams.modality_cols, self.hparams.sampler)
+            # 5. Optional Normalization
+            # We fit the scaler on the training data ONLY
+            if self.hparams.scaler is not None:
+                # Create a temporary dataset to collect training features
+                temp_train_ds = HealthDataset(
+                    train_df, modality_dfs, self.hparams.modality_cols, self.hparams.sampler
+                )
+                all_features = []
+                for i in range(len(temp_train_ds)):
+                    seq, _ = temp_train_ds[i]
+                    all_features.append(seq.numpy())
+                
+                all_features_flattened = np.concatenate(all_features, axis=0) # [N*Time, Features]
+                self.hparams.scaler.fit(all_features_flattened)
+
+            # 6. Instantiate final Dataset objects with the appropriately filtered data
+            self.data_train = HealthDataset(
+                train_df, modality_dfs, self.hparams.modality_cols, 
+                self.hparams.sampler, self.hparams.scaler
+            )
+            self.data_val = HealthDataset(
+                val_df, modality_dfs, self.hparams.modality_cols, 
+                self.hparams.sampler, self.hparams.scaler
+            )
+            self.data_test = HealthDataset(
+                test_df, modality_dfs, self.hparams.modality_cols, 
+                self.hparams.sampler, self.hparams.scaler
+            )
 
     def _split_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Dispatches to the appropriate splitting strategy.

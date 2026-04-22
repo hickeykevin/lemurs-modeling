@@ -73,6 +73,39 @@ def test_mean_aggregator():
     assert result_bin.loc[result_bin['survey_response_id'] == 1, 'answer'].values[0] == 1
     assert result_bin.loc[result_bin['survey_response_id'] == 2, 'answer'].values[0] == 0
 
+def test_datamodule_normalization(dummy_data):
+    """Tests that the datamodule correctly fits and applies a scaler."""
+    from sklearn.preprocessing import StandardScaler
+    from src.data.components.samplers import OffsetSampler
+    
+    with patch('src.data.health_datamodule.DatabaseService') as mock_db_class:
+        mock_db = mock_db_class.return_value
+        mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
+        
+        # Initial values in dummy_data for steps are all 10 or 20
+        # If we use StandardScaler, it should shift them
+        scaler = StandardScaler()
+        dm = HealthDataModule(
+            aggregator=MeanAggregator(),
+            sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
+            scaler=scaler,
+            question_ids=[2]
+        )
+        dm.setup()
+        
+        # Check that scaler is fitted
+        assert hasattr(scaler, "mean_")
+        
+        # Get a sample
+        train_ds = dm.data_train
+        seq, target = train_ds[0]
+        
+        # If mean was 15 (hypothetically), 20 would become (20-15)/std
+        # The key is that the tensor should not be the raw [10, 20] values
+        # We check that the mean of the sequence is roughly 0 if we normalized the whole thing
+        # (Though with only a few samples it might not be exactly 0)
+        assert not torch.allclose(seq.mean(), torch.tensor(15.0), atol=1.0)
+
 def test_max_aggregator():
     """Tests that MaxAggregator correctly triggers if ANY answer meets threshold."""
     df = pd.DataFrame({
