@@ -20,6 +20,7 @@ dependencies = [
     "jupyter>=1.1.1",
     "psycopg2-binary>=2.9.11",
     "scikit-learn>=1.8.0",
+    "flaml[automl]>=2.5.0",
 ]
 
 [tool.pytest.ini_options]

@@ -75,7 +75,7 @@ class HealthDataset(Dataset):
         )
         
         # 2. Apply feature scaling if a scaler was provided
-        if self.scaler is not None:
+        if self.scaler is not None and hasattr(self.scaler, "transform"):
             # Reshape to [Time * 1, Modalities] as sklearn scalers expect [Samples, Features]
             original_shape = sequence.shape
             sequence = self.scaler.transform(sequence.reshape(-1, original_shape[-1]))

@@ -123,7 +123,7 @@ class HealthDataModule(LightningDataModule):
 
             # 5. Optional Normalization
             # We fit the scaler on the training data ONLY
-            if self.hparams.scaler is not None:
+            if self.hparams.scaler is not None and hasattr(self.hparams.scaler, "fit"):
                 # Create a temporary dataset to collect training features
                 temp_train_ds = HealthDataset(
                     train_df, modality_dfs, self.hparams.modality_cols, self.hparams.sampler
