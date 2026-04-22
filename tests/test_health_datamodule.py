@@ -4,6 +4,7 @@ import torch
 from unittest.mock import MagicMock, patch
 from src.data.health_datamodule import HealthDataModule
 from src.data.components.label_aggregators import MeanAggregator, MaxAggregator
+from src.data.components.samplers import OffsetSampler
 
 @pytest.fixture
 def dummy_data():
@@ -78,11 +79,79 @@ def test_max_aggregator():
         'survey_response_id': [1, 1, 2, 2],
         'answer': [0, 1, 0, 0]
     })
-    
     agg = MaxAggregator(threshold=1.0)
     result = agg(df)
     assert result.loc[result['survey_response_id'] == 1, 'answer'].values[0] == 1
     assert result.loc[result['survey_response_id'] == 2, 'answer'].values[0] == 0
+
+def test_rolling_sampler():
+    """Tests that RollingSampler slices the correct time window and resamples."""
+    from src.data.components.samplers import RollingSampler
+    
+    # 1. Create dummy data: 48 hours of steps for one user
+    timestamps = pd.date_range("2023-01-01", periods=48, freq="h")
+    df = pd.DataFrame({
+        'app_user_id': [1] * 48,
+        'start_timestamp': timestamps,
+        'steps': [10] * 48
+    })
+    modality_dfs = {"step": df}
+    modality_cols = {"step": "steps"}
+    
+    # Survey taken at 2023-01-02 12:30:00 (will floor to 12:00)
+    survey_time = pd.Timestamp("2023-01-02 12:30:00")
+    
+    # Test 12-hour lookback, hourly resampling
+    sampler = RollingSampler(lookback_hours=12, resample_freq="1h")
+    result = sampler(survey_time, 1, modality_dfs, modality_cols, ["step"])
+    
+    # Should have 12 time steps (one per hour)
+    assert result.shape == (12, 1)
+    # Total steps should be 120 (12 * 10)
+    assert result.sum() == 120
+    
+    # Test 12-hour lookback, 4-hour resampling
+    sampler_4h = RollingSampler(lookback_hours=12, resample_freq="4h")
+    result_4h = sampler_4h(survey_time, 1, modality_dfs, modality_cols, ["step"])
+    
+    # Should have 3 time steps (12/4)
+    assert result_4h.shape == (3, 1)
+    # Each bin should have 4 hours of data (40 steps)
+    assert result_4h[0, 0] == 40
+
+def test_offset_sampler():
+    """Tests that OffsetSampler correctly handles offsets from midnight."""
+    from src.data.components.samplers import OffsetSampler
+    
+    # 1. Create dummy data: 48 hours of steps
+    timestamps = pd.date_range("2023-01-01", periods=48, freq="h")
+    df = pd.DataFrame({
+        'app_user_id': [1] * 48,
+        'start_timestamp': timestamps,
+        'steps': [10] * 48
+    })
+    modality_dfs = {"step": df}
+    modality_cols = {"step": "steps"}
+    
+    # Survey taken at 2023-01-02 08:30:00
+    # Midnight of June 2 is 2023-01-02 00:00:00
+    survey_time = pd.Timestamp("2023-01-02 08:30:00")
+    
+    # Target: 6pm June 1 (-6h from midnight) to 6am June 2 (+6h from midnight)
+    sampler = OffsetSampler(start_offset_hours=-6, end_offset_hours=6, resample_freq="1h")
+    result = sampler(survey_time, 1, modality_dfs, modality_cols, ["step"])
+    
+    # Total duration is 12 hours
+    assert result.shape == (12, 1)
+    assert result.sum() == 120
+    
+    # First bin should be June 1 at 18:00
+    # Last bin should be June 2 at 05:00
+    # Wait, my OffsetSampler implementation uses start_time as the first bin.
+    # start_time is June 1 18:00.
+    # end_time is June 2 06:00.
+    # duration 12h. num_periods 12.
+    # full_range starts at 18:00.
 
 @patch('src.data.health_datamodule.DatabaseService')
 def test_datamodule_user_split(mock_db_class, dummy_data):
@@ -93,8 +162,10 @@ def test_datamodule_user_split(mock_db_class, dummy_data):
     
     # Set up DM with user split (50/50 for simplicity in test)
     agg = MeanAggregator(threshold=1.0)
+    sampler = OffsetSampler(start_offset_hours=-24, end_offset_hours=0)
     dm = HealthDataModule(
         aggregator=agg,
+        sampler=sampler,
         question_ids=[2, 4],
         train_val_test_split=(0.5, 0.25, 0.25),
         split_mode="user"
@@ -121,6 +192,7 @@ def test_datamodule_longitudinal_split(mock_db_class, dummy_data):
     
     dm = HealthDataModule(
         aggregator=MeanAggregator(threshold=None),
+        sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
         train_val_test_split=(0.5, 0.25, 0.25),
         split_mode="longitudinal"
     )
@@ -151,6 +223,7 @@ def test_datamodule_multi_question_aggregation(mock_db_class, dummy_data):
     # Mean of [2, 2] = 2.0. Threshold 1.5 -> Label 1
     dm = HealthDataModule(
         aggregator=MeanAggregator(threshold=1.5),
+        sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
         question_ids=[2, 4]
     )
     

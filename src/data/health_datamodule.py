@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, Dataset
 from src.utils.database_service import DatabaseService
 from src.data.components.health_dataset import HealthDataset
 from src.data.components.label_aggregators import LabelAggregator
+from src.data.components.samplers import TimeSampler
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
@@ -28,6 +29,7 @@ class HealthDataModule(LightningDataModule):
     def __init__(
         self,
         aggregator: LabelAggregator,
+        sampler: TimeSampler,
         modalities: List[str] = ["step"],
         modality_cols: Dict[str, str] = {"step": "steps"},
         question_ids: List[int] = [2],
@@ -42,6 +44,7 @@ class HealthDataModule(LightningDataModule):
 
         Args:
             aggregator (LabelAggregator): Strategy for aggregating multiple survey answers into one label.
+            sampler (TimeSampler): Strategy for sampling time-series data relative to survey timestamps.
             modalities (List[str]): List of database tables to fetch (e.g. ["step", "calorie"]).
             modality_cols (Dict[str, str]): Mapping of table names to numeric value column names.
             question_ids (List[int]): List of survey question IDs to aggregate for the target.
@@ -117,9 +120,9 @@ class HealthDataModule(LightningDataModule):
             train_df, val_df, test_df = self._split_data(master_df)
 
             # Instantiate final Dataset objects with the appropriately filtered data
-            self.data_train = HealthDataset(train_df, modality_dfs, self.hparams.modality_cols)
-            self.data_val = HealthDataset(val_df, modality_dfs, self.hparams.modality_cols)
-            self.data_test = HealthDataset(test_df, modality_dfs, self.hparams.modality_cols)
+            self.data_train = HealthDataset(train_df, modality_dfs, self.hparams.modality_cols, self.hparams.sampler)
+            self.data_val = HealthDataset(val_df, modality_dfs, self.hparams.modality_cols, self.hparams.sampler)
+            self.data_test = HealthDataset(test_df, modality_dfs, self.hparams.modality_cols, self.hparams.sampler)
 
     def _split_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Dispatches to the appropriate splitting strategy.
