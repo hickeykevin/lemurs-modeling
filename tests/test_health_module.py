@@ -27,6 +27,7 @@ def test_health_lit_module():
         return torch.optim.Adam(params, lr=0.001)
         
     module = HealthLitModule(net=net, optimizer=optimizer_func)
+    module.setup(stage="fit", num_classes=num_classes)
     
     # 3. Create a dummy batch
     # x: [Batch, Time, Features]

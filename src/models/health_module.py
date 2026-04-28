@@ -1,4 +1,5 @@
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Optional, List
+
 import torch
 from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric
@@ -74,30 +75,8 @@ class HealthLitModule(LightningModule):
         return self.net(x)
 
     def on_train_start(self) -> None:
-        """Lightning hook that is called when training begins.
+        pass
 
-        This hook is used here to dynamically determine the number of classes from the 
-        validation set and initialize metrics accordingly.
-        """
-        # We look at the validation set to find the range of labels
-        val_dataloader = self.trainer.datamodule.val_dataloader()
-        y_list = []
-        for batch in val_dataloader:
-            _, y = batch
-            y_list.append(y.cpu().numpy())
-        
-        y_train = np.concatenate(y_list, axis=0)
-        self.num_classes = int(np.max(y_train)) + 1
-
-        # Instantiate the actual Accuracy metrics with the correct number of classes
-        self.train_acc = self.train_acc(num_classes=self.num_classes)
-        self.val_acc = self.val_acc(num_classes=self.num_classes)
-        self.test_acc = self.test_acc(num_classes=self.num_classes)
-        
-        # Reset metrics to ensure a clean start
-        self.val_loss.reset()
-        self.val_acc.reset()
-        self.val_acc_best.reset()
 
     def model_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor]
@@ -182,7 +161,7 @@ class HealthLitModule(LightningModule):
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
 
-    def setup(self, stage: str) -> None:
+    def setup(self, stage: str, **kwargs) -> None:
         """Lightning hook for setting up data or model before training.
 
         Args:
@@ -190,6 +169,35 @@ class HealthLitModule(LightningModule):
         """
         if self.hparams.compile and stage == "fit":
             self.net = torch.compile(self.net)
+
+        if not hasattr(self, "num_classes"):
+            num_classes = kwargs.get("num_classes")
+            if num_classes is not None:
+                self.num_classes = num_classes
+            elif hasattr(self, "trainer") and self.trainer is not None:
+                # We look at the validation set to find the range of labels
+                val_dataloader = self.trainer.datamodule.val_dataloader()
+                y_list = []
+                for batch in val_dataloader:
+                    _, y = batch
+                    y_list.append(y.cpu().numpy())
+                
+                y_train = np.concatenate(y_list, axis=0)
+                self.num_classes = int(np.max(y_train)) + 1
+            else:
+                raise RuntimeError("Cannot determine num_classes: neither num_classes arg nor trainer is available.")
+
+
+            # Instantiate the actual Accuracy metrics with the correct number of classes
+            self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+            self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+            self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+            
+            # Reset metrics to ensure a clean start
+            self.val_loss.reset()
+            self.val_acc.reset()
+            self.val_acc_best.reset()
+
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """Choose what optimizers and learning-rate schedulers to use in your optimization.
@@ -258,39 +266,40 @@ class FLAMLHealthModule(LightningModule):
         # x: [B, T, F] -> [B, T*F]
         return x.cpu().numpy().reshape(x.shape[0], -1)
 
-    def on_train_start(self) -> None:
-        """Collects the entire training set and fits the AutoML model.
-        
-        FLAML performs its own hyperparameter optimization and model selection
-        during this call.
-        """
-        self.print("--- FLAML AutoML: Starting Optimization ---")
-        
-        # Get the training dataloader from the datamodule
-        train_dataloader = self.trainer.datamodule.train_dataloader()
-        
-        X_list, y_list = [], []
-        for batch in train_dataloader:
-            x, y = batch
-            X_list.append(self._flatten_batch(x))
-            y_list.append(y.cpu().numpy())
+    def setup(self, stage: str, **kwargs) -> None:
+        """Collects the entire training set and fits the AutoML model."""
+        if stage == "fit" and not hasattr(self.automl, "best_estimator"):
+            self.print("--- FLAML AutoML: Starting Optimization ---")
             
-        X_train = np.concatenate(X_list, axis=0)
-        y_train = np.concatenate(y_list, axis=0)
+            # Get the training dataloader from the datamodule
+            train_dataloader = self.trainer.datamodule.train_dataloader()
+            
+            X_list, y_list = [], []
+            for batch in train_dataloader:
+                x, y = batch
+                X_list.append(self._flatten_batch(x))
+                y_list.append(y.cpu().numpy())
+                
+            X_train = np.concatenate(X_list, axis=0)
+            y_train = np.concatenate(y_list, axis=0)
 
-        # Dynamically determine classes from training labels
-        num_classes = int(np.max(y_train)) + 1
-        self.train_acc = self.train_acc(num_classes=num_classes)
-        self.val_acc = self.val_acc(num_classes=num_classes)
-        
-        # Fit FLAML (this may take some time depending on automl_config.time_budget)
-        self.automl.fit(
-            X_train=X_train,
-            y_train=y_train,
-            task=self.task,
-            **self.hparams.automl_config
-        )
-        self.print(f"--- FLAML AutoML: Fit Complete. Best Model: {self.automl.best_estimator} ---")
+            # Dynamically determine classes from training labels
+            num_classes = kwargs.get("num_classes")
+            if num_classes is None:
+                num_classes = int(np.max(y_train)) + 1
+                
+            self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
+            self.val_acc = Accuracy(task="multiclass", num_classes=num_classes)
+            
+            # Fit FLAML (this may take some time depending on automl_config.time_budget)
+            self.automl.fit(
+                X_train=X_train,
+                y_train=y_train,
+                task=self.task,
+                **self.hparams.automl_config
+            )
+            self.print(f"--- FLAML AutoML: Fit Complete. Best Model: {self.automl.best_estimator} ---")
+
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         """Dummy training step. 

@@ -27,13 +27,20 @@ class HealthDataModule(LightningDataModule):
         data_test: Test dataset.
     """
 
+    _MODALITY_MAPPING = {
+        "step": "steps",
+        "speed": "speed",
+        "proximity": "number_of_devices",
+        "distance": "distance",
+        "calorie": "calories",
+    }
+
     def __init__(
         self,
         aggregator: LabelAggregator,
         sampler: TimeSampler,
         scaler: Optional[Any] = None,
         modalities: List[str] = ["step"],
-        modality_cols: Dict[str, str] = {"step": "steps"},
         question_ids: List[int] = [2],
         batch_size: int = 8,
         num_workers: int = 0,
@@ -49,7 +56,6 @@ class HealthDataModule(LightningDataModule):
             sampler (TimeSampler): Strategy for sampling time-series data relative to survey timestamps.
             scaler (Optional[Any]): Optional scaler object (e.g. sklearn StandardScaler) to apply to features.
             modalities (List[str]): List of database tables to fetch (e.g. ["step", "calorie"]).
-            modality_cols (Dict[str, str]): Mapping of table names to numeric value column names.
             question_ids (List[int]): List of survey question IDs to aggregate for the target.
             batch_size (int): Number of samples per batch.
             num_workers (int): Number of subprocesses to use for data loading.
@@ -63,6 +69,12 @@ class HealthDataModule(LightningDataModule):
         """
         super().__init__()
         self.save_hyperparameters(logger=False)
+
+        # Build the modality_cols mapping for the requested modalities
+        self.hparams.modality_cols = {
+            mod: self._MODALITY_MAPPING.get(mod, mod) 
+            for mod in self.hparams.modalities
+        }
 
         self.data_train: Optional[Dataset] = None
         self.data_val: Optional[Dataset] = None
