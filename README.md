@@ -144,9 +144,23 @@ uv run src/train.py +model.new_param="owo"
 # Override data sampler
 uv run src/train.py data/sampler=rolling_hour
 
-# Override data aggregator
-uv run src/train.py data/aggregator=max
+# Override data aggregator with rule-based metrics (e.g. suicide risk)
+uv run src/train.py data/aggregator=suicide_risk
 ```
+
+### 🧠 Rule-Based Aggregators (Clinical Targets)
+You can configure composite endpoints using thresholds inside `configs/data/aggregator/`.
+
+Available clinical presets:
+* `suicide_risk`: Q[2,3,7] (Ideation >= 2) OR Q[5,8,12,13] (Binary flags)
+* `self_harm`: Q[9] (Ideation >= 2) OR Q[11,15,16,17,18] (Binary triggers)
+* `positive_emotion`: Q[21,22,37] (Sum <= 5)
+* `negative_emotion`: Q[23,24,25,26,27,28,36] (Sum >= 14)
+* `social_stress`: Q[31,32,33] (Sum >= 6)
+* `social_connection`: Q[34,35] (Sum <= 4)
+* `minority_stress`: Q[40,41,42,43,44] (Sum >= 10)
+* `emotion_regulation`: Q[47,48,49,50,51,52] (Sum >= 9)
+
 
 </details>
 
