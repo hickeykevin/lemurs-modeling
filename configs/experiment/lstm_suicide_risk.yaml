@@ -1,0 +1,32 @@
+# @package _global_
+
+# to execute this experiment run:
+# python src/train.py experiment=lstm_suicide_risk
+
+defaults:
+  - override /data: health
+  - override /model: health
+  - override /model/net: lstm
+  - override /callbacks: default
+  - override /trainer: default
+  - override /data/aggregator: suicide_risk
+
+tags: ["health", "lstm", "suicide_risk"]
+
+seed: 12345
+
+trainer:
+  min_epochs: 1
+  max_epochs: 10
+  accelerator: cpu
+  devices: 1
+
+model:
+  optimizer:
+    lr: 0.001
+  net:
+    hidden_size: 64
+    num_layers: 3
+
+data:
+  batch_size: 16

@@ -1,18 +1,7 @@
+defaults:
+  - net: lstm
+  - optimizer: adam
+  - scheduler: null
+
 _target_: src.models.health_module.HealthLitModule
-
-optimizer:
-  _target_: torch.optim.Adam
-  _partial_: true
-  lr: 0.0005
-  weight_decay: 0.0
-
-scheduler: null
-
-net:
-  _target_: src.models.components.simple_lstm.SimpleLSTM
-  input_size: 2 # Must match the number of modalities in HealthDataModule
-  hidden_size: 64
-  num_layers: 2
-  output_size: 5
-
 compile: false
