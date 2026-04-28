@@ -1,2 +1,0 @@
-_target_: src.data.components.label_aggregators.MaxAggregator
-threshold: null # Binarize predictions: set to 1 if max answer is >= threshold, else null

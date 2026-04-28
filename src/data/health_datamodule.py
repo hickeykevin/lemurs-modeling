@@ -41,14 +41,15 @@ class HealthDataModule(LightningDataModule):
         sampler: TimeSampler,
         scaler: Optional[Any] = None,
         modalities: List[str] = ["step"],
-        question_ids: List[int] = [2],
         batch_size: int = 8,
+
         num_workers: int = 0,
         pin_memory: bool = False,
         train_val_test_split: Tuple[float, float, float] = (0.7, 0.15, 0.15),
         random_state: int = 42,
         split_mode: Literal["random", "user", "longitudinal"] = "random",
     ) -> None:
+
         """Initializes the HealthDataModule.
 
         Args:
@@ -56,8 +57,8 @@ class HealthDataModule(LightningDataModule):
             sampler (TimeSampler): Strategy for sampling time-series data relative to survey timestamps.
             scaler (Optional[Any]): Optional scaler object (e.g. sklearn StandardScaler) to apply to features.
             modalities (List[str]): List of database tables to fetch (e.g. ["step", "calorie"]).
-            question_ids (List[int]): List of survey question IDs to aggregate for the target.
             batch_size (int): Number of samples per batch.
+
             num_workers (int): Number of subprocesses to use for data loading.
             pin_memory (bool): If True, the data loader will copy Tensors into CUDA pinned memory.
             train_val_test_split (Tuple[float, float, float]): Fraction of data for train, validation, and test sets.
@@ -114,8 +115,13 @@ class HealthDataModule(LightningDataModule):
                 db.disconnect()
 
             # 3. Aggregate and link survey answers
+            # Extract question IDs required by the chosen aggregator
+            question_ids = self.hparams.aggregator.get_question_ids()
+
             # Filter for requested questions and ensure numeric values
-            target_answers = answer_df[answer_df['question_id'].isin(self.hparams.question_ids)].copy()
+            target_answers = answer_df[answer_df['question_id'].isin(question_ids)].copy()
+
+
             target_answers['answer'] = pd.to_numeric(target_answers['answer'], errors='coerce')
             target_answers = target_answers.dropna(subset=['answer'])
 

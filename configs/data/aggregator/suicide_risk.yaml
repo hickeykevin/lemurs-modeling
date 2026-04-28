@@ -1,0 +1,9 @@
+_target_: src.data.components.label_aggregators.RuleBasedAggregator
+combination_logic: "any"
+rules:
+  - ids: [2, 3, 7]
+    op: "ge"
+    val: 2
+  - ids: [5, 8, 12, 13]
+    op: "any_eq"
+    val: 1

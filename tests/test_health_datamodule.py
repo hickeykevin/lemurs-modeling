@@ -54,24 +54,69 @@ def dummy_data():
     
     return {"step": step_df, "survey_response": survey_df, "answer": answer_df}
 
-def test_mean_aggregator():
-    """Tests that MeanAggregator averages and binarizes correctly."""
+
+def test_rule_based_aggregator():
+    """Tests that RuleBasedAggregator handles various logical rules correctly."""
+    from src.data.components.label_aggregators import RuleBasedAggregator
+    
+    # 1. Test suicide_risk logic
     df = pd.DataFrame({
-        'survey_response_id': [1, 1, 2, 2],
-        'answer': [1, 3, 0, 2]
+        'survey_response_id': [1, 1, 1, 2, 2, 2, 3, 3],
+        'question_id':        [2, 5, 7, 2, 5, 7, 2, 5],
+        'answer':             [1, 0, 1, 2, 0, 1, 1, 1] 
     })
     
-    # No binarization
-    agg = MeanAggregator(threshold=None)
+    rules = [
+        {'ids': [2, 3, 7], 'op': 'ge', 'val': 2},
+        {'ids': [5, 8, 12, 13], 'op': 'any_eq', 'val': 1}
+    ]
+    agg = RuleBasedAggregator(rules=rules, combination_logic="any")
     result = agg(df)
-    assert result.loc[result['survey_response_id'] == 1, 'answer'].values[0] == 2.0
-    assert result.loc[result['survey_response_id'] == 2, 'answer'].values[0] == 1.0
     
-    # With binarization (>= 2.0)
-    agg_bin = MeanAggregator(threshold=2.0)
-    result_bin = agg_bin(df)
-    assert result_bin.loc[result_bin['survey_response_id'] == 1, 'answer'].values[0] == 1
-    assert result_bin.loc[result_bin['survey_response_id'] == 2, 'answer'].values[0] == 0
+    assert result.loc[result['survey_response_id'] == 1, 'answer'].values[0] == 0
+    assert result.loc[result['survey_response_id'] == 2, 'answer'].values[0] == 1
+    assert result.loc[result['survey_response_id'] == 3, 'answer'].values[0] == 1
+
+    # 2. Test sum_le logic
+    df_sum = pd.DataFrame({
+        'survey_response_id': [1, 1, 2, 2],
+        'question_id':        [21, 22, 21, 22],
+        'answer':             [2, 2, 3, 3] 
+    })
+    
+    rules_sum = [{'ids': [21, 22], 'op': 'sum_le', 'threshold': 5}]
+    agg_sum = RuleBasedAggregator(rules=rules_sum, combination_logic="any")
+    result_sum = agg_sum(df_sum)
+    
+    assert result_sum.loc[result_sum['survey_response_id'] == 1, 'answer'].values[0] == 1 
+    assert result_sum.loc[result_sum['survey_response_id'] == 2, 'answer'].values[0] == 0
+
+    # 3. Test social_stress (sum >= 6)
+    df_stress = pd.DataFrame({
+        'survey_response_id': [1, 1, 1, 2, 2, 2],
+        'question_id':        [31, 32, 33, 31, 32, 33],
+        'answer':             [1, 2, 2, 2, 2, 2] 
+    })
+    rules_stress = [{'ids': [31, 32, 33], 'op': 'sum', 'threshold': 6}]
+    agg_stress = RuleBasedAggregator(rules=rules_stress, combination_logic="any")
+    result_stress = agg_stress(df_stress)
+    assert result_stress.loc[result_stress['survey_response_id'] == 1, 'answer'].values[0] == 0
+    assert result_stress.loc[result_stress['survey_response_id'] == 2, 'answer'].values[0] == 1
+
+    # 4. Test social_connection (sum_le <= 4)
+    df_conn = pd.DataFrame({
+        'survey_response_id': [1, 1, 2, 2],
+        'question_id':        [34, 35, 34, 35],
+        'answer':             [2, 2, 3, 2] 
+    })
+    rules_conn = [{'ids': [34, 35], 'op': 'sum_le', 'threshold': 4}]
+    agg_conn = RuleBasedAggregator(rules=rules_conn, combination_logic="any")
+    result_conn = agg_conn(df_conn)
+    assert result_conn.loc[result_conn['survey_response_id'] == 1, 'answer'].values[0] == 1
+    assert result_conn.loc[result_conn['survey_response_id'] == 2, 'answer'].values[0] == 0
+
+
+
 
 def test_datamodule_normalization(dummy_data):
     """Tests that the datamodule correctly fits and applies a scaler."""
@@ -86,11 +131,11 @@ def test_datamodule_normalization(dummy_data):
         # If we use StandardScaler, it should shift them
         scaler = StandardScaler()
         dm = HealthDataModule(
-            aggregator=MeanAggregator(),
+            aggregator=MeanAggregator(question_ids=[2]),
             sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
             scaler=scaler,
-            question_ids=[2]
         )
+
         dm.setup()
         
         # Check that scaler is fitted
@@ -106,16 +151,6 @@ def test_datamodule_normalization(dummy_data):
         # (Though with only a few samples it might not be exactly 0)
         assert not torch.allclose(seq.mean(), torch.tensor(15.0), atol=1.0)
 
-def test_max_aggregator():
-    """Tests that MaxAggregator correctly triggers if ANY answer meets threshold."""
-    df = pd.DataFrame({
-        'survey_response_id': [1, 1, 2, 2],
-        'answer': [0, 1, 0, 0]
-    })
-    agg = MaxAggregator(threshold=1.0)
-    result = agg(df)
-    assert result.loc[result['survey_response_id'] == 1, 'answer'].values[0] == 1
-    assert result.loc[result['survey_response_id'] == 2, 'answer'].values[0] == 0
 
 def test_rolling_sampler():
     """Tests that RollingSampler slices the correct time window and resamples."""
@@ -194,15 +229,15 @@ def test_datamodule_user_split(mock_db_class, dummy_data):
     mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
     
     # Set up DM with user split (50/50 for simplicity in test)
-    agg = MeanAggregator(threshold=1.0)
     sampler = OffsetSampler(start_offset_hours=-24, end_offset_hours=0)
     dm = HealthDataModule(
-        aggregator=agg,
+        aggregator=MeanAggregator(question_ids=[2, 4], threshold=1.0),
         sampler=sampler,
-        question_ids=[2, 4],
+
         train_val_test_split=(0.5, 0.25, 0.25),
         split_mode="user"
     )
+
     
     dm.setup()
     
@@ -255,10 +290,10 @@ def test_datamodule_multi_question_aggregation(mock_db_class, dummy_data):
     
     # Mean of [2, 2] = 2.0. Threshold 1.5 -> Label 1
     dm = HealthDataModule(
-        aggregator=MeanAggregator(threshold=1.5),
+        aggregator=MeanAggregator(question_ids=[2, 4], threshold=1.5),
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
-        question_ids=[2, 4]
     )
+
     
     dm.setup()
     

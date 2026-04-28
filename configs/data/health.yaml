@@ -1,12 +1,13 @@
 defaults:
   - _self_
-  - aggregator: mean
+  - aggregator: suicide_risk
   - sampler: daily
   - scaler: none
 
 _target_: src.data.health_datamodule.HealthDataModule
 modalities: ["step", "calorie"]
-question_ids: [2,3]
+aggregator: ${data.aggregator}
+
 
 batch_size: 8
 train_val_test_split: [0.7, 0.15, 0.15]

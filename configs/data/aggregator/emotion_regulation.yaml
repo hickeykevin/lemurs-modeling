@@ -1,0 +1,6 @@
+_target_: src.data.components.label_aggregators.RuleBasedAggregator
+combination_logic: "any"
+rules:
+  - ids: [47, 48, 49, 50, 51, 52]
+    op: "sum"
+    threshold: 9
