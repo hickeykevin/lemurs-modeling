@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - aggregator: suicide_risk
-  - sampler: daily
+  - sampler: block
   - scaler: none
 
 _target_: src.data.health_datamodule.HealthDataModule
@@ -11,7 +11,9 @@ aggregator: ${data.aggregator}
 
 batch_size: 8
 train_val_test_split: [0.7, 0.15, 0.15]
-num_workers: 0
+num_workers: 1
 pin_memory: False
 random_state: ${seed}
 split_mode: longitudinal # random, user, longitudinal
+os_filter: both # both, ios, android
+

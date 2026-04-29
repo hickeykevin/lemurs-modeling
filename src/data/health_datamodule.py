@@ -48,7 +48,9 @@ class HealthDataModule(LightningDataModule):
         train_val_test_split: Tuple[float, float, float] = (0.7, 0.15, 0.15),
         random_state: int = 42,
         split_mode: Literal["random", "user", "longitudinal"] = "random",
+        os_filter: Optional[Literal["ios", "android", "both"]] = "both",
     ) -> None:
+
 
         """Initializes the HealthDataModule.
 
@@ -136,8 +138,32 @@ class HealthDataModule(LightningDataModule):
                 right_on='id',
                 suffixes=('', '_survey')
             ).rename(columns={'timestamp': 'record_timestamp'})
+            
+            # Filter cohort demographics by operating system if requested
+            if self.hparams.os_filter and self.hparams.os_filter != "both" and modality_dfs:
+                user_sources = {}
+                for df in modality_dfs.values():
+                    if 'app_user_id' in df.columns and 'app_source' in df.columns:
+                        for user_id, group in df.groupby('app_user_id'):
+                            sources = group['app_source'].dropna().unique()
+                            if user_id not in user_sources:
+                                user_sources[user_id] = set()
+                            user_sources[user_id].update(str(s) for s in sources)
+                            
+                user_os = {}
+                for user_id, sources in user_sources.items():
+                    is_ios = any('iPhone' in s or 'Apple Watch' in s or 'HealthKit' in s for s in sources)
+                    is_android = any('androidx' in s for s in sources)
+                    user_os[user_id] = 'ios' if is_ios and not is_android else ('android' if is_android and not is_ios else 'both')
+                
+                target_os = self.hparams.os_filter.lower()
+                allowed_users = [u for u, os_typ in user_os.items() if os_typ == target_os]
+                master_df = master_df[master_df['app_user_id'].isin(allowed_users)]
+
+
             # 4. Perform splitting based on the selected evaluation strategy
             train_df, val_df, test_df = self._split_data(master_df)
+
 
             # 5. Optional Normalization
             # We fit the scaler on the training data ONLY

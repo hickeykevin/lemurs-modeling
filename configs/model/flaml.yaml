@@ -1,6 +1,6 @@
 _target_: src.models.health_module.FLAMLHealthModule
 automl_config:
-  time_budget: 20  # total time in seconds
+  time_budget: 30  # total time in seconds
   metric: 'accuracy'
   estimator_list: ['lgbm', 'rf', 'xgboost', 'extra_tree']
 task: 'classification'
