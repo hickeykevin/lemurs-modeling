@@ -45,21 +45,19 @@ class HealthDataset(Dataset):
             scaler (Optional[Any]): A pre-fitted scaler (e.g. ``StandardScaler``).
         """
         self.data_links = linked_data.reset_index(drop=True)
-        self.modality_dfs = modality_dfs
-        self.modality_cols = modality_cols
         self.sampler = sampler
         self.scaler = scaler
         self.modalities = sorted(list(modality_dfs.keys()))
 
         # Pre-compute all sequences and targets once at construction time.
         # __getitem__ then becomes a direct numpy array index — no Pandas overhead.
-        self._sequences, self._targets = self._precompute()
+        self._sequences, self._targets = self._precompute(modality_dfs, modality_cols)
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _precompute(self) -> Tuple[np.ndarray, np.ndarray]:
+    def _precompute(self, modality_dfs: Dict[str, pd.DataFrame], modality_cols: Dict[str, str]) -> Tuple[np.ndarray, np.ndarray]:
         """Pre-computes all sequences and targets, applying the scaler once.
 
         Runs the sampler for every record in ``data_links`` and stacks the
@@ -79,8 +77,8 @@ class HealthDataset(Dataset):
             seq = self.sampler(
                 survey_timestamp=row["record_timestamp"],
                 app_user_id=row["app_user_id"],
-                modality_dfs=self.modality_dfs,
-                modality_cols=self.modality_cols,
+                modality_dfs=modality_dfs,
+                modality_cols=modality_cols,
                 modalities=self.modalities,
             )
             sequences.append(seq)

@@ -26,5 +26,8 @@ data:
   os_filter: ios
   modalities: ['step', 'calorie']
   split_mode: longitudinal
-  num_workers: 1
+  num_workers: 2
+
+trainer:
+  gradient_clip_val: 1.0
 

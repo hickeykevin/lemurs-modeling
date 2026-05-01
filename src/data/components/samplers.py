@@ -209,68 +209,59 @@ class BlockSampler(TimeSampler):
             mask = (df['app_user_id'] == app_user_id) & \
                    (df['start_timestamp'] < global_end)
                    
-            user_data = df[mask].copy()
+            user_data = df[mask]
             
             block_values = np.zeros(len(blocks), dtype=np.float32)
             
             if not user_data.empty:
                 if 'end_timestamp' in user_data.columns:
-                    # Apply a probabilistic weight to prevent over-allocating steps to sleep periods
-                    weights = [0.05, 1.0, 1.0, 1.0]  # Sleep, Morning, Afternoon, Evening
-                    
-                    for _, row in user_data.iterrows():
-                        rec_start = row['start_timestamp']
-                        rec_end = row['end_timestamp']
-                        
-                        # Find the span of calendar days covered by the record
-                        current_day = pd.Timestamp(rec_start.date())
-                        last_day = pd.Timestamp(rec_end.date())
-                        
-                        total_weighted = 0.0
-                        record_weighted_dict = {}
-                        
-                        day_iter = current_day
-                        while day_iter <= last_day:
-                            block_offsets_daily = [
-                                (timedelta(hours=0), timedelta(hours=8)),
-                                (timedelta(hours=8), timedelta(hours=12)),
-                                (timedelta(hours=12), timedelta(hours=17)),
-                                (timedelta(hours=17), timedelta(hours=24))
-                            ]
-                            
-                            for i, (b_start, b_end) in enumerate(block_offsets_daily):
-                                bs = day_iter + b_start
-                                be = day_iter + b_end
-                                
-                                if rec_end > bs and rec_start < be:
-                                    overlap_s = max(rec_start, bs)
-                                    overlap_e = min(rec_end, be)
-                                    dur = (overlap_e - overlap_s).total_seconds()
-                                    weighted_dur = dur * weights[i]
-                                    
-                                    total_weighted += weighted_dur
-                                    record_weighted_dict[(bs, be)] = weighted_dur
-                                    
-                            day_iter += timedelta(days=1)
-                            
-                        # Distribute based on proportion of total weighted duration
-                        if total_weighted > 0:
-                            for b_idx, (b_start, b_end) in enumerate(blocks):
-                                if (b_start, b_end) in record_weighted_dict:
-                                    proportion = record_weighted_dict[(b_start, b_end)] / total_weighted
-                                    block_values[b_idx] += row[val_col] * proportion
-                        else:
-                            # Equal split fallback
-                            overlapping_target_blocks = [
-                                b_idx for b_idx, (bs, be) in enumerate(blocks) 
-                                if rec_end > bs and rec_start < be
-                            ]
-                            if overlapping_target_blocks:
-                                proportion = 1.0 / len(overlapping_target_blocks)
-                                for b_idx in overlapping_target_blocks:
-                                    block_values[b_idx] += row[val_col] * proportion
+                    # Probabilistic weight to prevent over-allocating activity to sleep blocks.
+                    # Tiles across all days so shape matches [n_blocks].
+                    block_weights = np.tile([0.05, 1.0, 1.0, 1.0], self.lookback_days)  # [B]
+
+                    # Convert block and record boundaries to int64 nanoseconds for fast
+                    # arithmetic without any Python-level datetime arithmetic in the loop.
+                    block_starts_ns = np.array([b[0].value for b in blocks], dtype=np.int64)  # [B]
+                    block_ends_ns   = np.array([b[1].value for b in blocks], dtype=np.int64)  # [B]
+
+                    rec_starts_ns = user_data['start_timestamp'].values.astype(np.int64)  # [R]
+                    rec_ends_ns   = user_data['end_timestamp'].values.astype(np.int64)    # [R]
+                    rec_values    = user_data[val_col].values.astype(np.float64)           # [R]
+
+                    # Broadcast to [R, B]: overlap start/end per (record, block) pair.
+                    overlap_s = np.maximum(rec_starts_ns[:, None], block_starts_ns[None, :])
+                    overlap_e = np.minimum(rec_ends_ns[:, None],   block_ends_ns[None, :])
+
+                    # Duration in seconds; negative values mean no overlap → clamp to 0.
+                    durations = np.maximum(0.0, (overlap_e - overlap_s) / 1e9)  # [R, B]
+
+                    # Apply per-block weights and sum across blocks to get each record's
+                    # total weighted coverage for normalisation.
+                    weighted_durations = durations * block_weights[None, :]  # [R, B]
+                    total_weighted = weighted_durations.sum(axis=1)           # [R]
+
+                    # Proportions: how much of each record's value lands in each block.
+                    with np.errstate(invalid='ignore', divide='ignore'):
+                        proportions = np.where(
+                            total_weighted[:, None] > 0,
+                            weighted_durations / total_weighted[:, None],
+                            0.0,
+                        )  # [R, B]
+
+                    # Fallback for records with zero total weighted duration (e.g. a record
+                    # that sits entirely outside every block): split equally across any
+                    # block that has raw (unweighted) overlap.
+                    zero_total_mask = (total_weighted == 0)
+                    if zero_total_mask.any():
+                        has_overlap = (durations[zero_total_mask] > 0)          # [R_zero, B]
+                        n_overlapping = has_overlap.sum(axis=1, keepdims=True).clip(min=1)
+                        proportions[zero_total_mask] = has_overlap / n_overlapping
+
+                    # Accumulate: for each block, sum value * proportion across all records.
+                    block_values = (rec_values[:, None] * proportions).sum(axis=0).astype(np.float32)
+
                 else:
-                    # Point logic fallback
+                    # Point-in-time fallback when no end_timestamp column is present.
                     for b_idx, (b_start, b_end) in enumerate(blocks):
                         overlap_mask = (user_data['start_timestamp'] >= b_start) & (user_data['start_timestamp'] < b_end)
                         block_values[b_idx] = user_data[overlap_mask][val_col].sum()
