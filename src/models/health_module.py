@@ -80,20 +80,20 @@ class HealthLitModule(LightningModule):
 
     def model_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single step through the model.
 
         Args:
             batch: A tuple containing (features, targets).
 
         Returns:
-            A tuple of (loss, predictions, targets).
+            A tuple of (loss, predictions, targets, logits).
         """
         x, y = batch
         logits = self.forward(x)
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
-        return loss, preds, y
+        return loss, preds, y, logits
 
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -107,7 +107,7 @@ class HealthLitModule(LightningModule):
         Returns:
             The loss tensor.
         """
-        loss, preds, targets = self.model_step(batch)
+        loss, preds, targets, _ = self.model_step(batch)
 
         # Update metrics
         self.train_loss(loss)
@@ -120,20 +120,22 @@ class HealthLitModule(LightningModule):
         # Return loss or backpropagation will fail
         return loss
 
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         """Perform a single validation step on a batch of data from the validation set.
 
         Args:
             batch: A tuple containing (features, targets).
             batch_idx: The index of the current batch.
         """
-        loss, preds, targets = self.model_step(batch)
+        loss, preds, targets, logits = self.model_step(batch)
 
         # Update and log metrics
         self.val_loss(loss)
         self.val_acc(preds, targets)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+
+        return {"loss": loss, "preds": preds, "targets": targets, "logits": logits}
 
     def on_validation_epoch_end(self) -> None:
         """Lightning hook called at the end of the validation epoch.
@@ -146,20 +148,22 @@ class HealthLitModule(LightningModule):
         # Log best accuracy so far
         self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
 
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         """Perform a single test step on a batch of data from the test set.
 
         Args:
             batch: A tuple containing (features, targets).
             batch_idx: The index of the current batch.
         """
-        loss, preds, targets = self.model_step(batch)
+        loss, preds, targets, logits = self.model_step(batch)
 
         # Update and log metrics
         self.test_loss(loss)
         self.test_acc(preds, targets)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+
+        return {"loss": loss, "preds": preds, "targets": targets, "logits": logits}
 
     def setup(self, stage: str, **kwargs) -> None:
         """Lightning hook for setting up data or model before training.
@@ -309,7 +313,7 @@ class FLAMLHealthModule(LightningModule):
         # Return a zero loss with gradient required to keep Lightning happy
         return torch.tensor(0.0, requires_grad=True)
 
-    def validation_step(self, batch: Any, batch_idx: int) -> None:
+    def validation_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
         """Evaluates the fitted FLAML model on a validation batch.
 
         Args:
@@ -323,11 +327,21 @@ class FLAMLHealthModule(LightningModule):
         y_pred = self.automl.predict(X_val)
         y_pred_tensor = torch.tensor(y_pred, device=self.device)
         
+        # Try to get probabilities for AUROC
+        try:
+            y_prob = self.automl.predict_proba(X_val)
+            logits = torch.tensor(y_prob, device=self.device)
+        except:
+            # Fallback if the estimator doesn't support predict_proba
+            logits = torch.nn.functional.one_hot(y_pred_tensor, num_classes=self.val_acc.num_classes).float()
+
         # Update and log metrics
         self.val_acc(y_pred_tensor, y)
         self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
 
-    def test_step(self, batch: Any, batch_idx: int) -> None:
+        return {"preds": y_pred_tensor, "targets": y, "logits": logits}
+
+    def test_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
         """Evaluates the fitted FLAML model on a test batch.
 
         Args:
@@ -339,10 +353,20 @@ class FLAMLHealthModule(LightningModule):
         
         y_pred = self.automl.predict(X_test)
         y_pred_tensor = torch.tensor(y_pred, device=self.device)
+
+        # Try to get probabilities for AUROC
+        try:
+            y_prob = self.automl.predict_proba(X_test)
+            logits = torch.tensor(y_prob, device=self.device)
+        except:
+            # Fallback
+            logits = torch.nn.functional.one_hot(y_pred_tensor, num_classes=self.val_acc.num_classes).float()
         
         # Log test metrics
         self.val_acc(y_pred_tensor, y) # Reuse val_acc for simplicity
         self.log("test/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+        
+        return {"preds": y_pred_tensor, "targets": y, "logits": logits}
 
     def configure_optimizers(self) -> Any:
         """Returns a dummy optimizer.
@@ -433,29 +457,31 @@ class BaselineHealthModule(LightningModule):
         
         return logits
 
-    def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         x, y = batch[:2]
         logits = self.forward(x)
         loss = torch.nn.functional.cross_entropy(logits, y)
         preds = torch.argmax(logits, dim=1)
-        return loss, preds, y
+        return loss, preds, y, logits
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         return torch.tensor(0.0, requires_grad=True)
 
-    def validation_step(self, batch: Any, batch_idx: int) -> None:
-        loss, preds, targets = self.model_step(batch)
+    def validation_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
+        loss, preds, targets, logits = self.model_step(batch)
         self.val_loss(loss)
         self.val_acc(preds, targets)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+        return {"loss": loss, "preds": preds, "targets": targets, "logits": logits}
 
-    def test_step(self, batch: Any, batch_idx: int) -> None:
-        loss, preds, targets = self.model_step(batch)
+    def test_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
+        loss, preds, targets, logits = self.model_step(batch)
         self.test_loss(loss)
         self.test_acc(preds, targets)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+        return {"loss": loss, "preds": preds, "targets": targets, "logits": logits}
 
     def configure_optimizers(self) -> Any:
         return torch.optim.SGD([torch.tensor(0.0, requires_grad=True)], lr=0.0)

@@ -30,7 +30,20 @@ A specialized utility for longitudinal modeling. It prints the full chronologica
 - **Use Case:** Verifying the "Lag" baseline and inspecting raw data sequences.
 - **Command:** `python src/train.py callbacks=label_history callbacks.label_history.target_user_id=27`
 
-### 5. `rich_progress_bar.yaml`
+### 5. `confusion_matrix.yaml` (Custom)
+Prints a beautifully formatted confusion matrix to the terminal using the `Rich` library.
+- **Use Case:** Visualizing class-level performance and misclassifications directly in the console.
+- **Parameters:**
+  - `frequency`: How many epochs to skip between prints (e.g., `frequency=5` prints every 5th epoch).
+- **Command:** `python src/train.py callbacks=confusion_matrix callbacks.confusion_matrix.frequency=1`
+
+### 6. `classification_metrics.yaml` (Custom)
+Logs advanced metrics like **F1-Score** and **AUROC** to your logger (TensorBoard/WandB).
+- **Use Case:** Tracking more robust performance indicators than simple accuracy, especially for imbalanced data.
+- **Metrics included:** `val/f1`, `val/auroc`, `test/f1`, `test/auroc`.
+- **Command:** `python src/train.py callbacks=classification_metrics`
+
+### 7. `rich_progress_bar.yaml`
 Replaces the default progress bar with a more detailed, "Rich" version that includes estimated time remaining and metric formatting.
 
 ---
