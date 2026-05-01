@@ -280,5 +280,37 @@ class BlockSampler(TimeSampler):
         # Return sequence vector
         return np.stack(all_modality_features, axis=-1)
 
+class LagSampler(TimeSampler):
+    """Sampler for the Lag-1 baseline.
+    
+    Instead of sampling health metrics, this sampler looks up the label of the 
+    user's previous survey response. This allows the model to use the previous 
+    state as the prediction for the current state.
+    """
+    def __init__(self):
+        self.label_lookup = {} # (user_id, timestamp) -> prev_label
 
+    def set_labels(self, master_df: pd.DataFrame):
+        """Pre-computes the previous label for every record in the dataset."""
+        # Ensure data is sorted by user and time
+        df = master_df.sort_values(['app_user_id', 'record_timestamp'])
+        
+        # Shift labels by 1 within each user group
+        df['prev_answer'] = df.groupby('app_user_id')['answer'].shift(1)
+        
+        # Fill missing previous labels (first sample for a user) with -1
+        df['prev_answer'] = df['prev_answer'].fillna(-1.0)
+        
+        # Build lookup dictionary using a string key for robustness
+        for _, row in df.iterrows():
+            ts_str = row['record_timestamp'].isoformat()
+            key = (int(row['app_user_id']), ts_str)
+            self.label_lookup[key] = float(row['prev_answer'])
 
+    def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
+        # Lookup using the same string key format
+        ts_str = survey_timestamp.isoformat()
+        prev_label = self.label_lookup.get((int(app_user_id), ts_str), -1.0)
+        
+        # Return as [1, 1] feature matrix
+        return np.array([[prev_label]], dtype=np.float32)

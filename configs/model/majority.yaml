@@ -1,0 +1,3 @@
+_target_: src.models.health_module.BaselineHealthModule
+strategy: most_frequent
+num_classes: null

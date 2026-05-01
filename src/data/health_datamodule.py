@@ -139,6 +139,8 @@ class HealthDataModule(LightningDataModule):
                 suffixes=('', '_survey')
             ).rename(columns={'timestamp': 'record_timestamp'})
             
+            self.master_df = master_df
+            
             # Filter cohort demographics by operating system if requested
             if self.hparams.os_filter and self.hparams.os_filter != "both" and modality_dfs:
                 user_sources = {}
@@ -163,6 +165,10 @@ class HealthDataModule(LightningDataModule):
 
             # 4. Perform splitting based on the selected evaluation strategy
             train_df, val_df, test_df = self._split_data(master_df)
+
+            # If the sampler needs access to the labels (e.g. LagSampler), provide them now
+            if hasattr(self.hparams.sampler, "set_labels"):
+                self.hparams.sampler.set_labels(master_df)
 
 
             # 5. Optional Normalization

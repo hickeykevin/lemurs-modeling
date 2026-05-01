@@ -351,5 +351,114 @@ class FLAMLHealthModule(LightningModule):
         """
         return torch.optim.SGD([torch.tensor(0.0, requires_grad=True)], lr=0.0)
 
+
+class BaselineHealthModule(LightningModule):
+    """A LightningModule for baseline health classification tasks.
+    
+    Supported Strategies:
+        - "lag": Predicts the current label using the label from the user's previous 
+          survey (requires x to contain the previous label index).
+        - "most_frequent": Always predicts the most frequent class observed in training.
+    """
+    
+    def __init__(self, strategy: str = "lag", num_classes: Optional[int] = None):
+        """Initializes the BaselineHealthModule.
+        
+        Args:
+            strategy (str): Baseline strategy to use ("lag" or "most_frequent").
+            num_classes (Optional[int]): Number of target classes.
+        """
+        super().__init__()
+        self.save_hyperparameters()
+        
+        self.strategy = strategy
+        self.majority_class = None
+        
+        # Metrics for logging (mirrors HealthLitModule)
+        self.val_acc = partial(Accuracy, task="multiclass")
+        self.test_acc = partial(Accuracy, task="multiclass")
+        self.val_loss = MeanMetric()
+        self.test_loss = MeanMetric()
+        
+        if num_classes:
+            self.num_classes = num_classes
+            self.val_acc = Accuracy(task="multiclass", num_classes=num_classes)
+            self.test_acc = Accuracy(task="multiclass", num_classes=num_classes)
+
+    def setup(self, stage: str, **kwargs) -> None:
+        """Determines num_classes and majority class if needed."""
+        # Get labels from training set to find majority class
+        dm = self.trainer.datamodule
+        train_dataloader = dm.train_dataloader()
+        
+        y_list = []
+        for batch in train_dataloader:
+            _, y = batch[:2]
+            y_list.append(y.cpu().numpy())
+        y_train = np.concatenate(y_list, axis=0)
+
+        if not hasattr(self, "num_classes"):
+            self.num_classes = int(np.max(y_train)) + 1
+            self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+            self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+
+        if self.strategy == "most_frequent":
+            # Calculate the mode of the training labels
+            counts = np.bincount(y_train)
+            self.majority_class = int(np.argmax(counts))
+            self.print(f"[Baseline] Strategy: most_frequent | Majority Class: {self.majority_class}")
+        else:
+            self.print(f"[Baseline] Strategy: lag")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Produces logits based on the selected strategy."""
+        batch_size = x.shape[0]
+        logits = torch.full((batch_size, self.num_classes), -100.0, device=self.device)
+        
+        if self.strategy == "most_frequent":
+            logits[:, self.majority_class] = 100.0
+        elif self.strategy == "lag":
+            # Extract the previous label from x [B, 1, 1]
+            prev_labels = x[:, 0, 0].long()
+            for i in range(batch_size):
+                label = prev_labels[i].item()
+                if 0 <= label < self.num_classes:
+                    logits[i, label] = 100.0
+                else:
+                    # Fallback to majority class if history is missing
+                    if self.majority_class is not None:
+                        logits[i, self.majority_class] = 100.0
+                    else:
+                        logits[i, :] = 0.0 # Uniform
+        
+        return logits
+
+    def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        x, y = batch[:2]
+        logits = self.forward(x)
+        loss = torch.nn.functional.cross_entropy(logits, y)
+        preds = torch.argmax(logits, dim=1)
+        return loss, preds, y
+
+    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+        return torch.tensor(0.0, requires_grad=True)
+
+    def validation_step(self, batch: Any, batch_idx: int) -> None:
+        loss, preds, targets = self.model_step(batch)
+        self.val_loss(loss)
+        self.val_acc(preds, targets)
+        self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+
+    def test_step(self, batch: Any, batch_idx: int) -> None:
+        loss, preds, targets = self.model_step(batch)
+        self.test_loss(loss)
+        self.test_acc(preds, targets)
+        self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+
+    def configure_optimizers(self) -> Any:
+        return torch.optim.SGD([torch.tensor(0.0, requires_grad=True)], lr=0.0)
+
 if __name__ == "__main__":
     _ = HealthLitModule(None, None, None, None)
