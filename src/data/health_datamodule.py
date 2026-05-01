@@ -171,32 +171,36 @@ class HealthDataModule(LightningDataModule):
                 self.hparams.sampler.set_labels(master_df)
 
 
-            # 5. Optional Normalization
-            # We fit the scaler on the training data ONLY
+            # 5. Fit the scaler on training sequences only, then pass it
+            # to the datasets so _precompute() can apply it vectorially.
             if self.hparams.scaler is not None and hasattr(self.hparams.scaler, "fit"):
-                # Create a temporary dataset to collect training features
-                temp_train_ds = HealthDataset(
-                    train_df, modality_dfs, self.hparams.modality_cols, self.hparams.sampler
-                )
-                all_features = []
-                for i in range(len(temp_train_ds)):
-                    seq, _ = temp_train_ds[i]
-                    all_features.append(seq.numpy())
-                
-                all_features_flattened = np.concatenate(all_features, axis=0) # [N*Time, Features]
-                self.hparams.scaler.fit(all_features_flattened)
+                modalities = sorted(list(modality_dfs.keys()))
+                modality_cols = self.hparams.modality_cols
+                train_seqs = [
+                    self.hparams.sampler(
+                        survey_timestamp=row["record_timestamp"],
+                        app_user_id=row["app_user_id"],
+                        modality_dfs=modality_dfs,
+                        modality_cols=modality_cols,
+                        modalities=modalities,
+                    )
+                    for _, row in train_df.iterrows()
+                ]
+                stacked = np.concatenate(train_seqs, axis=0)  # [N*Time, Features]
+                self.hparams.scaler.fit(stacked)
 
-            # 6. Instantiate final Dataset objects with the appropriately filtered data
+            # 6. Instantiate Dataset objects — scaler is applied vectorially
+            # inside HealthDataset._precompute() rather than per-sample.
             self.data_train = HealthDataset(
-                train_df, modality_dfs, self.hparams.modality_cols, 
+                train_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler
             )
             self.data_val = HealthDataset(
-                val_df, modality_dfs, self.hparams.modality_cols, 
+                val_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler
             )
             self.data_test = HealthDataset(
-                test_df, modality_dfs, self.hparams.modality_cols, 
+                test_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler
             )
 
