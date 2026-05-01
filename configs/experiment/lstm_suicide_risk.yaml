@@ -20,7 +20,10 @@ seed: 42
 model:
   net:
     input_size: ${len:${data.modalities}}
+    hidden_size: 32
+    dropout: 0.2
     output_size: 2
+  class_weights: [1.0, 20.0]
 
 data:
   os_filter: ios
@@ -30,4 +33,5 @@ data:
 
 trainer:
   gradient_clip_val: 1.0
+  max_epochs: 100
 

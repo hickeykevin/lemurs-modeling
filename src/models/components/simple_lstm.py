@@ -2,13 +2,13 @@ import torch
 import torch.nn as nn
 
 class SimpleLSTM(nn.Module):
-    def __init__(self, input_size: int = 1, hidden_size: int = 64, num_layers: int = 2, output_size: int = 5):
+    def __init__(self, input_size: int = 1, hidden_size: int = 64, num_layers: int = 2, output_size: int = 5, dropout: float = 0.0):
         super(SimpleLSTM, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         
         # LSTM layer
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=dropout if num_layers > 1 else 0.0)
         # Fully connected layer to map hidden states to output classes
         self.fc = nn.Linear(hidden_size, output_size)
         

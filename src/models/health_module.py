@@ -31,6 +31,7 @@ class HealthLitModule(LightningModule):
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler = None,
         compile: bool = False,
+        class_weights: Optional[List[float]] = None,
     ) -> None:
         """Initializes the HealthLitModule.
 
@@ -39,6 +40,7 @@ class HealthLitModule(LightningModule):
             optimizer (torch.optim.Optimizer): The optimizer to use for training.
             scheduler (torch.optim.lr_scheduler): The learning rate scheduler to use for training.
             compile (bool): Whether to compile the model for faster execution.
+            class_weights (Optional[List[float]]): Optional weights for each class in the loss function.
         """
         super().__init__()
 
@@ -47,7 +49,13 @@ class HealthLitModule(LightningModule):
         self.save_hyperparameters(logger=False)
 
         self.net = net
-        self.criterion = torch.nn.CrossEntropyLoss()
+        
+        # Initialize criterion with optional class weights
+        if class_weights is not None:
+            self.register_buffer("weight", torch.tensor(class_weights, dtype=torch.float))
+            self.criterion = torch.nn.CrossEntropyLoss(weight=self.weight)
+        else:
+            self.criterion = torch.nn.CrossEntropyLoss()
 
         # Metrics for health classification (0-4 scores)
         # We use partial initialization because num_classes is determined at runtime
