@@ -7,26 +7,24 @@ defaults:
   - override /data: health
   - override /model: health
   - override /model/net: lstm
-  - override /callbacks: default
-  - override /trainer: default
+  - override /callbacks: [confusion_matrix,classification_metrics]
   - override /data/aggregator: suicide_risk
+  - override /data/scaler: standard
+  - override /data/sampler: block
+  - override /trainer: cpu
 
 tags: ["health", "lstm", "suicide_risk"]
 
-seed: 12345
-
-trainer:
-  min_epochs: 1
-  max_epochs: 10
-  accelerator: cpu
-  devices: 1
+seed: 42
 
 model:
-  optimizer:
-    lr: 0.001
   net:
-    hidden_size: 64
-    num_layers: 3
+    input_size: ${len:${data.modalities}}
+    output_size: 2
 
 data:
-  batch_size: 16
+  os_filter: ios
+  modalities: ['step', 'calorie']
+  split_mode: longitudinal
+  num_workers: 1
+

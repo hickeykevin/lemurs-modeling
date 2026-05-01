@@ -38,10 +38,12 @@ from src.utils import (
     instantiate_callbacks,
     instantiate_loggers,
     log_hyperparameters,
+    register_resolvers,
     task_wrapper,
 )
 
 log = RankedLogger(__name__, rank_zero_only=True)
+register_resolvers()
 
 
 @task_wrapper

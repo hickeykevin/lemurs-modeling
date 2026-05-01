@@ -159,7 +159,20 @@ class ClassificationMetricsCallback(Callback):
         })
         return metrics.to(device)
 
-    ) -> None:
+
+    def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Resets metrics at the beginning of the validation epoch.
+
+        This ensures that metrics are calculated independently for each epoch.
+
+        Args:
+            trainer (Trainer): The Lightning trainer object.
+            pl_module (LightningModule): The Lightning module being validated.
+        """
+        if self.val_metrics is not None:
+            self.val_metrics.reset()
+
+    def on_validation_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs: Optional[Dict[str, torch.Tensor]], batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         """Updates validation metrics with results from the current batch.
 
         Args:
@@ -190,6 +203,14 @@ class ClassificationMetricsCallback(Callback):
                 pl_module.log(f"val/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
             self.val_metrics.reset()
 
+    def on_test_batch_end(
+        self, 
+        trainer: Trainer, 
+        pl_module: LightningModule, 
+        outputs: Optional[Dict[str, torch.Tensor]], 
+        batch: Any, 
+        batch_idx: int, 
+        dataloader_idx: int = 0
     ) -> None:
         """Updates test metrics with results from the current batch.
 
