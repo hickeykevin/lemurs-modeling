@@ -1,0 +1,76 @@
+# W&B Sweep Configuration
+# Run with: wandb sweep configs/hparams_search/health_wandb_sweep.yaml
+# Then start agent: wandb agent <sweep_id>
+
+name: health_hyperparameter_sweep
+method: random
+metric:
+  name: val/loss # Adjust to your primary validation metric (e.g., val/f1, val/acc)
+  goal: minimize
+
+parameters:
+  # Data Settings
+  data.aggregator:
+    values:
+      - suicide_risk
+      - self_harm
+      - negative_emotion
+      - positive_emotion
+      - emotion_regulation
+      - minority_stress
+      - social_connection
+      - social_stress
+  
+  data.sampler:
+    values:
+      - block
+      - daily
+      - lag
+      - offset
+      - rolling_hour
+
+  data.scaler:
+    values:
+      - none
+      - standard
+      - minmax
+
+  data.modalities:
+    values:
+      - ["step"]
+      - ["step", "calorie"]
+
+  data.split_mode:
+    values:
+      - user
+      - longitudinal
+
+  data.os_filter:
+    value: ios
+
+  # Model Settings (LSTM)
+  model.net.hidden_size:
+    values: [32, 64, 128, 256]
+  
+  model.net.num_layers:
+    values: [1, 2, 3]
+
+  # Training Settings
+  model.optimizer.lr:
+    values: [0.0001, 0.0005, 0.001, 0.005]
+  
+  trainer.max_epochs:
+    values: [10, 20, 50]
+
+  trainer.accelerator:
+    value: cpu
+
+  # Global Settings
+  seed:
+    values: [42, 123, 7]
+
+command:
+  - ${interpreter}
+  - src/train.py
+  - ${args_no_hyphens}
+  - logger=wandb # Ensure wandb logger is enabled
