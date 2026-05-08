@@ -158,3 +158,9 @@ configs/local/default.yaml
 
 # any csv files
 *.csv
+
+# any wandb files
+/wandb
+
+# any slurm files
+slurm*

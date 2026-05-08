@@ -299,9 +299,10 @@ class FLAMLHealthModule(LightningModule):
             num_classes = kwargs.get("num_classes")
             if num_classes is None:
                 num_classes = int(np.max(y_train)) + 1
+            self.num_classes = num_classes
                 
-            self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
-            self.val_acc = Accuracy(task="multiclass", num_classes=num_classes)
+            self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+            self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
             
             # Fit FLAML (this may take some time depending on automl_config.time_budget)
             self.automl.fit(
@@ -316,9 +317,9 @@ class FLAMLHealthModule(LightningModule):
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         """Dummy training step. 
         
-        Optimization happens in on_train_start, but we need a valid step for Lightning.
+        Optimization happens in setup, so we stop training after the first batch.
         """
-        # Return a zero loss with gradient required to keep Lightning happy
+        self.trainer.should_stop = True
         return torch.tensor(0.0, requires_grad=True)
 
     def validation_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
@@ -473,6 +474,7 @@ class BaselineHealthModule(LightningModule):
         return loss, preds, y, logits
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+        self.trainer.should_stop = True
         return torch.tensor(0.0, requires_grad=True)
 
     def validation_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:

@@ -25,13 +25,6 @@ model:
     output_size: 2
   class_weights: [1.0, 20.0]
 
-data:
-  os_filter: ios
-  modalities: ['step', 'calorie']
-  split_mode: longitudinal
-  num_workers: 2
-
 trainer:
-  gradient_clip_val: 1.0
-  max_epochs: 100
+  max_epochs: 50
 
