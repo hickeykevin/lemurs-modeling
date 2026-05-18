@@ -106,13 +106,21 @@ class HealthDataModule(LightningDataModule):
                 modality_dfs = {}
                 for mod in self.hparams.modalities:
                     df = db.extract_from_database(mod)
-                    df['start_timestamp'] = pd.to_datetime(df['start_timestamp'])
+                    df['start_timestamp'] = pd.to_datetime(df["start_timestamp"]).astype("datetime64[ns]")
+                    if "end_timestamp" in df.columns: df["end_timestamp"] = pd.to_datetime(df["end_timestamp"]).astype("datetime64[ns]")
                     modality_dfs[mod] = df
+
+                # 1.5 Clip extreme outliers at 99th percentile before scaling
+                for mod, df in modality_dfs.items():
+                    val_col = self.hparams.modality_cols.get(mod)
+                    if val_col and val_col in df.columns:
+                        limit = df[val_col].quantile(0.99)
+                        df[val_col] = df[val_col].clip(upper=limit)
 
                 # 2. Extract survey response labels
                 answer_df = db.extract_from_database("answer")
                 survey_response_df = db.extract_from_database("survey_response")
-                survey_response_df['timestamp'] = pd.to_datetime(survey_response_df['timestamp'])
+                survey_response_df['timestamp'] = pd.to_datetime(survey_response_df["timestamp"]).astype("datetime64[ns]")
             finally:
                 db.disconnect()
 

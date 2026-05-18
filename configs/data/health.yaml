@@ -9,11 +9,11 @@ modalities: ["step", "calorie"]
 aggregator: ${data.aggregator}
 
 
-batch_size: 8
+batch_size: 16
 train_val_test_split: [0.7, 0.15, 0.15]
 num_workers: 1
 pin_memory: False
 random_state: ${seed}
 split_mode: longitudinal # random, user, longitudinal
-os_filter: both # both, ios, android
+os_filter: ios # both, ios, android
 

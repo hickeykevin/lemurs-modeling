@@ -115,6 +115,8 @@ class HealthLitModule(LightningModule):
         Returns:
             The loss tensor.
         """
+        # if batch_idx % 5 == 0:
+        #     import pdb; pdb.set_trace()
         loss, preds, targets, _ = self.model_step(batch)
 
         # Update metrics
@@ -200,10 +202,16 @@ class HealthLitModule(LightningModule):
                 raise RuntimeError("Cannot determine num_classes: neither num_classes arg nor trainer is available.")
 
 
-            # Instantiate the actual Accuracy metrics with the correct number of classes
-            self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-            self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-            self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+            # Instantiate the actual Accuracy metrics with the correct task type
+            if self.num_classes <= 2:
+                # For binary tasks (0 or 1), torchmetrics Accuracy doesn't use num_classes
+                self.train_acc = Accuracy(task="binary")
+                self.val_acc = Accuracy(task="binary")
+                self.test_acc = Accuracy(task="binary")
+            else:
+                self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+                self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+                self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
             
             # Reset metrics to ensure a clean start
             self.val_loss.reset()
