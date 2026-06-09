@@ -282,6 +282,36 @@ To submit runs to a **SLURM cluster**, use our wrapper configs or batch submit s
 sbatch scripts/run_sweep.sbatch
 ```
 
+### 6. Debugging & Troubleshooting
+
+To troubleshoot bugs in your models, data pipelines, or training loops, you can combine interactive debugging with quick trial-run configurations:
+
+#### A. Interactive Debugging with pdb
+Insert a standard breakpoint anywhere in your Python code (such as inside `src/models/health_module.py` or `src/data/health_datamodule.py`) using:
+```python
+import pdb; pdb.set_trace()
+```
+When running training or evaluation from the terminal, execution will halt at the breakpoint, letting you inspect tensors, shapes, and variables interactively.
+
+#### B. Quick Debug Runs (Hydra Config Overrides)
+Running a full dataset or training run takes time. You can use Hydra's debug configs to run fast test suites:
+
+*   **Fast Development Run (`debug=fdr`)**:
+    Runs exactly 1 training, 1 validation, and 1 test batch. This is extremely useful to verify that the entire training loop completes without crashing (useful when combined with `pdb` traces):
+    ```bash
+    uv run src/train.py debug=fdr
+    ```
+*   **Limit Batch Run (`debug=limit`)**:
+    Runs only 10 training, 10 validation, and 10 test batches for up to 3 epochs. Useful for checking if loss decreases or if metrics update correctly:
+    ```bash
+    uv run src/train.py debug=limit
+    ```
+*   **Overfitting Check (`debug=overfit`)**:
+    Forces the model to overfit on a tiny fraction of the data to verify that the network architecture is capable of learning:
+    ```bash
+    uv run src/train.py debug=overfit
+    ```
+
 ---
 
 ## 💡 Best Practices
