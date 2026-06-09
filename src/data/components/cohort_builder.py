@@ -93,8 +93,8 @@ class CohortBuilder:
             if 'app_user_id' in df.columns:
                 df = df[~df['app_user_id'].isin(drop_users)]
                 
-            # Time filter: drop all sensor data before 2025-01-01
-            df = df[df['start_timestamp'] >= pd.Timestamp('2025-01-01')]
+            # Time filter: drop all sensor data before 2025-09-01
+            df = df[df['start_timestamp'] >= pd.Timestamp('2025-09-01')]
             
             modality_dfs[mod] = df
 
