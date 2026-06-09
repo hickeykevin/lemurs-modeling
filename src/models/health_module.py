@@ -115,8 +115,6 @@ class HealthLitModule(LightningModule):
         Returns:
             The loss tensor.
         """
-        # if batch_idx % 5 == 0:
-        #     import pdb; pdb.set_trace()
         loss, preds, targets, _ = self.model_step(batch)
 
         # Update metrics
