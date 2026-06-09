@@ -7,7 +7,7 @@ defaults:
   - data: health
   - model: health
   - callbacks: default
-  - logger: null # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
+  - logger: csv # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
   - trainer: cpu
   - paths: default
   - extras: default
