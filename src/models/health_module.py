@@ -273,6 +273,7 @@ class FLAMLHealthModule(LightningModule):
         # Metrics for logging
         self.train_acc = partial(Accuracy, task="multiclass")
         self.val_acc = partial(Accuracy, task="multiclass")
+        self.test_acc = partial(Accuracy, task="multiclass")
         
     def _flatten_batch(self, x: torch.Tensor) -> np.ndarray:
         """Flattens sequential data for tabular ML models.
@@ -288,6 +289,32 @@ class FLAMLHealthModule(LightningModule):
 
     def setup(self, stage: str, **kwargs) -> None:
         """Collects the entire training set and fits the AutoML model."""
+        if not hasattr(self, "num_classes"):
+            num_classes = kwargs.get("num_classes")
+            if num_classes is not None:
+                self.num_classes = num_classes
+            elif hasattr(self, "trainer") and self.trainer is not None:
+                # Determine classes by looking at validation labels
+                val_dataloader = self.trainer.datamodule.val_dataloader()
+                y_list = []
+                for batch in val_dataloader:
+                    _, y = batch
+                    y_list.append(y.cpu().numpy())
+                y_val = np.concatenate(y_list, axis=0)
+                self.num_classes = int(np.max(y_val)) + 1
+            else:
+                self.num_classes = 2  # Default binary fallback
+                
+            # Instantiate correct accuracy metrics (binary or multiclass)
+            if self.num_classes <= 2:
+                self.train_acc = Accuracy(task="binary")
+                self.val_acc = Accuracy(task="binary")
+                self.test_acc = Accuracy(task="binary")
+            else:
+                self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+                self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+                self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+
         if stage == "fit" and not hasattr(self.automl, "best_estimator"):
             self.print("--- FLAML AutoML: Starting Optimization ---")
             
@@ -303,14 +330,18 @@ class FLAMLHealthModule(LightningModule):
             X_train = np.concatenate(X_list, axis=0)
             y_train = np.concatenate(y_list, axis=0)
 
-            # Dynamically determine classes from training labels
-            num_classes = kwargs.get("num_classes")
-            if num_classes is None:
-                num_classes = int(np.max(y_train)) + 1
-            self.num_classes = num_classes
-                
-            self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-            self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+            # Double check class bounds from actual training data
+            num_classes_train = int(np.max(y_train)) + 1
+            if num_classes_train > self.num_classes:
+                self.num_classes = num_classes_train
+                if self.num_classes <= 2:
+                    self.train_acc = Accuracy(task="binary")
+                    self.val_acc = Accuracy(task="binary")
+                    self.test_acc = Accuracy(task="binary")
+                else:
+                    self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+                    self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+                    self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
             
             # Fit FLAML (this may take some time depending on automl_config.time_budget)
             self.automl.fit(
@@ -350,7 +381,7 @@ class FLAMLHealthModule(LightningModule):
             logits = torch.tensor(y_prob, device=self.device)
         except:
             # Fallback if the estimator doesn't support predict_proba
-            logits = torch.nn.functional.one_hot(y_pred_tensor, num_classes=self.val_acc.num_classes).float()
+            logits = torch.nn.functional.one_hot(y_pred_tensor, num_classes=self.num_classes).float()
 
         # Update and log metrics
         self.val_acc(y_pred_tensor, y)
@@ -377,11 +408,11 @@ class FLAMLHealthModule(LightningModule):
             logits = torch.tensor(y_prob, device=self.device)
         except:
             # Fallback
-            logits = torch.nn.functional.one_hot(y_pred_tensor, num_classes=self.val_acc.num_classes).float()
+            logits = torch.nn.functional.one_hot(y_pred_tensor, num_classes=self.num_classes).float()
         
         # Log test metrics
-        self.val_acc(y_pred_tensor, y) # Reuse val_acc for simplicity
-        self.log("test/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.test_acc(y_pred_tensor, y)
+        self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
         
         return {"preds": y_pred_tensor, "targets": y, "logits": logits}
 

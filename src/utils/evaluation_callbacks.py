@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 from lightning import Callback, LightningModule, Trainer
-from torchmetrics import MetricCollection
+from torchmetrics import MetricCollection, MaxMetric
 from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix
 from rich.table import Table
 from rich.console import Console
@@ -139,6 +139,10 @@ class ClassificationMetricsCallback(Callback):
         
         self.val_metrics: Optional[MetricCollection] = None
         self.test_metrics: Optional[MetricCollection] = None
+        
+        # Track the best metrics over validation epochs
+        self.val_f1_best = MaxMetric()
+        self.val_auroc_best = MaxMetric()
 
     def _init_metrics(self, num_classes: int, device: torch.device) -> MetricCollection:
         """Initializes the MetricCollection with F1 and AUROC.
@@ -201,6 +205,19 @@ class ClassificationMetricsCallback(Callback):
             # Log all metrics in the collection
             for name, value in output.items():
                 pl_module.log(f"val/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
+                
+                # Track the best metrics over validation epochs
+                if name == "f1":
+                    if self.val_f1_best.device != pl_module.device:
+                        self.val_f1_best = self.val_f1_best.to(pl_module.device)
+                    self.val_f1_best(value)
+                    pl_module.log("val/f1_best", self.val_f1_best.compute(), sync_dist=True, prog_bar=True)
+                elif name == "auroc":
+                    if self.val_auroc_best.device != pl_module.device:
+                        self.val_auroc_best = self.val_auroc_best.to(pl_module.device)
+                    self.val_auroc_best(value)
+                    pl_module.log("val/auroc_best", self.val_auroc_best.compute(), sync_dist=True, prog_bar=True)
+                    
             self.val_metrics.reset()
 
     def on_test_batch_end(
