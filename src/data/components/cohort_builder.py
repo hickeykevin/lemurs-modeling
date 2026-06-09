@@ -5,9 +5,13 @@ from src.utils.database_service import DatabaseService
 from src.data.components.label_aggregators import LabelAggregator
 
 class CohortBuilder:
-    """Builds the cohort dataset by extracting from the DB, applying preprocessors,
-    and handling demographic (OS) filtering and target aggregations.
+    """Builds and filters the cohort dataset.
+
+    This class coordinates database connections, applies data-cleaning
+    modality preprocessors, performs global user/time filters, clips outliers,
+    aggregates target daily clinical labels, and filters by device operating system (OS).
     """
+
     def __init__(
         self,
         modalities: List[str],
@@ -16,6 +20,15 @@ class CohortBuilder:
         aggregator: LabelAggregator,
         os_filter: Optional[Literal["ios", "android", "both"]] = "both"
     ):
+        """Initializes the CohortBuilder.
+
+        Args:
+            modalities: List of database tables to fetch (e.g., ["step", "calorie"]).
+            modality_cols: Map of modality names to their value column (e.g., {"step": "steps"}).
+            preprocessors: Map of modality names to preprocessor callables.
+            aggregator: Strategy object for binarizing/aggregating daily survey responses.
+            os_filter: Operating system filter mode ("ios", "android", or "both").
+        """
         self.modalities = modalities
         self.modality_cols = modality_cols
         self.preprocessors = preprocessors
@@ -23,47 +36,69 @@ class CohortBuilder:
         self.os_filter = os_filter
 
     def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
-        """Connects to the database and orchestrates the dataset build."""
+        """Orchestrates the entire cohort building pipeline.
+
+        This method connects to the database, extracts and cleans all requested
+        health metrics, fetches and binarizes survey answers, and then filters
+        the cohort to match OS-demographic criteria.
+
+        Returns:
+            A tuple containing:
+                - Dict[str, pd.DataFrame]: Cleaned and preprocessed modality dataframes.
+                - pd.DataFrame: Combined target survey labels (master dataframe).
+        """
         db = DatabaseService()
         if not db.connect():
             raise Exception("Failed to connect to the database.")
 
         try:
+            # Step 1 & 2: Extract data streams and apply cleanings/aggregations
             modality_dfs = self._extract_and_clean_modalities(db)
             master_df = self._extract_and_aggregate_labels(db)
         finally:
+            # Ensure database connection is closed regardless of success/error
             db.disconnect()
 
-        # Apply OS filter
+        # Step 3: Filter cohort demographics by operating system if requested
         master_df = self._apply_os_filtering(master_df, modality_dfs)
         
         return modality_dfs, master_df
 
     def _extract_and_clean_modalities(self, db: DatabaseService) -> Dict[str, pd.DataFrame]:
+        """Extracts, cleans, and applies outlier clipping to sensor modalities.
+
+        Args:
+            db: Connected DatabaseService instance.
+
+        Returns:
+            Dict[str, pd.DataFrame]: Map of cleaned modality dataframes.
+        """
         modality_dfs = {}
         for mod in self.modalities:
             df = db.extract_from_database(mod)
             
-            # 1. Apply modality-specific preprocessors
+            # 1. Apply modality-specific preprocessors if registered
             if self.preprocessors and mod in self.preprocessors:
                 df = self.preprocessors[mod](df)
                 
+            # Coerce timestamps to standard datetime format
             df['start_timestamp'] = pd.to_datetime(df["start_timestamp"]).astype("datetime64[ns]")
             if "end_timestamp" in df.columns: 
                 df["end_timestamp"] = pd.to_datetime(df["end_timestamp"]).astype("datetime64[ns]")
             
-            # 2. Global Filters
-            # Remove test users and discontinued users
+            # 2. Global Filters: Remove test and discontinued users
+            # Test users: [1, 2, 3, 10, 43]
+            # Discontinued/Anomalous users: [21, 22]
             drop_users = [1, 2, 3, 10, 21, 22, 43]
             if 'app_user_id' in df.columns:
                 df = df[~df['app_user_id'].isin(drop_users)]
                 
-            # Remove records before 2025-01-01
+            # Time filter: drop all sensor data before 2025-01-01
             df = df[df['start_timestamp'] >= pd.Timestamp('2025-01-01')]
             
             modality_dfs[mod] = df
 
-        # 3. Clip extreme outliers at 99th percentile globally
+        # 3. Outlier Clipping: Clip extreme values at the 99th percentile globally
         for mod, df in modality_dfs.items():
             val_col = self.modality_cols.get(mod)
             if val_col and val_col in df.columns:
@@ -73,18 +108,31 @@ class CohortBuilder:
         return modality_dfs
 
     def _extract_and_aggregate_labels(self, db: DatabaseService) -> pd.DataFrame:
+        """Fetches survey answers and aggregates them into daily clinical labels.
+
+        Args:
+            db: Connected DatabaseService instance.
+
+        Returns:
+            pd.DataFrame: Merged and binarized target labels dataframe.
+        """
+        # Fetch underlying answers and parent survey responses
         answer_df = db.extract_from_database("answer")
         survey_response_df = db.extract_from_database("survey_response")
         survey_response_df['timestamp'] = pd.to_datetime(survey_response_df["timestamp"]).astype("datetime64[ns]")
 
+        # Extract only question IDs required by the chosen aggregator
         question_ids = self.aggregator.get_question_ids()
         target_answers = answer_df[answer_df['question_id'].isin(question_ids)].copy()
 
+        # Coerce answer strings to numeric scores, dropping any nulls
         target_answers['answer'] = pd.to_numeric(target_answers['answer'], errors='coerce')
         target_answers = target_answers.dropna(subset=['answer'])
 
+        # Aggregate daily scores via the configured binarization strategy
         aggregated_answers = self.aggregator(target_answers)
 
+        # Merge with survey responses to retrieve app_user_id and target timestamp
         master_df = pd.merge(
             aggregated_answers,
             survey_response_df[['id', 'app_user_id', 'timestamp']],
@@ -96,9 +144,22 @@ class CohortBuilder:
         return master_df
 
     def _apply_os_filtering(self, master_df: pd.DataFrame, modality_dfs: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """Filters target labels to keep only users on the specified operating system.
+
+        Determines a user's operating system dynamically by looking at their 
+        active `app_source` strings across all modality datasets.
+
+        Args:
+            master_df: Target clinical labels dataframe.
+            modality_dfs: Cleaned modality dataframes containing sensor data.
+
+        Returns:
+            pd.DataFrame: OS-filtered master dataframe.
+        """
         if not self.os_filter or self.os_filter == "both" or not modality_dfs:
             return master_df
             
+        # Group all unique app sources encountered per user
         user_sources = {}
         for df in modality_dfs.values():
             if 'app_user_id' in df.columns and 'app_source' in df.columns:
@@ -108,12 +169,14 @@ class CohortBuilder:
                         user_sources[user_id] = set()
                     user_sources[user_id].update(str(s) for s in sources)
                     
+        # Determine OS mapping (ios, android, or both) per user ID
         user_os = {}
         for user_id, sources in user_sources.items():
             is_ios = any('iPhone' in s or 'Apple Watch' in s or 'HealthKit' in s for s in sources)
             is_android = any('androidx' in s for s in sources)
             user_os[user_id] = 'ios' if is_ios and not is_android else ('android' if is_android and not is_ios else 'both')
         
+        # Filter the cohort according to the target OS filter configuration
         target_os = self.os_filter.lower()
         allowed_users = [u for u, os_typ in user_os.items() if os_typ == target_os]
         return master_df[master_df['app_user_id'].isin(allowed_users)]
