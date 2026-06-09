@@ -21,10 +21,10 @@ Built with **PyTorch Lightning** and **Hydra** for highly scalable, modular, and
 
 This repository contains the modeling logic, time-series feature generators, and clinical target binarization utilities for processing raw mobile sensor and ecological momentary assessment (EMA) data.
 
-To make onboarding as smooth as possible for team members new to **PyTorch Lightning** or **Hydra**, this documentation is split into three progressive learning tracks:
-* [**🟢 Beginner Track**](#-beginner-track): Environment setup, running defaults, and understanding where files live.
-* [**🟡 Intermediate Track**](#-intermediate-track): CLI overrides, swapping modular metrics/samplers/models, and logging.
-* [**🔴 Advanced Track**](#-advanced-track): Creating custom components, writing new experiments, running Optuna sweeps, and distributed training.
+To make onboarding as smooth as possible for team members new to **PyTorch Lightning** or **Hydra**, this documentation is organized into two practical walkthrough tutorials and reference sub-guides:
+* [**🚶 Tutorial 1: Getting Started and Local Runs**](#-tutorial-1-getting-started-and-local-runs): Covers environment installation, executing standard baseline models, inspecting local logs/checkpoints, and clean-up.
+* [**⚡ Tutorial 2: Creating a Custom Transformer Module & GPU Training**](#-tutorial-2-creating-a-custom-transformer-module--gpu-training): Teaches you how to build a new network component from scratch, write its YAML configuration, target GPU hardware, and master command-line overrides.
+* [**⚙️ Advanced Customization & Reference**](#-advanced-customization--reference): Deep-dives into clinical aggregators, visualization playgrounds, hyperparameter tuning sweeps, and SLURM submissions.
 
 ---
 
