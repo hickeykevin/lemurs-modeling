@@ -26,6 +26,55 @@ Samples data based on fixed offsets from the **midnight** of the survey day.
 Aggregates data into a single vector representing the entire previous calendar day.
 - **Example Usage:** `python src/train.py data/sampler=daily`
 
+---
+
+## Sampler Parameters & Settings Reference
+
+Each sampler has specific hyperparameters you can configure in their `.yaml` files or override via CLI.
+
+### 🕛 Offset & Daily Samplers (`OffsetSampler`)
+Both `offset.yaml` and `daily.yaml` instantiate the `OffsetSampler`. The window is calculated relative to **midnight (00:00 AM) of the day the survey was filled out**.
+
+*   `start_offset_hours` (float): The start time of your window, relative to midnight.
+*   `end_offset_hours` (float): The end time of your window, relative to midnight.
+*   `resample_freq` (string): Time interval for grouping raw steps (e.g. `"1h"`, `"30m"`).
+
+> [!NOTE]
+> **Understanding the Offsets for `daily.yaml` vs custom `offset.yaml`:**
+> *   **`daily.yaml`** sets `start_offset_hours: -24.0` and `end_offset_hours: 0.0`. This defines a lookback window spanning from midnight yesterday (`-24.0` hours before midnight today) to midnight today (`0.0`). It captures the entire preceding calendar day in hourly bins.
+> *   If you want to sample only the **morning hours of the survey day** (e.g., 00:00 to 09:00 AM today), you would set:
+>     `start_offset_hours: 0.0` and `end_offset_hours: 9.0`.
+> *   If you want to look at the **afternoon and evening of the previous day** (e.g., 12:00 PM yesterday to 12:00 AM today):
+>     `start_offset_hours: -12.0` and `end_offset_hours: 0.0`.
+
+---
+
+### ⏱️ Rolling Sampler (`RollingSampler`)
+Calculates a dynamic, moving window backwards from the **exact timestamp of the survey response**.
+
+*   `lookback_hours` (float): The total number of hours immediately preceding the survey response to collect (e.g. `24.0` for one day).
+*   `resample_freq` (string): Time interval for resampling bins (e.g. `"1h"`).
+
+---
+
+### 📊 Block Sampler (`BlockSampler`)
+Divides the time-series into fixed behavioral blocks (Sleep, Morning, Afternoon, Evening) for each lookback day.
+
+*   `lookback_days` (int): The number of full calendar days preceding today's midnight to sample. A value of `1` yields 4 blocks (the 4 periods of yesterday). A value of `7` yields 28 blocks (4 periods per day over the last week).
+*   **Behavioral Blocks defined:**
+    1.  **Sleep:** 00:00 – 08:00 (weight is damped by `0.05` to prevent over-representing accidental steps)
+    2.  **Morning:** 08:00 – 12:00
+    3.  **Afternoon:** 12:00 – 17:00
+    4.  **Evening:** 17:00 – 24:00
+
+---
+
+### 🔗 Lag Sampler (`LagSampler`)
+*   Does not take step or sensor counts.
+*   Uses the historical target answer (mood, stress, etc.) from the **user's last completed survey** as features. Used for establishing baseline benchmarks.
+
+---
+
 ## Common Modeling Scenarios
 
 Here are some typical research questions and the commands to run them:

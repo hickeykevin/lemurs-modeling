@@ -8,12 +8,9 @@ defaults:
   - override /model: health
   - override /model/net: lstm
   - override /callbacks: [confusion_matrix,classification_metrics]
-  - override /data/aggregator: suicide_risk
-  - override /data/scaler: standard
-  - override /data/sampler: block
-  - override /trainer: cpu
+  - override /trainer: gpu
 
-tags: ["health", "lstm", "suicide_risk"]
+tags: ["health", "lstm"]
 
 seed: 42
 
@@ -23,8 +20,8 @@ model:
     hidden_size: 32
     dropout: 0.2
     output_size: 2
-  class_weights: [1.0, 20.0]
+  class_weights: [1.0, 1.0]
 
 trainer:
-  max_epochs: 50
+  max_epochs: 100
 

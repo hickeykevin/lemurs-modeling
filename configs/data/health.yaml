@@ -6,8 +6,6 @@ defaults:
 
 _target_: src.data.health_datamodule.HealthDataModule
 modalities: ["step", "calorie"]
-aggregator: ${data.aggregator}
-
 
 batch_size: 16
 train_val_test_split: [0.7, 0.15, 0.15]
