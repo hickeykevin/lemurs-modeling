@@ -160,7 +160,7 @@ git checkout -b feat/modeling-transformer-baseline
 ```
 
 ### Step 2: Implement the PyTorch Network
-Create your custom network class (e.g., a self-attention model) inside `src/models/components/transformer.py`:
+Assume we create a custom network class (e.g., a self-attention model) inside `src/models/components/transformer.py`:
 ```python
 import torch
 import torch.nn as nn
@@ -171,7 +171,7 @@ class TransformerComponent(nn.Module):
 ```
 
 ### Step 3: Create the Config File
-Create the associated configuration file at `configs/model/transformer.yaml`. This file defines the `_target_` import path and hyperparameter defaults (for more details on config composition and structures, see [configs/model/README.md](configs/model/README.md) and [configs/README.md](configs/README.md)):
+Based on the "new" model we just made, create the associated configuration file at `configs/model/transformer.yaml`. This file defines the `_target_` import path and hyperparameter defaults (for more details on config composition and structures, see [configs/model/README.md](configs/model/README.md) and [configs/README.md](configs/README.md)):
 ```yaml
 _target_: src.models.health_module.HealthLitModule
 net:
@@ -184,7 +184,7 @@ optimizer:
 ```
 
 ### Step 4: Run Your Model on GPU
-Launch training using your newly defined model configuration and swap the trainer to use GPU acceleration (if available, else run `trainer=cpu`):
+We then can launch training using the newly defined model configuration and swap the trainer to use GPU acceleration (if available, else run `trainer=cpu`):
 ```bash
 uv run src/train.py model=transformer trainer=gpu
 ```
