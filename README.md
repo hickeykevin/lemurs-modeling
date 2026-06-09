@@ -85,6 +85,14 @@ cd lemurs-modeling
 uv sync
 ```
 
+Next, set up your local environment configurations by copying the `.env.example` file:
+```bash
+cp .env.example .env
+```
+Open the `.env` file in your editor and fill in the required connection settings.
+> [!IMPORTANT]
+> **Database Credentials**: To connect to the training databases, you need access credentials. If you do not have these keys, ask the project **Administrator** for the required connection credentials.
+
 ### Step 2: Initialize Your Branch
 Before modifying any configuration files or writing code, create a dedicated branch off an up-to-date local `main`:
 ```bash
