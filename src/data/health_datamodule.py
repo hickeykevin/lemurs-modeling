@@ -6,6 +6,7 @@ from src.utils.database_service import DatabaseService
 from src.data.components.health_dataset import HealthDataset
 from src.data.components.label_aggregators import LabelAggregator
 from src.data.components.samplers import TimeSampler
+from src.data.components.cohort_builder import CohortBuilder
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -40,6 +41,7 @@ class HealthDataModule(LightningDataModule):
         aggregator: LabelAggregator,
         sampler: TimeSampler,
         scaler: Optional[Any] = None,
+        preprocessors: Optional[Dict[str, Any]] = None,
         modalities: List[str] = ["step"],
         batch_size: int = 8,
 
@@ -58,6 +60,7 @@ class HealthDataModule(LightningDataModule):
             aggregator (LabelAggregator): Strategy for aggregating multiple survey answers into one label.
             sampler (TimeSampler): Strategy for sampling time-series data relative to survey timestamps.
             scaler (Optional[Any]): Optional scaler object (e.g. sklearn StandardScaler) to apply to features.
+            preprocessors (Optional[Dict[str, Any]]): Dictionary of preprocessor objects for data modalities.
             modalities (List[str]): List of database tables to fetch (e.g. ["step", "calorie"]).
             batch_size (int): Number of samples per batch.
 
@@ -87,118 +90,38 @@ class HealthDataModule(LightningDataModule):
         """Load and prepare data for all stages.
 
         This method performs the following steps:
-            1. Connects to the database and extracts health metrics and survey data.
-            2. Aggregates target labels using the configured `aggregator` strategy.
-            3. Links survey answers to their corresponding users and timestamps.
-            4. Performs data splitting based on the configured `split_mode`.
-            5. Instantiates the final `HealthDataset` objects.
+            1. Orchestrates cohort extraction via CohortBuilder.
+            2. Splits the cohort into training, validation, and test datasets.
+            3. Fits the feature scaler on the training data.
+            4. Instantiates the final HealthDataset objects.
 
         Args:
             stage: The stage for which to setup data (fit, validate, test, predict).
         """
         if not self.data_train and not self.data_val and not self.data_test:
-            db = DatabaseService()
-            if not db.connect():
-                raise Exception("Failed to connect to the database.")
-
-            try:
-                # 1. Fetch raw data for all requested modalities
-                modality_dfs = {}
-                for mod in self.hparams.modalities:
-                    df = db.extract_from_database(mod)
-                    df['start_timestamp'] = pd.to_datetime(df["start_timestamp"]).astype("datetime64[ns]")
-                    if "end_timestamp" in df.columns: df["end_timestamp"] = pd.to_datetime(df["end_timestamp"]).astype("datetime64[ns]")
-                    modality_dfs[mod] = df
-
-                # 1.5 Clip extreme outliers at 99th percentile before scaling
-                for mod, df in modality_dfs.items():
-                    val_col = self.hparams.modality_cols.get(mod)
-                    if val_col and val_col in df.columns:
-                        limit = df[val_col].quantile(0.99)
-                        df[val_col] = df[val_col].clip(upper=limit)
-
-                # 2. Extract survey response labels
-                answer_df = db.extract_from_database("answer")
-                survey_response_df = db.extract_from_database("survey_response")
-                survey_response_df['timestamp'] = pd.to_datetime(survey_response_df["timestamp"]).astype("datetime64[ns]")
-            finally:
-                db.disconnect()
-
-            # 3. Aggregate and link survey answers
-            # Extract question IDs required by the chosen aggregator
-            question_ids = self.hparams.aggregator.get_question_ids()
-
-            # Filter for requested questions and ensure numeric values
-            target_answers = answer_df[answer_df['question_id'].isin(question_ids)].copy()
-
-
-            target_answers['answer'] = pd.to_numeric(target_answers['answer'], errors='coerce')
-            target_answers = target_answers.dropna(subset=['answer'])
-
-            # Delegate aggregation logic to the strategy object
-            aggregated_answers = self.hparams.aggregator(target_answers)
-
-            # Join with survey_response metadata to get user IDs and timestamps
-            master_df = pd.merge(
-                aggregated_answers,
-                survey_response_df[['id', 'app_user_id', 'timestamp']],
-                left_on='survey_response_id',
-                right_on='id',
-                suffixes=('', '_survey')
-            ).rename(columns={'timestamp': 'record_timestamp'})
+            builder = CohortBuilder(
+                modalities=self.hparams.modalities,
+                modality_cols=self.hparams.modality_cols,
+                preprocessors=self.hparams.preprocessors,
+                aggregator=self.hparams.aggregator,
+                os_filter=self.hparams.os_filter
+            )
+            modality_dfs, master_df = builder.build()
             
             self.master_df = master_df
-            
-            # Filter cohort demographics by operating system if requested
-            if self.hparams.os_filter and self.hparams.os_filter != "both" and modality_dfs:
-                user_sources = {}
-                for df in modality_dfs.values():
-                    if 'app_user_id' in df.columns and 'app_source' in df.columns:
-                        for user_id, group in df.groupby('app_user_id'):
-                            sources = group['app_source'].dropna().unique()
-                            if user_id not in user_sources:
-                                user_sources[user_id] = set()
-                            user_sources[user_id].update(str(s) for s in sources)
-                            
-                user_os = {}
-                for user_id, sources in user_sources.items():
-                    is_ios = any('iPhone' in s or 'Apple Watch' in s or 'HealthKit' in s for s in sources)
-                    is_android = any('androidx' in s for s in sources)
-                    user_os[user_id] = 'ios' if is_ios and not is_android else ('android' if is_android and not is_ios else 'both')
-                
-                target_os = self.hparams.os_filter.lower()
-                allowed_users = [u for u, os_typ in user_os.items() if os_typ == target_os]
-                master_df = master_df[master_df['app_user_id'].isin(allowed_users)]
 
-
-            # 4. Perform splitting based on the selected evaluation strategy
+            # Perform splitting based on the selected evaluation strategy
             train_df, val_df, test_df = self._split_data(master_df)
 
             # If the sampler needs access to the labels (e.g. LagSampler), provide them now
             if hasattr(self.hparams.sampler, "set_labels"):
                 self.hparams.sampler.set_labels(master_df)
 
-
-            # 5. Fit the scaler on training sequences only, then pass it
-            # to the datasets so _precompute() can apply it vectorially.
+            # Fit the scaler on training sequences only
             if self.hparams.scaler is not None and hasattr(self.hparams.scaler, "fit"):
-                modalities = sorted(list(modality_dfs.keys()))
-                modality_cols = self.hparams.modality_cols
-                train_seqs = [
-                    self.hparams.sampler(
-                        survey_timestamp=row["record_timestamp"],
-                        app_user_id=row["app_user_id"],
-                        modality_dfs=modality_dfs,
-                        modality_cols=modality_cols,
-                        modalities=modalities,
-                    )
-                    for _, row in train_df.iterrows()
-                ]
-                stacked = np.concatenate(train_seqs, axis=0)  # [N*Time, Features]
-                self.hparams.scaler.fit(stacked)
+                self._fit_scaler(train_df, modality_dfs)
 
-            # 6. Instantiate Dataset objects — scaler is applied vectorially
-            # inside HealthDataset._precompute() rather than per-sample.
+            # Instantiate Dataset objects
             self.data_train = HealthDataset(
                 train_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler
@@ -211,6 +134,24 @@ class HealthDataModule(LightningDataModule):
                 test_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler
             )
+
+    def _fit_scaler(self, train_df: pd.DataFrame, modality_dfs: Dict[str, pd.DataFrame]) -> None:
+        """Fits the configured scaler using data sampled from the training dataframe."""
+        modalities = sorted(list(modality_dfs.keys()))
+        modality_cols = self.hparams.modality_cols
+        train_seqs = [
+            self.hparams.sampler(
+                survey_timestamp=row["record_timestamp"],
+                app_user_id=row["app_user_id"],
+                modality_dfs=modality_dfs,
+                modality_cols=modality_cols,
+                modalities=modalities,
+            )
+            for _, row in train_df.iterrows()
+        ]
+        if train_seqs:
+            stacked = np.concatenate(train_seqs, axis=0)  # [N*Time, Features]
+            self.hparams.scaler.fit(stacked)
 
     def _split_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Dispatches to the appropriate splitting strategy.
