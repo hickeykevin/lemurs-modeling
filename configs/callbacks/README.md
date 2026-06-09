@@ -1,91 +1,87 @@
 <div align="center">
-  
-# Callback Configurations
+
+# 🎛️ PyTorch Lightning Callbacks
 
 [![lightning](https://img.shields.io/badge/-Lightning_2.0+-792ee5?logo=pytorchlightning&logoColor=white)](https://pytorchlightning.ai/)
 
 </div>
 
-This directory contains configuration files for **PyTorch Lightning Callbacks**. Callbacks allow you to add non-essential logic to your training loop (like checkpointing, early stopping, or custom logging) without cluttering your model code.
+Callbacks allow you to inject custom code at specific hooks in the training pipeline (e.g., `on_train_epoch_end`, `on_validation_batch_start`) without modifying the core neural network model or training loops.
+
+---
 
 ## 📌 Available Callbacks
 
 ### 1. `default.yaml`
-A collection of the most commonly used callbacks. When you run with `callbacks=default`, it typically enables:
-- Model Checkpointing
-- Early Stopping
-- Model Summary
-- Rich Progress Bar
+Combines the most standard helper tools for production modeling. Enabling `callbacks=default` turns on:
+*   **Model Checkpointing**: Save model weights.
+*   **Early Stopping**: Halt if validation stalls.
+*   **Progress Bars**: Console progress monitoring.
 
 ### 2. `model_checkpoint.yaml`
-Automatically saves the best version of your model based on a monitored metric (usually `val/acc`).
-- **Use Case:** Ensuring you don't lose the best weights if the model overfits later.
+Saves your model parameters based on evaluation metrics.
+*   **Monitored Metric**: Defaults to `val/acc` or custom validation target.
+*   **Purpose**: Prevents weight loss from training overfitting.
 
 ### 3. `early_stopping.yaml`
-Stops training automatically if the validation metric stops improving for a certain number of epochs (patience).
-- **Use Case:** Saving compute time and preventing overfitting.
+Stops training run if a monitored metric has not improved for a designated number of epochs (`patience`).
+*   **Purpose**: Saves computational budget.
 
-### 4. `label_history.yaml` (Custom)
-A specialized utility for longitudinal modeling. It prints the full chronological history of survey answers for a specific participant at the start of the run.
-- **Use Case:** Verifying the "Lag" baseline and inspecting raw data sequences.
-- **Command:** `python src/train.py callbacks=label_history callbacks.label_history.target_user_id=27`
+### 4. `confusion_matrix.yaml` (Custom)
+Prints a beautifully structured, terminal-friendly confusion matrix at the end of validation epochs using the Python `Rich` package.
+*   **Command:**
+    ```bash
+    uv run src/train.py callbacks=[confusion_matrix]
+    ```
 
-### 5. `confusion_matrix.yaml` (Custom)
-Prints a beautifully formatted confusion matrix to the terminal using the `Rich` library.
-- **Use Case:** Visualizing class-level performance and misclassifications directly in the console.
-- **Parameters:**
-  - `frequency`: How many epochs to skip between prints (e.g., `frequency=5` prints every 5th epoch).
-- **Command:** `python src/train.py callbacks=confusion_matrix callbacks.confusion_matrix.frequency=1`
+### 5. `classification_metrics.yaml` (Custom)
+Automatically logs clinical validation metrics—including **F1-Score** and **AUROC**—to your logging dashboard.
+*   **Metrics logged**: `val/f1`, `val/auroc`, `test/f1`, `test/auroc`, `val/f1_best`, `val/auroc_best`.
+*   **Command:**
+    ```bash
+    uv run src/train.py callbacks=[classification_metrics]
+    ```
 
-### 6. `classification_metrics.yaml` (Custom)
-Logs advanced metrics like **F1-Score** and **AUROC** to your logger (TensorBoard/WandB).
-- **Use Case:** Tracking more robust performance indicators than simple accuracy, especially for imbalanced data.
-- **Metrics included:** `val/f1`, `val/auroc`, `test/f1`, `test/auroc`.
-- **Command:** `python src/train.py callbacks=classification_metrics`
-
-### 7. `rich_progress_bar.yaml`
-Replaces the default progress bar with a more detailed, "Rich" version that includes estimated time remaining and metric formatting.
+### 6. `label_history.yaml` (Custom)
+A logging inspector that prints out a participant's longitudinal EMA response history at the beginning of the run. Useful for validating sequential sequence window slicing.
+*   **Command:**
+    ```bash
+    # Inspect user 27's label sequence
+    uv run src/train.py callbacks=[label_history] callbacks.label_history.target_user_id=27
+    ```
 
 ---
 
-## ⚡ Your Superpowers
+## ⚡ Customizing Callbacks from CLI
 
-### Use a specific callback group
+You can configure callback parameters directly:
+
 ```bash
-python src/train.py callbacks=default
-```
+# Set early stopping patience to 10 epochs
+uv run src/train.py callbacks=default callbacks.early_stopping.patience=10
 
-### Enable only one callback
-```bash
-python src/train.py callbacks=early_stopping
-```
-
-### Disable all callbacks
-```bash
-python src/train.py callbacks=none
-```
-
-### Overriding callback parameters
-You can tune callback behavior directly from the terminal:
-```bash
-# Increase early stopping patience to 10 epochs
-python src/train.py callbacks=early_stopping callbacks.early_stopping.patience=10
-
-# Save top 3 checkpoints instead of just the best one
-python src/train.py callbacks=model_checkpoint callbacks.model_checkpoint.save_top_k=3
+# Save top 3 model checkpoints instead of just the best 1
+uv run src/train.py callbacks=default callbacks.model_checkpoint.save_top_k=3
 ```
 
 ---
 
-## 🛠️ Creating New Callbacks
+## 🛠️ How to Create a New Callback
 
-1.  Write your callback class in `src/utils/callbacks.py` (inheriting from `lightning.Callback`).
-2.  Create a corresponding `.yaml` file in this directory.
-3.  Set the `_target_` to point to your new Python class.
+1. Create your python class in `src/utils/evaluation_callbacks.py` inheriting from `lightning.Callback`:
+   ```python
+   from lightning import Callback
 
-**Example `my_callback.yaml`:**
-```yaml
-my_callback:
-  _target_: src.utils.callbacks.MyCallback
-  param1: "value"
-```
+   class MyCustomLogger(Callback):
+       def on_train_epoch_end(self, trainer, pl_module):
+           print("Epoch finished!")
+   ```
+2. Create a corresponding YAML file in this folder (e.g. `configs/callbacks/my_logger.yaml`):
+   ```yaml
+   my_logger:
+     _target_: src.utils.evaluation_callbacks.MyCustomLogger
+   ```
+3. Load the callback:
+   ```bash
+   uv run src/train.py callbacks=[default,my_logger]
+   ```

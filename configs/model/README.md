@@ -1,73 +1,72 @@
-# Model Configurations
+# 🧠 Model Configurations & Baselines
 
-This directory contains configuration files for the various machine learning models and baselines available in this repository. 
+This directory contains configuration files for the architectures and training targets available in this repository.
 
-## Available Models
+---
 
-### 1. `health.yaml` (The Primary LSTM)
-The flagship model for this project. It uses a recurrent neural network (LSTM) to process time-series health metrics.
-- **Components:** Uses sub-configs for `net` (the architecture), `optimizer`, and `scheduler`.
-- **Command:** `python src/train.py model=health`
+## 🏛️ Available Model Presets
+
+### 1. `health.yaml` (Deep Learning LSTM)
+The primary deep learning model for longitudinal sequence learning. It takes time-series health features (e.g. daily step sequences) and processes them sequentially via a Recurrent Neural Network (LSTM).
+*   **Architecture:** Dynamically defined inside `model/net/lstm.yaml`.
+*   **Optimizers:** Dynamically configured using PyTorch optimizers (e.g. Adam).
+*   **Command:**
+    ```bash
+    uv run src/train.py model=health
+    ```
 
 ### 2. `flaml.yaml` (AutoML Baseline)
-Uses the FLAML library to automatically search for the best traditional machine learning model (e.g., LightGBM, Random Forest).
-- **Note:** This treats the sampled time-series as a flat feature vector.
-- **Command:** `python src/train.py model=flaml`
+Integrates with Microsoft's **FLAML** (Fast and Lightweight AutoML) library. It flattens the input time-series window and automatically runs a search over traditional machine learning models (LightGBM, Random Forest, XGBoost) to find the best fit.
+*   **Use Case:** Establishes a highly competitive non-deep-learning baseline.
+*   **Command:**
+    ```bash
+    uv run src/train.py model=flaml
+    ```
 
 ### 3. `lag.yaml` (Last-Value Baseline)
-A simple "Naive" baseline that predicts the current state is the same as the user's previous survey answer.
-- **Note:** Requires `data/sampler=lag` to work correctly.
-- **Command:** `python src/train.py model=lag data/sampler=lag`
+A naive lag benchmark that predicts that the user's current symptom state is exactly identical to their last completed survey answer.
+*   **Use Case:** Standard "clinical baseline" to check if historical behavior patterns are actually more informative than the most recent survey state.
+*   **Dependencies:** Requires configuring the data sampler to return historical lags.
+*   **Command:**
+    ```bash
+    uv run src/train.py model=lag data/sampler=lag
+    ```
 
 ### 4. `majority.yaml` (Majority Class Baseline)
-The simplest possible baseline. It ignores all features and always predicts the most frequent class observed in the training set.
-- **Command:** `python src/train.py model=majority`
+A naive baseline that completely ignores all input features (steps, calories, history) and always predicts the most frequent class observed in the training set.
+*   **Use Case:** Verifies whether a model has actually learned patterns or is simply guessing the most common class.
+*   **Command:**
+    ```bash
+    uv run src/train.py model=majority
+    ```
 
 ---
 
-## Common Modeling Scenarios
+## ⚡ CLI Examples for Common Scenarios
 
-### Scenario A: "Beating the Majority Class"
-The first test for any model. If your LSTM cannot beat this, the data is likely too imbalanced or the features are not predictive.
+### Scenario A: Beating the Simple Baseline
+Before deploying or optimizing an LSTM, ensure that it can significantly outperform the majority guess.
 ```bash
-python src/train.py model=majority
+uv run src/train.py model=majority
 ```
 
-### Scenario B: "Deep Learning vs. Traditional ML"
-Compare your LSTM against a state-of-the-art Gradient Boosted Tree (via FLAML).
+### Scenario B: Tuning the Deep Model (LSTM layers and dropout)
+You can directly override the nested architecture parameters from your shell:
 ```bash
-# Run LSTM
-python src/train.py model=health name=lstm_run
-
-# Run AutoML
-python src/train.py model=flaml name=automl_run
+# Double the hidden dim size and set a 30% dropout rate
+uv run src/train.py model=health model.net.hidden_size=128 model.net.dropout=0.3
 ```
 
-### Scenario C: "Hyperparameter Tuning (LSTM)"
-You can override LSTM parameters like hidden layers or dropout directly from the command line.
+### Scenario C: Fast AutoML Benchmark Search
+By default, FLAML executes a search budget. You can restrict the time (in seconds) the AutoML search is allowed to run:
 ```bash
-# Change hidden size and dropout rate
-python src/train.py model=health model.net.hidden_size=128 model.net.dropout=0.5
+# Allow only a 30-second search budget
+uv run src/train.py model=flaml model.automl_config.time_budget=30
 ```
 
-### Scenario D: "Quick AutoML Search"
-Run a very fast (10-second) search to get a rough idea of performance.
+### Scenario D: Swapping Optimizers
+We parameterize optimizers in sub-configs. You can swap optimizers while maintaining the core health model logic:
 ```bash
-python src/train.py model=flaml model.automl_config.time_budget=10
-```
-
----
-
-## How to use in Experiments
-
-### Basic Swap
-```bash
-python src/train.py model=flaml
-```
-
-### Advanced: Nesting Overrides
-Many models use sub-configs. You can swap these individually:
-```bash
-# Keep the health module but swap the optimizer to SGD
-python src/train.py model=health model/optimizer=sgd
+# Swaps Adam to SGD optimizer (looks up configs/model/optimizer/sgd.yaml)
+uv run src/train.py model=health model/optimizer=sgd
 ```

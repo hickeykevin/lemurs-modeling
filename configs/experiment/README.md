@@ -1,74 +1,85 @@
 <div align="center">
 
-# Experiment Configurations
+# 🧪 Named Experiment Configurations
 
 [![hydra](https://img.shields.io/badge/Config-Hydra_1.3-89b8cd)](https://hydra.cc/)
 
 </div>
 
-Experiment configurations are the highest level of control in this repository. They allow you to bundle multiple overrides (data, model, trainer, callbacks) into a single file to ensure your runs are version-controlled and reproducible.
-
-## 🚀 Available Experiments
-
-### 1. `lstm_suicide_risk.yaml`
-Standard LSTM training run targeting suicide risk aggregation with block sampling.
-
-### 2. `flaml_suicide.yaml`
-AutoML baseline specifically configured for suicide risk classification.
+Experiment configurations represent the highest level of control in the project configuration system. Instead of typing lengthy, error-prone shell overrides, experiment configurations allow you to group multiple component swaps and hyperparameter values into a single version-controlled YAML file.
 
 ---
 
-## ⚡ How to use in Experiments
+## 🚀 Available Experiment Presets
 
-To execute an experiment, use the `experiment` override:
-```bash
-python src/train.py experiment=lstm_suicide_risk
-```
+### 1. `lstm_health.yaml`
+Standard deep learning training run configuring the LSTM model, classification metrics, GPU accelerator, and health time-series loaders.
+*   **Command:**
+    ```bash
+    uv run src/train.py experiment=lstm_health
+    ```
+
+### 2. `flaml_health.yaml`
+AutoML baseline specifically configured for running tabular model optimization over flattened health sequences.
+*   **Command:**
+    ```bash
+    uv run src/train.py experiment=flaml_health
+    ```
 
 ---
 
-## 🛠️ Creating New Experiments
+## 🛠️ Creating Your Own Custom Experiment
 
-When creating a new experiment, follow these three rules:
+To create a new research run configuration, add a file (e.g. `my_research_run.yaml`) to `configs/experiment/` and follow these rules:
 
-### 1. Use the `@package _global_` header
-This tells Hydra to merge the parameters in this file with the global configuration tree rather than nesting them under a sub-key.
+### 1. Set the Package Header
+Always place `# @package _global_` at the very top. This tells Hydra to merge your custom properties into the global config root rather than nesting them under a sub-key.
 
-### 2. Override existing defaults
-Use the `defaults` section to swap out whole components (like the model or data config).
+### 2. Set Up Defaults & Overrides
+Specify which core config components you want to swap out (using the `/` prefix).
 
-### 3. Add specific hyperparameter overrides
-Place these after the `defaults` block.
+### 3. Define Hyperparameter Specifics
+Add your custom parameter parameters after the defaults block.
 
-### Example: `new_research_run.yaml`
+### Example Template: `my_research_run.yaml`
 ```yaml
 # @package _global_
 
+# 1. Establish the base configs to override
 defaults:
-  - override /model: health.yaml
-  - override /data: health.yaml
+  - override /data: health
+  - override /model: health
   - override /data/sampler: rolling_hour
+  - override /callbacks: [classification_metrics, confusion_matrix]
 
-# Overrides
-tags: ["exp_01", "rolling_window"]
-seed: 42
+# 2. Tag and document the run for logging
+tags: ["exp_rolling_48h", "adam_optimizer"]
+seed: 12345
 
+# 3. Model parameters overrides
 model:
   optimizer:
-    lr: 0.001
+    lr: 0.002
   net:
     hidden_size: 128
+    dropout: 0.25
 
+# 4. Data sampling overrides
 data:
   batch_size: 32
   sampler:
-    lookback_hours: 48
+    lookback_hours: 48.0
+    resample_freq: "1h"
 
+# 5. Trainer duration limits
 trainer:
-  max_epochs: 20
+  max_epochs: 30
 ```
 
-## 📍 Why use experiments instead of command line overrides?
-- **Reproducibility:** You can commit an experiment file to Git and track exactly what parameters were used.
-- **Convenience:** Instead of typing 10 different overrides in your terminal, you just type `experiment=name`.
-- **Clarity:** It's easier to read a YAML file than a single 500-character shell command.
+---
+
+## ❓ Why Use Experiments vs. Command Line Overrides?
+
+1.  **Reproducibility**: You can commit YAML files to Git to capture the exact parameter landscape of your publication or training run.
+2.  **Cleanliness**: Sharing a config file name is much easier than sharing a 600-character terminal command.
+3.  **WandB Grouping**: You can map `tags: ${tags}` inside the experiment so that your logs automatically group under the experiment label.

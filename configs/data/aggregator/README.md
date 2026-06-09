@@ -1,45 +1,49 @@
-# Data Aggregator Configurations
+# 📊 Data Aggregator Configurations
 
-This directory contains configurations for **Label Aggregation** strategies. Since surveys often contain multiple questions, an aggregator defines the logic used to collapse those answers into a single target label (usually 0 or 1) for the model to predict.
+In longitudinal health studies, surveys often contain multiple questions. An **Aggregator** defines the mathematical or clinical rules used to collapse multiple survey responses into a single target label (usually binary $0$ or $1$) for our classification models to predict.
 
-## Rule-Based Aggregation
+---
 
-Most configs in this directory use the `RuleBasedAggregator`. This allows you to define complex clinical logic using simple rules.
+## ⚙️ Rule-Based Aggregations
 
-### How Rules Work:
-A rule targets specific `ids` (Question IDs) and applies an `op` (Operator):
-- `ge`: "Greater than or equal to" (e.g., *at least one* answer in the group is $\ge X$)
-- `any_eq`: "Any equal to" (e.g., *at least one* answer is exactly $X$)
-- `sum`: Calculates the total score of the group and compares to a threshold.
-- `mean`: Calculates the average score and compares to a threshold.
+We use the `RuleBasedAggregator` class to translate clinical criteria into logical targets.
 
-### Available Aggregators:
-- `suicide_risk.yaml`: Targets questions related to self-harm and ideation.
-- `social_stress.yaml`: Targets interpersonal conflict questions.
-- `emotion_regulation.yaml`: Targets questions about coping mechanisms.
-- *(See the full list of .yaml files for other domains)*
+### Available Operators
+*   `ge`: Greater than or equal to (e.g., at least one answer in the set is $\ge X$).
+*   `any_eq`: Any equal to (e.g., at least one answer is exactly $X$).
+*   `sum`: Sums up scores of all questions in the set and compares to a threshold.
+*   `mean`: Computes the mean score of questions and compares to a threshold.
 
-## Common Modeling Scenarios
+### Available Presets
+Swapping targets is done by setting `data/aggregator=preset_name`:
 
-### Scenario A: "Modeling High-Severity Suicide Risk"
-By default, the `suicide_risk` aggregator uses a low threshold. You can make it stricter to target only high-severity cases.
+*   `suicide_risk.yaml`: Targets questions related to self-harm and active ideation.
+*   `social_stress.yaml`: Targets questions regarding interpersonal friction and conflict.
+*   `emotion_regulation.yaml`: Targets coping strategy questions.
+*   `minority_stress.yaml`: Targets questions measuring identity-based discrimination.
+*   `positive_emotion.yaml` / `negative_emotion.yaml`: Group mood descriptors.
+
+---
+
+## ⚡ CLI Override Scenarios
+
+### Scenario A: High-Severity Target Filtering
+By default, the `suicide_risk` aggregator uses lower thresholds to capture mild risk cases. To retarget the model to predict high-severity ideation:
 ```bash
-# Change rule 0 (Question IDs 2, 3, 7) to require a value of at least 4
-python src/train.py data/aggregator=suicide_risk "data.aggregator.rules[0].val=4"
+# Set threshold for the first rule group (Questions 2, 3, 7) to at least 4
+uv run src/train.py data/aggregator=suicide_risk "data.aggregator.rules[0].val=4"
 ```
 
-### Scenario B: "Predicting Sustained Minority Stress"
-If you want to define risk as "experiencing multiple symptoms at once," change the `combination_logic` to `all`.
+### Scenario B: Restrictive And/Or Logic
+To require **all** rules in a preset config to evaluate to True before assignment of label $1$:
 ```bash
-# Requires ALL rules in the minority_stress config to be True
-python src/train.py data/aggregator=minority_stress data.aggregator.combination_logic=all
+uv run src/train.py data/aggregator=minority_stress data.aggregator.combination_logic=all
 ```
 
-### Scenario C: "Binarizing based on Mean Score"
-Instead of clinical rules, you might want a simple binary split based on the average of all questions.
+### Scenario C: Custom Numeric Threshold splits
+To bypass clinical rules and construct a target mapping using a simple average of questions 1, 2, and 3:
 ```bash
-# Use the MeanAggregator with a 0.5 threshold on questions 1, 2, and 3
-python src/train.py data/aggregator=suicide_risk \
+uv run src/train.py data/aggregator=suicide_risk \
   data.aggregator._target_=src.data.components.label_aggregators.MeanAggregator \
   data.aggregator.threshold=0.5 \
   "data.aggregator.question_ids=[1,2,3]"
@@ -47,36 +51,22 @@ python src/train.py data/aggregator=suicide_risk \
 
 ---
 
-## How to use in Experiments
+## 🛠️ How to Create a New Aggregator
 
-### Basic Swap
-To change what the model is trying to predict, swap the aggregator:
-```bash
-# Predict suicide risk
-python src/train.py data/aggregator=suicide_risk
+1. Create a YAML config inside this directory (e.g., `configs/data/aggregator/anxiety.yaml`).
+2. Point `_target_` to the `RuleBasedAggregator`.
+3. Add your rules list:
 
-# Predict social stress instead
-python src/train.py data/aggregator=social_stress
-```
-
-### Overriding Logic on the Fly
-You can change the logic of an aggregator without creating a new file. For example, to make the `suicide_risk` criteria stricter:
-```bash
-# Change the 'val' (threshold) of the first rule (index 0) to 3
-python src/train.py data/aggregator=suicide_risk "data.aggregator.rules[0].val=3"
-```
-
-## Creating a New Aggregator
-1. Create a new `.yaml` file in this directory.
-2. Set `_target_` to `src.data.components.label_aggregators.RuleBasedAggregator`.
-3. Define your `rules` list and `combination_logic` ("any" for OR, "all" for AND).
-
-**Example `new_phenotype.yaml`:**
 ```yaml
 _target_: src.data.components.label_aggregators.RuleBasedAggregator
-combination_logic: "any"
+combination_logic: "any" # "any" (OR) or "all" (AND)
 rules:
-  - ids: [10, 11]  # Questions 10 and 11
-    op: "ge"
-    val: 2         # If either is >= 2, label becomes 1
+  - ids: [15, 16] # Question IDs to evaluate
+    op: "ge"       # Operator
+    val: 3         # Target threshold
+```
+
+Run training targeting this aggregator:
+```bash
+uv run src/train.py data/aggregator=anxiety
 ```

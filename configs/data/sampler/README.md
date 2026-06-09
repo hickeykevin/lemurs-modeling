@@ -1,133 +1,95 @@
-# Data Sampler Configurations
+# 🕰️ Data Sampler Configurations
 
-This directory contains configuration files for various **Time Sampling** strategies. A sampler determines how raw health metrics (like steps or calories) are sliced and aggregated relative to a survey response timestamp.
+A **Sampler** defines the time-window slicing and aggregation logic used to extract passive sensor data (such as step counts or calorie output) relative to the exact timestamp of an EMA survey response.
 
-## Available Samplers
+---
 
-### 1. `lag.yaml` (The "Lag-1" Baseline)
-This is a special non-metric sampler. It ignores sensor data and instead looks up the user's **previous survey answer**.
-- **Use case:** Establishing a baseline for how much "yesterday's mood" predicts "today's mood."
-- **Command:** `python src/train.py data/sampler=lag model=lag`
+## 🎛️ Available Sampler Presets
+
+You can select a sampler by setting `data/sampler=preset_name` in the CLI:
+
+### 1. `rolling_hour.yaml`
+Extracts a sliding window immediately preceding the survey response and groups the raw sensor records into regular hourly bins.
+*   **Best for**: RNNs/LSTMs that expect sequential features representing immediate hourly patterns.
+*   **Command**: `uv run src/train.py data/sampler=rolling_hour`
 
 ### 2. `block.yaml` (Behavioral Time Blocks)
-Divides the day into 4 behavioral segments: Sleep (00-08), Morning (08-12), Afternoon (12-17), and Evening (17-24).
-- **Use case:** Capturing behavior in intuitive segments rather than hourly grids.
-- **Example Usage:** `python src/train.py data/sampler=block`
+Slices the data into pre-defined behavioral segments for each day: **Sleep** (00:00-08:00), **Morning** (08:00-12:00), **Afternoon** (12:00-17:00), and **Evening** (17:00-24:00).
+*   **Best for**: Traditional ML models or LSTMs focusing on coarse day-part rhythms.
+*   **Command**: `uv run src/train.py data/sampler=block`
 
-### 3. `rolling_hour.yaml`
-Uses a fixed lookback window (e.g., last 24 hours) and resamples data into hourly bins.
-- **Example Usage:** `python src/train.py data/sampler=rolling_hour`
+### 3. `daily.yaml`
+Aggregates sensor counts into a single vector representing the entire preceding calendar day (midnight-to-midnight).
+*   **Command**: `uv run src/train.py data/sampler=daily`
 
 ### 4. `offset.yaml`
-Samples data based on fixed offsets from the **midnight** of the survey day.
-- **Example Usage:** `python src/train.py data/sampler=offset`
+Defines custom lookback boundaries relative to midnight of the survey day.
+*   **Command**: `uv run src/train.py data/sampler=offset`
 
-### 5. `daily.yaml`
-Aggregates data into a single vector representing the entire previous calendar day.
-- **Example Usage:** `python src/train.py data/sampler=daily`
+### 5. `lag.yaml` (Lag-1 Benchmark)
+A helper sampler that ignores physical sensor steps entirely and instead fetches the user's historical answers from their *previous* survey response.
+*   **Command**: `uv run src/train.py data/sampler=lag model=lag`
 
 ---
 
-## Sampler Parameters & Settings Reference
+## 📖 Parameter Settings Reference
 
-Each sampler has specific hyperparameters you can configure in their `.yaml` files or override via CLI.
-
-### 🕛 Offset & Daily Samplers (`OffsetSampler`)
-Both `offset.yaml` and `daily.yaml` instantiate the `OffsetSampler`. The window is calculated relative to **midnight (00:00 AM) of the day the survey was filled out**.
-
-*   `start_offset_hours` (float): The start time of your window, relative to midnight.
-*   `end_offset_hours` (float): The end time of your window, relative to midnight.
-*   `resample_freq` (string): Time interval for grouping raw steps (e.g. `"1h"`, `"30m"`).
+### `OffsetSampler` (`offset.yaml`, `daily.yaml`)
+Calculates a static window relative to **midnight of the survey completion day**.
+*   `start_offset_hours` (float): Start time relative to midnight (e.g. `-24.0` for midnight yesterday).
+*   `end_offset_hours` (float): End time relative to midnight (e.g. `0.0` for midnight today).
+*   `resample_freq` (string): Time duration for grouping steps (e.g. `"1h"`, `"30m"`).
 
 > [!NOTE]
-> **Understanding the Offsets for `daily.yaml` vs custom `offset.yaml`:**
-> *   **`daily.yaml`** sets `start_offset_hours: -24.0` and `end_offset_hours: 0.0`. This defines a lookback window spanning from midnight yesterday (`-24.0` hours before midnight today) to midnight today (`0.0`). It captures the entire preceding calendar day in hourly bins.
-> *   If you want to sample only the **morning hours of the survey day** (e.g., 00:00 to 09:00 AM today), you would set:
->     `start_offset_hours: 0.0` and `end_offset_hours: 9.0`.
-> *   If you want to look at the **afternoon and evening of the previous day** (e.g., 12:00 PM yesterday to 12:00 AM today):
->     `start_offset_hours: -12.0` and `end_offset_hours: 0.0`.
+> *   **`daily.yaml`** defaults: `start_offset_hours: -24.0`, `end_offset_hours: 0.0`. Slices the preceding calendar day.
+> *   To capture the morning of the survey day (00:00 to 09:00 AM): Set `start_offset_hours: 0.0` and `end_offset_hours: 9.0`.
 
 ---
 
-### ⏱️ Rolling Sampler (`RollingSampler`)
-Calculates a dynamic, moving window backwards from the **exact timestamp of the survey response**.
-
-*   `lookback_hours` (float): The total number of hours immediately preceding the survey response to collect (e.g. `24.0` for one day).
-*   `resample_freq` (string): Time interval for resampling bins (e.g. `"1h"`).
-
----
-
-### 📊 Block Sampler (`BlockSampler`)
-Divides the time-series into fixed behavioral blocks (Sleep, Morning, Afternoon, Evening) for each lookback day.
-
-*   `lookback_days` (int): The number of full calendar days preceding today's midnight to sample. A value of `1` yields 4 blocks (the 4 periods of yesterday). A value of `7` yields 28 blocks (4 periods per day over the last week).
-*   **Behavioral Blocks defined:**
-    1.  **Sleep:** 00:00 – 08:00 (weight is damped by `0.05` to prevent over-representing accidental steps)
-    2.  **Morning:** 08:00 – 12:00
-    3.  **Afternoon:** 12:00 – 17:00
-    4.  **Evening:** 17:00 – 24:00
+### `RollingSampler` (`rolling_hour.yaml`)
+Slices a dynamic lookback window backward from the **exact survey completion timestamp**.
+*   `lookback_hours` (float): Number of hours to look back (e.g., `24.0`).
+*   `resample_freq` (string): Slicing interval (e.g., `"1h"`).
 
 ---
 
-### 🔗 Lag Sampler (`LagSampler`)
-*   Does not take step or sensor counts.
-*   Uses the historical target answer (mood, stress, etc.) from the **user's last completed survey** as features. Used for establishing baseline benchmarks.
+### `BlockSampler` (`block.yaml`)
+Groups steps into behavioral periods.
+*   `lookback_days` (int): Number of historical days to pull. (e.g., `7` returns 28 feature blocks: 4 periods per day for a week).
 
 ---
 
-## Common Modeling Scenarios
+## ⚡ CLI Override Scenarios
 
-Here are some typical research questions and the commands to run them:
-
-### Scenario A: "Does recent activity (last 12h) predict mood?"
-Use the `rolling_hour` sampler with a shorter lookback window.
+### Scenario A: Slicing a Shorter/Longer Sequence
+To examine step behavior over only the 12 hours preceding a survey:
 ```bash
-python src/train.py data/sampler=rolling_hour data.sampler.lookback_hours=12
+uv run src/train.py data/sampler=rolling_hour data.sampler.lookback_hours=12
 ```
 
-### Scenario B: "How do behavioral patterns over the last week affect risk?"
-Use the `block` sampler with a 7-day history to capture weekly cycles.
+### Scenario B: Sleep Window Slicing
+To analyze physical activity specifically during normal sleep hours (midnight to 8:00 AM) relative to survey day:
 ```bash
-python src/train.py data/sampler=block data.sampler.lookback_days=7
+uv run src/train.py data/sampler=offset data.sampler.start_offset_hours=0 data.sampler.end_offset_hours=8
 ```
 
-### Scenario C: "Does sleep quality (midnight to 8 AM) correlate with stress?"
-Use the `offset` sampler to target specific hours of the day.
+### Scenario C: Weekly Cycles Slicing
+To test if weekly behavioral patterns affect mood predictions, pass a block sampler looking back a full 7 days:
 ```bash
-# Samples 00:00 to 08:00 (offsets are relative to midnight of survey day)
-python src/train.py data/sampler=offset data.sampler.start_offset_hours=0 data.sampler.end_offset_hours=8
-```
-
-### Scenario D: "Establishing the 'Naive' Benchmark"
-Before trusting your LSTM, check if simply guessing the last known state is just as good.
-```bash
-python src/train.py data/sampler=lag model=lag
+uv run src/train.py data/sampler=block data.sampler.lookback_days=7
 ```
 
 ---
 
-## How to use in Experiments
+## 🛠️ How to Create a New Sampler
 
-
-Hydra allows you to swap samplers from the command line without changing any code.
-
-### Basic Swap
-To change the sampler, use the `data/sampler` override:
-```bash
-python src/train.py data/sampler=rolling_hour
-```
-
-### Overriding Parameters
-You can also override specific parameters inside a sampler file using the dot notation:
-```bash
-# Change the lookback period for the block sampler to 3 days
-python src/train.py data/sampler=block data.sampler.lookback_days=3
-
-# Change the lookback hours for the rolling sampler
-python src/train.py data/sampler=rolling_hour data.sampler.lookback_hours=48
-```
-
-## Creating New Samplers
-1. Create a new class in `src/data/components/samplers.py` inheriting from `TimeSampler`.
-2. Create a corresponding `.yaml` file in this directory.
-3. Set the `_target_` to point to your new Python class.
+1. Add your custom sampler class to [src/data/components/samplers.py](file:///home/khickey/lemurs-modeling/src/data/components/samplers.py), inheriting from `TimeSampler`.
+2. Add a YAML configuration file to this folder (e.g. `configs/data/sampler/my_sampler.yaml`):
+   ```yaml
+   _target_: src.data.components.samplers.MyCustomSamplerClass
+   param_one: "value"
+   ```
+3. Load the sampler:
+   ```bash
+   uv run src/train.py data/sampler=my_sampler
+   ```
