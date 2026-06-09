@@ -283,19 +283,3 @@ sbatch scripts/run_sweep.sbatch
 ```
 
 ---
-
-## 💡 Best Practices
-
-*   **Environment Variables**: Save API keys, credentials, or custom database paths in a local `.env` file (copied from `.env.example`). Hydra resolves them dynamically via `${oc.env:VAR_NAME}` configurations.
-*   **Automatic Code Formatting**: We enforce formatting standards. Run formatters before committing changes:
-   ```bash
-   uv run pre-commit run -a
-   ```
-*   **Tests**: Execute pytest unit tests to check if configuration changes break pipelines:
-   ```bash
-   uv run pytest
-   ```
-*   **Version Control for Large Files**: Never commit raw SQL dumps or large model checkpoints to Git. Set up `dvc` to manage large files:
-   ```bash
-   uv run dvc add data/raw_data.db
-   ```
