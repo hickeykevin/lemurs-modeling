@@ -29,5 +29,10 @@ class StepPreprocessor(ModalityPreprocessor):
         if "app_source" in df.columns and "app_user_id" in df.columns:
             mask = (df["app_user_id"] == 26) & (df["app_source"] == "Health")
             df.loc[mask, "app_source"] = "Apple Watch"
+
+            # app_user_id=22 has some android records, but is iphone user, remove android records
+            mask = (df["app_user_id"] == 22) & (df["app_source"].str.contains("android", case=False, na=False))
+            df = df[~mask]
+
             
         return df
