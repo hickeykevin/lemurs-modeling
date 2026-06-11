@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import torch
 from lightning import Callback, LightningModule, Trainer
 from torchmetrics import MetricCollection, MaxMetric
-from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix
+from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix, BinaryConfusionMatrix
 from rich.table import Table
 from rich.console import Console
 from rich import box
@@ -82,7 +82,11 @@ class ConfusionMatrixCallback(Callback):
             num_classes = int(torch.max(torch.max(all_preds), torch.max(all_targets)).item()) + 1
 
         # Compute confusion matrix
-        cm_metric = MulticlassConfusionMatrix(num_classes=num_classes)
+        if num_classes <= 2:
+            cm_metric = BinaryConfusionMatrix()
+            num_classes = 2
+        else:
+            cm_metric = MulticlassConfusionMatrix(num_classes=num_classes)
         cm = cm_metric(all_preds, all_targets)
         cm_np = cm.numpy().astype(int)
 
@@ -156,11 +160,25 @@ class ClassificationMetricsCallback(Callback):
         Returns:
             MetricCollection: A collection of initialized torchmetrics.
         """
-        metrics = MetricCollection({
-            "f1": F1Score(num_classes=num_classes, **self.f1_params),
-            "auroc": AUROC(num_classes=num_classes, **self.auroc_params),
-            # Add more metrics here in the future
-        })
+        if num_classes <= 2:
+            f1_p = self.f1_params.copy()
+            f1_p["task"] = "binary"
+            f1_p.pop("average", None)
+            
+            auroc_p = self.auroc_params.copy()
+            auroc_p["task"] = "binary"
+            auroc_p.pop("average", None)
+            
+            metrics = MetricCollection({
+                "f1": F1Score(**f1_p),
+                "auroc": AUROC(**auroc_p),
+            })
+        else:
+            metrics = MetricCollection({
+                "f1": F1Score(num_classes=num_classes, **self.f1_params),
+                "auroc": AUROC(num_classes=num_classes, **self.auroc_params),
+                # Add more metrics here in the future
+            })
         return metrics.to(device)
 
 
