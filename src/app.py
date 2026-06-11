@@ -87,12 +87,10 @@ def render_parameter_editor(param_path: str, original_val: Any, widget_key_prefi
     """Recursively renders form fields for configuration parameters (handling nested dicts/lists)."""
     if isinstance(original_val, dict):
         label = param_path.split('.')[-1]
-        st.markdown(f"**{label}**")
-        for k, v in original_val.items():
-            # Indent nested dicts using container and CSS border/padding
-            st.markdown('<div style="padding-left: 15px; border-left: 2px solid #555; margin-bottom: 10px;">', unsafe_allow_html=True)
-            render_parameter_editor(f"{param_path}.{k}", v, f"{widget_key_prefix}_{k}", config_overrides)
-            st.markdown('</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown(f"**{label}**")
+            for k, v in original_val.items():
+                render_parameter_editor(f"{param_path}.{k}", v, f"{widget_key_prefix}_{k}", config_overrides)
     else:
         label = param_path.split('.')[-1]
         if isinstance(original_val, bool):
@@ -367,6 +365,28 @@ with col2:
             display_cmd = cmd
             
     st.code(" \\\n  ".join(display_cmd), language="bash")
+    
+    with st.expander("ℹ️ How to Run on a Slurm Compute Node (via sinteractive)"):
+        st.markdown("""
+        If you want to run the computation or the GUI on a Slurm compute node rather than the login node:
+        
+        1. **Start interactive session** on the cluster:
+           ```bash
+           sinteractive
+           ```
+           *Enter your resource requirements when prompted.*
+        2. **Identify your assigned compute node** from the command prompt (e.g. `username@node042:...` indicates `node042`).
+        3. **Launch the Streamlit app** on the compute node:
+           ```bash
+           uv run streamlit run src/app.py
+           ```
+        4. **Establish the SSH Tunnel from your local machine** (open a new local terminal):
+           ```bash
+           ssh -L 8501:node042:8501 username@login.cluster.edu
+           ```
+           *(Replace `node042` with your actual compute node name and `login.cluster.edu` with your normal login node domain).*
+        5. **Access the GUI** in your local browser at `http://localhost:8501`.
+        """)
     
     st.subheader("Terminal Output")
     output_container = st.container(height=400)
