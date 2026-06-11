@@ -1,6 +1,7 @@
 import pandas as pd
 from abc import ABC, abstractmethod
-from typing import Optional
+from collections.abc import Mapping
+from typing import Optional, Union
 
 class LabelAggregator(ABC):
     """Base class for survey answer aggregation strategies."""
@@ -59,11 +60,11 @@ class RuleBasedAggregator(LabelAggregator):
     'all' (AND) logic to yield binary risk labels.
     """
     
-    def __init__(self, rules: list, combination_logic: str = "any") -> None:
+    def __init__(self, rules: Union[list, dict, Mapping], combination_logic: str = "any") -> None:
         """Initializes the RuleBasedAggregator.
 
         Args:
-            rules (list): A list of dictionaries defining evaluation clauses. 
+            rules (list | dict | Mapping): A list or dictionary of dictionaries defining evaluation clauses. 
                 Each rule should contain:
                 - 'ids' (list[int]): Question IDs to target.
                 - 'op' (str): Operator to apply. Options include:
@@ -73,7 +74,10 @@ class RuleBasedAggregator(LabelAggregator):
                 'any' evaluates to True if at least one rule passes.
                 'all' requires every rule to pass. Defaults to "any".
         """
-        self.rules = rules
+        if isinstance(rules, (dict, Mapping)):
+            self.rules = list(rules.values())
+        else:
+            self.rules = rules
         self.combination_logic = combination_logic
 
     def get_question_ids(self) -> list:

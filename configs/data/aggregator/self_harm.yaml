@@ -1,9 +1,11 @@
 _target_: src.data.components.label_aggregators.RuleBasedAggregator
 combination_logic: "any"
 rules:
-  - ids: [9]
+  rule_1:
+    ids: [9]
     op: "ge"
     val: 2
-  - ids: [11, 15, 16, 17, 18]
+  rule_2:
+    ids: [11, 15, 16, 17, 18]
     op: "any_eq"
     val: 1

@@ -116,6 +116,32 @@ def test_rule_based_aggregator():
     assert result_conn.loc[result_conn['survey_response_id'] == 2, 'answer'].values[0] == 0
 
 
+def test_rule_based_aggregator_dict_rules():
+    """Tests that RuleBasedAggregator handles dictionary-based rules correctly."""
+    from src.data.components.label_aggregators import RuleBasedAggregator
+    
+    df = pd.DataFrame({
+        'survey_response_id': [1, 1, 1, 2, 2, 2, 3, 3],
+        'question_id':        [2, 5, 7, 2, 5, 7, 2, 5],
+        'answer':             [1, 0, 1, 2, 0, 1, 1, 1] 
+    })
+    
+    rules = {
+        'mild_risk': {'ids': [2, 3, 7], 'op': 'ge', 'val': 2},
+        'severe_risk': {'ids': [5, 8, 12, 13], 'op': 'any_eq', 'val': 1}
+    }
+    agg = RuleBasedAggregator(rules=rules, combination_logic="any")
+    result = agg(df)
+    
+    assert result.loc[result['survey_response_id'] == 1, 'answer'].values[0] == 0
+    assert result.loc[result['survey_response_id'] == 2, 'answer'].values[0] == 1
+    assert result.loc[result['survey_response_id'] == 3, 'answer'].values[0] == 1
+
+    # Test get_question_ids gets the union of ids
+    assert set(agg.get_question_ids()) == {2, 3, 7, 5, 8, 12, 13}
+
+
+
 
 
 def test_datamodule_normalization(dummy_data):

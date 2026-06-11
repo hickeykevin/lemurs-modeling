@@ -30,8 +30,8 @@ Swapping targets is done by setting `data/aggregator=preset_name`:
 ### Scenario A: High-Severity Target Filtering
 By default, the `suicide_risk` aggregator uses lower thresholds to capture mild risk cases. To retarget the model to predict high-severity ideation:
 ```bash
-# Set threshold for the first rule group (Questions 2, 3, 7) to at least 4
-uv run src/train.py data/aggregator=suicide_risk "data.aggregator.rules[0].val=4"
+# Set threshold for the rule group 'rule_1' (Questions 2, 3, 7) to at least 4
+uv run src/train.py data/aggregator=suicide_risk data.aggregator.rules.rule_1.val=4
 ```
 
 ### Scenario B: Restrictive And/Or Logic
@@ -55,13 +55,14 @@ uv run src/train.py data/aggregator=suicide_risk \
 
 1. Create a YAML config inside this directory (e.g., `configs/data/aggregator/anxiety.yaml`).
 2. Point `_target_` to the `RuleBasedAggregator`.
-3. Add your rules list:
+3. Add your rules dictionary:
 
 ```yaml
 _target_: src.data.components.label_aggregators.RuleBasedAggregator
 combination_logic: "any" # "any" (OR) or "all" (AND)
 rules:
-  - ids: [15, 16] # Question IDs to evaluate
+  rule_1:
+    ids: [15, 16] # Question IDs to evaluate
     op: "ge"       # Operator
     val: 3         # Target threshold
 ```
