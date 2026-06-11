@@ -71,6 +71,9 @@ class HealthLitModule(LightningModule):
         # Track the best validation accuracy across epochs
         self.val_acc_best = MaxMetric()
 
+    def on_fit_start(self) -> None:
+        print("===HEALTH LITMODULE: on_fit_start===")
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Perform a forward pass through the network.
 
