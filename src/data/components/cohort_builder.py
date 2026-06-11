@@ -89,7 +89,7 @@ class CohortBuilder:
             # 2. Global Filters: Remove test and discontinued users
             # Test users: [1, 2, 3, 10, 43]
             # Discontinued/Anomalous users: [21, 22]
-            drop_users = [1, 2, 3, 10, 21, 22, 43]
+            drop_users = [1, 2, 3, 10, 21, 22, 43, 44]
             if 'app_user_id' in df.columns:
                 df = df[~df['app_user_id'].isin(drop_users)]
                 
