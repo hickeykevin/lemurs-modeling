@@ -233,7 +233,40 @@ uv run streamlit run notebooks/sampler_dashboard.py
 ```
 This lets you select users, preview the active sampling lookback window, and check the generated feature tensor structure in real-time.
 
-### 3. Writing Experiment Config Files
+### 3. Hydra Configuration GUI
+We provide an interactive Streamlit GUI to compose configurations and launch runs visually:
+```bash
+uv run streamlit run src/app.py
+```
+
+#### Running on a Remote Slurm Cluster (via `sinteractive`)
+If you are working on a remote cluster and want to run the GUI from a compute node using `sinteractive` (to avoid executing computation on the login node):
+
+1. **Start your interactive session**:
+   ```bash
+   sinteractive
+   ```
+   *Enter your resources when prompted (e.g. 2 CPUs, 8192 MB memory, short partition).*
+
+2. **Identify your assigned compute node**:
+   Look at your command prompt. It will show the compute node hostname, e.g. `username@node042:~/lemurs-modeling$`. In this case, your compute node is `node042`.
+
+3. **Launch the Streamlit app**:
+   ```bash
+   uv run streamlit run src/app.py
+   ```
+
+4. **Establish the SSH Tunnel from your local machine**:
+   Open a **new terminal window on your local computer** (not connected to the cluster) and run:
+   ```bash
+   ssh -L 8501:node042:8501 username@login.cluster.edu
+   ```
+   *(Replace `node042` with your actual compute node name, and `login.cluster.edu` with the login node hostname you normally SSH to).*
+
+5. **Access the GUI**:
+   Open your browser and navigate to `http://localhost:8501`.
+
+### 4. Writing Experiment Config Files
 Save complex CLI override combinations as an **Experiment Config** inside `configs/experiment/`.
 
 Here is an example structure of `configs/experiment/lstm_health.yaml`:
