@@ -3,12 +3,10 @@ defaults:
   - aggregator: suicide_risk
   - sampler: block
   - scaler: standard
+  - preprocessors: [step]
 
 _target_: src.data.health_datamodule.HealthDataModule
 modalities: ["step", "calorie"]
-preprocessors:
-  step:
-    _target_: src.data.components.preprocessing.StepPreprocessor
 
 batch_size: 16
 train_val_test_split: [0.7, 0.15, 0.15]
