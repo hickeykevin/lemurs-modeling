@@ -222,7 +222,7 @@ Available clinical targets you can override (`data/aggregator=preset_name`):
 To customize threshold rules on the fly:
 ```bash
 # Make suicide risk criteria stricter (require a score of at least 3 on the first rule group)
-uv run src/train.py data/aggregator=suicide_risk "data.aggregator.rules[0].val=3"
+uv run src/train.py data/aggregator=suicide_risk data.aggregator.rules.rule_1.val=3
 ```
 
 ### 2. Interactive Exploration Dashboards
@@ -303,7 +303,22 @@ uv run src/train.py -m hparams_search=health_optuna experiment=lstm_health
 ```
 Optuna dynamically executes trials based on the search space defined in `configs/hparams_search/health_optuna.yaml` and logs the best trial configuration to your run logs.
 
-### 5. Distributed Training & Cluster Submissions
+### 5. Cross-Validation (Group K-Fold)
+
+For robust evaluation on longitudinal health data, you can run Group K-Fold cross validation grouped by `app_user_id` (ensuring disjoint user populations across train, validation, and test splits).
+
+Run cross-validation from the command line:
+```bash
+# Run 5-fold cross-validation
+uv run python src/cv_train.py data.num_folds=5
+
+# Run Leave-One-User-Out cross-validation (evaluates on all users, one-by-one)
+uv run python src/cv_train.py data.num_folds=-1
+```
+
+All folds are logged under a single run prefix (e.g., logging to WandB or local CSV), with fold-specific metrics formatted as `val/loss_fold_0` and aggregated final statistics logged at the end as `val/loss_mean` and `val/loss_std`.
+
+### 6. Distributed Training & Cluster Submissions
 For large-scale training across multiple GPUs or cluster nodes:
 ```bash
 # Train on 4 GPUs with Distributed Data Parallel (DDP)
@@ -315,7 +330,7 @@ To submit runs to a **SLURM cluster**, use our wrapper configs or batch submit s
 sbatch scripts/run_sweep.sbatch
 ```
 
-### 6. Debugging & Troubleshooting
+### 7. Debugging & Troubleshooting
 
 To troubleshoot bugs in your models, data pipelines, or training loops, you can combine interactive debugging with quick trial-run configurations:
 
