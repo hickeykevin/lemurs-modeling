@@ -11,7 +11,7 @@ st.set_page_config(page_title="Lemurs Modeling GUI", layout="wide")
 st.title("Lemurs Modeling - Hydra GUI")
 
 CONFIG_DIR = Path("configs")
-LIST_GROUPS = {"preprocessors", "callbacks"}
+LIST_GROUPS = {"preprocessors", "callbacks", "logger"}
 
 def load_defaults_from_config(config_path: Path) -> dict:
     """Reads the defaults block from a Hydra config yaml and returns a dict mapping group to default value."""
@@ -219,8 +219,13 @@ col1, col2 = st.columns([1, 2])
 with col1:
     st.header("Configuration")
     
-    mode = st.radio("Execution Mode", ["Train", "Evaluate"])
-    script = "src/train.py" if mode == "Train" else "src/eval.py"
+    mode = st.radio("Execution Mode", ["Train", "Cross Validate", "Evaluate"])
+    if mode == "Train":
+        script = "src/train.py"
+    elif mode == "Cross Validate":
+        script = "src/cv_train.py"
+    else:
+        script = "src/eval.py"
     
     st.subheader("Execution Environment")
     env = st.radio("Environment", ["Local", "Slurm Cluster"])
@@ -241,8 +246,13 @@ with col1:
     selected_configs = {}
     config_overrides = {}
     
-    # Load defaults from configs/train.yaml or configs/eval.yaml
-    config_file = "configs/train.yaml" if mode == "Train" else "configs/eval.yaml"
+    # Load defaults from configs/train.yaml, configs/cv_train.yaml or configs/eval.yaml
+    if mode == "Train":
+        config_file = "configs/train.yaml"
+    elif mode == "Cross Validate":
+        config_file = "configs/cv_train.yaml"
+    else:
+        config_file = "configs/eval.yaml"
     group_defaults = load_defaults_from_config(Path(config_file))
     
     # Custom group ordering: data, model, trainer, callbacks, then the rest
@@ -271,7 +281,8 @@ with col1:
                 else:
                     default_options = []
                     
-                selected_val = st.multiselect(f"{group.capitalize()}", options, default=default_options)
+                st.markdown(f"#### **{group.capitalize()}**")
+                selected_val = st.multiselect(f"{group.capitalize()}", options, default=default_options, label_visibility="collapsed")
                 selected_configs[group] = selected_val
                 
                 # Subgroups and parameters tree
@@ -292,7 +303,8 @@ with col1:
                 elif default_val is None and "None" in options:
                     default_index = options.index("None")
                     
-                selected_val = st.selectbox(f"{group.capitalize()}", options, index=default_index)
+                st.markdown(f"#### **{group.capitalize()}**")
+                selected_val = st.selectbox(f"{group.capitalize()}", options, index=default_index, label_visibility="collapsed")
                 selected_configs[group] = selected_val
                 
                 # Subgroups and parameters tree
@@ -301,7 +313,7 @@ with col1:
                         render_config_group_ui(group, selected_val, config_overrides, selected_configs)
     
     st.subheader("Other Options")
-    seed = st.number_input("Seed (leave blank for null)", value=None, placeholder="e.g. 42")
+    seed = st.number_input("Seed (leave blank for null)", value=None, step=1, placeholder="e.g. 42")
     ckpt_path = st.text_input("Checkpoint Path", value="", placeholder="path/to/checkpoint.ckpt")
     
     custom_overrides = st.text_area("Custom Overrides (one per line)", placeholder="trainer.max_epochs=10\ndata.batch_size=32")
@@ -310,8 +322,11 @@ with col1:
 cmd = srun_prefix + ["uv", "run", script]
 for k, v in selected_configs.items():
     if isinstance(v, list):
-        list_str = f"[{','.join(v)}]"
-        cmd.append(f"{k}={list_str}")
+        if len(v) == 1:
+            cmd.append(f"{k}={v[0]}")
+        else:
+            list_str = f"[{','.join(v)}]"
+            cmd.append(f"{k}={list_str}")
     elif v and v != "None" and v != "default" and v != "null":
         cmd.append(f"{k}={v}")
     elif v == "null":
