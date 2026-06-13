@@ -6,7 +6,7 @@ This directory contains configuration files for the architectures and training t
 
 ## 🏛️ Available Model Presets
 
-### 1. `health.yaml` (Deep Learning LSTM)
+### 1. `default.yaml` (Deep Learning LSTM)
 The primary deep learning model for longitudinal sequence learning. It takes time-series health features (e.g. daily step sequences) and processes them sequentially via a Recurrent Neural Network (LSTM).
 *   **Architecture:** Dynamically defined inside `model/net/lstm.yaml`.
 *   **Optimizers:** Dynamically configured using PyTorch optimizers (e.g. Adam).
