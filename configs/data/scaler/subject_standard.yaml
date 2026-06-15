@@ -1,0 +1,3 @@
+_target_: src.data.components.scalers.SubjectScaler
+base_scaler:
+  _target_: sklearn.preprocessing.StandardScaler

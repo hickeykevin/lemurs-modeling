@@ -86,13 +86,17 @@ class HealthDataset(Dataset):
 
         seqs_np = np.stack(sequences, axis=0).astype(np.float32)  # [N, T, F]
 
-        if self.scaler is not None and hasattr(self.scaler, "transform"):
-            n, t, f = seqs_np.shape
-            seqs_np = (
-                self.scaler.transform(seqs_np.reshape(-1, f))
-                .reshape(n, t, f)
-                .astype(np.float32)
-            )
+        if self.scaler is not None:
+            if hasattr(self.scaler, "transform_by_subject"):
+                user_ids = self.data_links["app_user_id"].values
+                seqs_np = self.scaler.transform_by_subject(seqs_np, user_ids)
+            elif hasattr(self.scaler, "transform"):
+                n, t, f = seqs_np.shape
+                seqs_np = (
+                    self.scaler.transform(seqs_np.reshape(-1, f))
+                    .reshape(n, t, f)
+                    .astype(np.float32)
+                )
 
         return seqs_np, np.array(targets, dtype=np.int64)
 

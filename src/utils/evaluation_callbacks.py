@@ -178,6 +178,8 @@ class ClassificationMetricsCallback(Callback):
             trainer (Trainer): The Lightning trainer object.
             pl_module (LightningModule): The Lightning module being validated.
         """
+        if trainer.sanity_checking:
+            return
         if self.val_metrics is not None:
             self.val_metrics.reset()
 
@@ -192,6 +194,8 @@ class ClassificationMetricsCallback(Callback):
             batch_idx (int): The index of the current batch.
             dataloader_idx (int): The index of the dataloader.
         """
+        if trainer.sanity_checking:
+            return
         if self.val_metrics is None:
             self.val_metrics = self._init_metrics(pl_module.num_classes, pl_module.device)
             
@@ -205,6 +209,8 @@ class ClassificationMetricsCallback(Callback):
             trainer (Trainer): The Lightning trainer object.
             pl_module (LightningModule): The Lightning module being validated.
         """
+        if trainer.sanity_checking:
+            return
         if self.val_metrics is not None:
             output = self.val_metrics.compute()
             # Log all metrics in the collection

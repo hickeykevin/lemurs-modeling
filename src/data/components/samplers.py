@@ -224,8 +224,8 @@ class BlockSampler(TimeSampler):
                     block_starts_ns = np.array([b[0].value for b in blocks], dtype=np.int64)  # [B]
                     block_ends_ns   = np.array([b[1].value for b in blocks], dtype=np.int64)  # [B]
 
-                    rec_starts_ns = user_data['start_timestamp'].values.astype(np.int64)  # [R]
-                    rec_ends_ns   = user_data['end_timestamp'].values.astype(np.int64)    # [R]
+                    rec_starts_ns = user_data['start_timestamp'].values.astype('datetime64[ns]').astype(np.int64)  # [R]
+                    rec_ends_ns   = user_data['end_timestamp'].values.astype('datetime64[ns]').astype(np.int64)    # [R]
                     rec_values    = user_data[val_col].values.astype(np.float64)           # [R]
 
                     # Broadcast to [R, B]: overlap start/end per (record, block) pair.

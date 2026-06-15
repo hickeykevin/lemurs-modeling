@@ -150,8 +150,12 @@ class HealthDataModule(LightningDataModule):
             for _, row in train_df.iterrows()
         ]
         if train_seqs:
-            stacked = np.concatenate(train_seqs, axis=0)  # [N*Time, Features]
-            self.hparams.scaler.fit(stacked)
+            if hasattr(self.hparams.scaler, "fit_by_subject"):
+                user_ids = train_df["app_user_id"].values
+                self.hparams.scaler.fit_by_subject(train_seqs, user_ids)
+            else:
+                stacked = np.concatenate(train_seqs, axis=0)  # [N*Time, Features]
+                self.hparams.scaler.fit(stacked)
 
     def _split_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Dispatches to the appropriate splitting strategy.
@@ -252,7 +256,8 @@ class HealthDataModule(LightningDataModule):
             batch_size=self.hparams.batch_size, 
             num_workers=self.hparams.num_workers, 
             pin_memory=self.hparams.pin_memory, 
-            shuffle=True
+            shuffle=True,
+            persistent_workers=self.hparams.num_workers > 0
         )
 
     def val_dataloader(self) -> DataLoader:
@@ -262,7 +267,8 @@ class HealthDataModule(LightningDataModule):
             batch_size=self.hparams.batch_size, 
             num_workers=self.hparams.num_workers, 
             pin_memory=self.hparams.pin_memory, 
-            shuffle=False
+            shuffle=False,
+            persistent_workers=self.hparams.num_workers > 0
         )
 
     def test_dataloader(self) -> DataLoader:
