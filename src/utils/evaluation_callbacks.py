@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 from lightning import Callback, LightningModule, Trainer
-from torchmetrics import MetricCollection, MaxMetric
+from torchmetrics import MetricCollection, MaxMetric, MinMetric
 from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix, BinaryConfusionMatrix
 from rich.table import Table
 from rich.console import Console
@@ -269,3 +269,123 @@ class ClassificationMetricsCallback(Callback):
             for name, value in output.items():
                 pl_module.log(f"test/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
             self.test_metrics.reset()
+
+
+class RegressionMetricsCallback(Callback):
+    """A Lightning callback that tracks additional regression metrics (MSE, MAE).
+    
+    This callback updates metrics at each batch and logs them via the LightningModule 
+    at the end of validation and test epochs.
+    """
+
+    def __init__(self) -> None:
+        """Initializes the RegressionMetricsCallback."""
+        super().__init__()
+        self.val_metrics: Optional[MetricCollection] = None
+        self.test_metrics: Optional[MetricCollection] = None
+        
+        # Track the best (lowest) validation MSE over epochs
+        self.val_mse_best = MinMetric()
+
+    def _init_metrics(self, device: torch.device) -> MetricCollection:
+        """Initializes the MetricCollection with MSE and MAE.
+
+        Args:
+            device (torch.device): The device (CPU/GPU) where metrics should be allocated.
+
+        Returns:
+            MetricCollection: A collection of initialized torchmetrics.
+        """
+        from torchmetrics import MeanSquaredError, MeanAbsoluteError
+        metrics = MetricCollection({
+            "mse": MeanSquaredError(),
+            "mae": MeanAbsoluteError(),
+        })
+        return metrics.to(device)
+
+    def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Resets metrics at the beginning of the validation epoch."""
+        if trainer.sanity_checking:
+            return
+        if self.val_metrics is not None:
+            self.val_metrics.reset()
+
+    def on_validation_batch_end(
+        self, 
+        trainer: Trainer, 
+        pl_module: LightningModule, 
+        outputs: Optional[Dict[str, torch.Tensor]], 
+        batch: Any, 
+        batch_idx: int, 
+        dataloader_idx: int = 0
+    ) -> None:
+        """Updates validation metrics with results from the current batch."""
+        if trainer.sanity_checking:
+            return
+        if self.val_metrics is None:
+            self.val_metrics = self._init_metrics(pl_module.device)
+            
+        if outputs is not None and "preds" in outputs and "targets" in outputs:
+            preds = outputs["preds"].squeeze()
+            targets = outputs["targets"].squeeze()
+            
+            # Ensure tensors have at least 1 dimension
+            if preds.dim() == 0:
+                preds = preds.unsqueeze(0)
+            if targets.dim() == 0:
+                targets = targets.unsqueeze(0)
+                
+            self.val_metrics.update(preds, targets)
+
+    def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Computes and logs validation metrics at the end of the epoch."""
+        if trainer.sanity_checking:
+            return
+        if self.val_metrics is not None:
+            output = self.val_metrics.compute()
+            # Log all metrics in the collection
+            for name, value in output.items():
+                pl_module.log(f"val/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
+                
+                # Track the best metrics over validation epochs
+                if name == "mse":
+                    if self.val_mse_best.device != pl_module.device:
+                        self.val_mse_best = self.val_mse_best.to(pl_module.device)
+                    self.val_mse_best(value)
+                    pl_module.log("val/mse_best", self.val_mse_best.compute(), sync_dist=True, prog_bar=True)
+                    
+            self.val_metrics.reset()
+
+    def on_test_batch_end(
+        self, 
+        trainer: Trainer, 
+        pl_module: LightningModule, 
+        outputs: Optional[Dict[str, torch.Tensor]], 
+        batch: Any, 
+        batch_idx: int, 
+        dataloader_idx: int = 0
+    ) -> None:
+        """Updates test metrics with results from the current batch."""
+        if self.test_metrics is None:
+            self.test_metrics = self._init_metrics(pl_module.device)
+            
+        if outputs is not None and "preds" in outputs and "targets" in outputs:
+            preds = outputs["preds"].squeeze()
+            targets = outputs["targets"].squeeze()
+            
+            if preds.dim() == 0:
+                preds = preds.unsqueeze(0)
+            if targets.dim() == 0:
+                targets = targets.unsqueeze(0)
+                
+            self.test_metrics.update(preds, targets)
+
+    def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Computes and logs test metrics at the end of the epoch."""
+        if self.test_metrics is not None:
+            output = self.test_metrics.compute()
+            # Log all metrics in the collection
+            for name, value in output.items():
+                pl_module.log(f"test/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
+            self.test_metrics.reset()
+

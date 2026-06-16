@@ -1,0 +1,10 @@
+defaults:
+  - net: lstm
+  - optimizer: adam
+  - scheduler: null
+
+_target_: src.models.health_module.HealthRegressionLitModule
+net:
+    output_size: 1
+compile: false
+user_id_dropout: false

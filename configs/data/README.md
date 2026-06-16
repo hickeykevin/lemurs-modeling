@@ -22,7 +22,7 @@ The data pipeline configuration is split into modular sub-directories. You can s
 
 ### 2. 📋 Target Aggregators
 * **Path**: `configs/data/aggregator/`
-* **Purpose**: Translates multiple raw momentary assessment survey answers into target classification labels (0 or 1) using clinical indicator scoring rules.
+* **Purpose**: Translates multiple raw momentary assessment survey answers into target classification labels (0 or 1) using clinical indicator scoring rules, or aggregates them into continuous target scores for regression tasks.
 * **More Details**: See the [configs/data/aggregator/README.md](aggregator/README.md) sub-guide.
 
 ### 3. 📈 Feature Scalers
@@ -46,8 +46,11 @@ uv run src/train.py data/sampler=rolling_hour
 # Swap to outlier-robust scaling
 uv run src/train.py data/scaler=robust
 
-# Swap clinical target aggregators
+# Swap clinical target aggregators (Classification)
 uv run src/train.py data/aggregator=suicide_risk
+
+# Swap clinical target aggregators (Regression)
+uv run src/train.py experiment=regression_health data/aggregator=suicide_risk_regression
 ```
 
 To override specific properties:

@@ -1,0 +1,34 @@
+# @package _global_
+
+# to execute this experiment run:
+# python src/train.py experiment=regression_health data/aggregator=suicide_risk_regression
+
+defaults:
+  - override /data: default
+  - override /model: default
+  - override /model/net: lstm
+  - override /callbacks: default
+  - override /trainer: cpu
+
+tags: ["health", "lstm", "regression"]
+
+seed: 42
+
+model:
+  _target_: src.models.health_module.HealthRegressionLitModule
+  net:
+    input_size: ${len:${data.modalities}}
+    hidden_size: 32
+    dropout: 0.2
+    output_size: 1
+
+callbacks:
+  model_checkpoint:
+    monitor: "val/loss"
+    mode: "min"
+  early_stopping:
+    monitor: "val/loss"
+    mode: "min"
+  classification_metrics: null
+  regression_metrics:
+    _target_: src.utils.evaluation_callbacks.RegressionMetricsCallback

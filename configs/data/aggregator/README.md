@@ -1,6 +1,6 @@
 # 📊 Data Aggregator Configurations
 
-In longitudinal health studies, surveys often contain multiple questions. An **Aggregator** defines the mathematical or clinical rules used to collapse multiple survey responses into a single target label (usually binary $0$ or $1$) for our classification models to predict.
+In longitudinal health studies, surveys often contain multiple questions. An **Aggregator** defines the mathematical or clinical rules used to collapse multiple survey responses into a single target label: either a binary classification label ($0$ or $1$) or a continuous regression score (e.g. summing Likert scale questions) for our models to predict.
 
 ---
 
@@ -22,6 +22,28 @@ Swapping targets is done by setting `data/aggregator=preset_name`:
 *   `emotion_regulation.yaml`: Targets coping strategy questions.
 *   `minority_stress.yaml`: Targets questions measuring identity-based discrimination.
 *   `positive_emotion.yaml` / `negative_emotion.yaml`: Group mood descriptors.
+
+---
+
+## 📈 Regression-Based Aggregations
+
+We use the `RegressionAggregator` class to aggregate survey answers by summing Likert scale questions to produce a continuous target score.
+
+### Configuration Properties
+*   `likert_ids` (list[int]): List of question IDs to target and sum.
+*   `shift_likert` (bool): Defaults to `true`. If `true`, shifts 1-indexed Likert scales to start at 0 by subtracting 1.
+    *   **Auto-Index Verification**: The aggregator automatically checks if any target answer is already `0` (i.e. already 0-indexed in the dataset). If so, it dynamically skips the subtracting-by-1 step and logs a warning to prevent double-shifting.
+
+### Available Presets
+Swapping to a regression target is done by setting `data/aggregator=preset_name_regression`:
+
+*   `suicide_risk_regression.yaml`: Sums Likert-scale questions regarding self-harm/ideation (ignores binary yes/no or conditional questions).
+*   `self_harm_regression.yaml`: Sums Likert-scale questions regarding self-harm.
+*   `minority_stress_regression.yaml`: Sums Likert-scale questions measuring identity-based discrimination.
+*   `social_connection_regression.yaml`: Sums Likert-scale questions regarding social support/connection.
+*   `social_stress_regression.yaml`: Sums Likert-scale questions regarding interpersonal stress/friction.
+*   `emotion_regulation_regression.yaml`: Sums Likert-scale questions regarding emotional coping/regulation.
+*   `positive_emotion_regression.yaml` / `negative_emotion_regression.yaml`: Sums Likert-scale positive / negative mood descriptors.
 
 ---
 
@@ -71,3 +93,12 @@ Run training targeting this aggregator:
 ```bash
 uv run src/train.py data/aggregator=anxiety
 ```
+
+### Scenario D: Custom Regression Target Questions
+To bypass the preset questions and sum a custom list of question IDs for regression:
+```bash
+uv run src/train.py experiment=regression_health \
+  data/aggregator=suicide_risk_regression \
+  "data.aggregator.likert_ids=[2,3,5]"
+```
+

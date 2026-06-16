@@ -32,6 +32,7 @@ class HealthDataset(Dataset):
         sampler: TimeSampler,
         scaler: Optional[Any] = None,
         user_to_idx: Optional[Dict[str, int]] = None,
+        is_regression: bool = False,
     ) -> None:
         """Initializes the HealthDataset.
 
@@ -44,12 +45,14 @@ class HealthDataset(Dataset):
             sampler (TimeSampler): Sampling strategy (BlockSampler, Rolling, etc.).
             scaler (Optional[Any]): A pre-fitted scaler (e.g. ``StandardScaler``).
             user_to_idx (Optional[Dict[str, int]]): Mapping from app_user_id to user embedding index.
+            is_regression (bool): Whether this dataset yields targets for a regression task.
         """
         self.data_links = linked_data.reset_index(drop=True)
         self.sampler = sampler
         self.scaler = scaler
         self.modalities = sorted(list(modality_dfs.keys()))
         self.user_to_idx = user_to_idx
+        self.is_regression = is_regression
 
         # Pre-compute all sequences and targets once at construction time.
         # __getitem__ then becomes a direct numpy array index — no Pandas overhead.
@@ -73,7 +76,7 @@ class HealthDataset(Dataset):
                 - user_indices: ``int64`` array of shape ``[N]``.
         """
         sequences: List[np.ndarray] = []
-        targets: List[int] = []
+        targets: List[float] = []
         user_indices: List[int] = []
 
         for idx in range(len(self.data_links)):
@@ -86,7 +89,10 @@ class HealthDataset(Dataset):
                 modalities=self.modalities,
             )
             sequences.append(seq)
-            targets.append(int(row["answer"]))
+            if self.is_regression:
+                targets.append(float(row["answer"]))
+            else:
+                targets.append(int(row["answer"]))
 
             # Map user ID to integer index
             uid = row["app_user_id"]
@@ -109,7 +115,8 @@ class HealthDataset(Dataset):
                     .astype(np.float32)
                 )
 
-        return seqs_np, np.array(targets, dtype=np.int64), np.array(user_indices, dtype=np.int64)
+        target_dtype = np.float32 if self.is_regression else np.int64
+        return seqs_np, np.array(targets, dtype=target_dtype), np.array(user_indices, dtype=np.int64)
 
     # ------------------------------------------------------------------
     # Dataset interface
@@ -131,8 +138,9 @@ class HealthDataset(Dataset):
                 - target: ``long`` scalar tensor.
                 - user_idx: ``long`` scalar tensor.
         """
+        target_dtype = torch.float32 if self.is_regression else torch.long
         return (
             torch.from_numpy(self._sequences[idx]),
-            torch.tensor(self._targets[idx], dtype=torch.long),
+            torch.tensor(self._targets[idx], dtype=target_dtype),
             torch.tensor(self._user_indices[idx], dtype=torch.long),
         )

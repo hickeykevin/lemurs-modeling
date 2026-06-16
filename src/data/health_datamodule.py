@@ -127,17 +127,21 @@ class HealthDataModule(LightningDataModule):
                 self._fit_scaler(train_df, modality_dfs)
 
             # Instantiate Dataset objects
+            is_regression = getattr(self.hparams.aggregator, "is_regression", False)
             self.data_train = HealthDataset(
                 train_df, modality_dfs, self.hparams.modality_cols,
-                self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx
+                self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
+                is_regression=is_regression
             )
             self.data_val = HealthDataset(
                 val_df, modality_dfs, self.hparams.modality_cols,
-                self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx
+                self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
+                is_regression=is_regression
             )
             self.data_test = HealthDataset(
                 test_df, modality_dfs, self.hparams.modality_cols,
-                self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx
+                self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
+                is_regression=is_regression
             )
 
     def _fit_scaler(self, train_df: pd.DataFrame, modality_dfs: Dict[str, pd.DataFrame]) -> None:

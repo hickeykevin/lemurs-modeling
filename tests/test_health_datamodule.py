@@ -402,3 +402,103 @@ def test_subject_scaler_normalization(mock_db_class):
             seq, _, _ = ds[i]
             assert torch.allclose(seq, expected_seq, atol=1e-5)
 
+
+def test_regression_aggregator():
+    """Tests that RegressionAggregator sums and shifts Likert scale questions correctly."""
+    from src.data.components.label_aggregators import RegressionAggregator
+    
+    df = pd.DataFrame({
+        'survey_response_id': [1, 1, 2, 2, 3],
+        'question_id':        [2, 4, 2, 4, 2],
+        'answer':             [2, 3, 1, 5, 1]
+    })
+    
+    agg = RegressionAggregator(likert_ids=[2, 4], shift_likert=True)
+    result = agg(df)
+    
+    assert result.loc[result['survey_response_id'] == 1, 'answer'].values[0] == 3.0
+    assert result.loc[result['survey_response_id'] == 2, 'answer'].values[0] == 4.0
+    assert result.loc[result['survey_response_id'] == 3, 'answer'].values[0] == 0.0
+
+    # Test without shift
+    agg_no_shift = RegressionAggregator(likert_ids=[2, 4], shift_likert=False)
+    result_no_shift = agg_no_shift(df)
+    assert result_no_shift.loc[result_no_shift['survey_response_id'] == 1, 'answer'].values[0] == 5.0
+    assert result_no_shift.loc[result_no_shift['survey_response_id'] == 2, 'answer'].values[0] == 6.0
+    assert result_no_shift.loc[result_no_shift['survey_response_id'] == 3, 'answer'].values[0] == 1.0
+
+    # Test auto-skipping shift if 0 is already present in the dataset (already 0-indexed)
+    df_zero = pd.DataFrame({
+        'survey_response_id': [1, 1, 2],
+        'question_id':        [2, 4, 2],
+        'answer':             [0, 3, 1]  # contains a 0
+    })
+    agg_auto_skip = RegressionAggregator(likert_ids=[2, 4], shift_likert=True)
+    result_auto_skip = agg_auto_skip(df_zero)
+    assert result_auto_skip.loc[result_auto_skip['survey_response_id'] == 1, 'answer'].values[0] == 3.0  # 0 + 3 = 3 (no shift applied)
+    assert result_auto_skip.loc[result_auto_skip['survey_response_id'] == 2, 'answer'].values[0] == 1.0  # 1 (no shift applied)
+
+
+
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_regression_datamodule_and_model(mock_db_class, dummy_data):
+    """Tests that the datamodule yields float targets, model trains in regression mode, and callbacks run."""
+    from src.data.components.label_aggregators import RegressionAggregator
+    from src.models.health_module import HealthRegressionLitModule
+    from src.models.components.simple_lstm import SimpleLSTM
+    from src.utils.evaluation_callbacks import RegressionMetricsCallback
+    from functools import partial
+    
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
+    
+    # Answers in dummy_data for q2 and q4 are all 1 or 2 (which shift to 0 or 1).
+    aggregator = RegressionAggregator(likert_ids=[2, 4])
+    dm = HealthDataModule(
+        aggregator=aggregator,
+        sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
+        modalities=["step"]
+    )
+    dm.setup()
+    
+    # 1. Check datamodule targets
+    train_ds = dm.data_train
+    seq, target, _ = train_ds[0]
+    assert target.dtype == torch.float32
+    
+    # 2. Check model steps in regression mode
+    net = SimpleLSTM(input_size=1, hidden_size=8, num_layers=1, output_size=1)
+    
+    # Setup optimizer partial
+    optimizer = partial(torch.optim.Adam, lr=0.001)
+    
+    model = HealthRegressionLitModule(
+        net=net,
+        optimizer=optimizer
+    )
+    
+    # Simulate a training step
+    batch = (seq.unsqueeze(0), target.unsqueeze(0), torch.tensor([0]))
+    loss = model.training_step(batch, 0)
+    assert loss is not None
+    assert loss.dtype == torch.float32
+
+    # 3. Verify regression metrics callback
+    callback = RegressionMetricsCallback()
+    outputs = model.validation_step(batch, 0)
+    
+    # Simulate batch end
+    trainer = MagicMock()
+    trainer.sanity_checking = False
+    callback.on_validation_batch_end(trainer, model, outputs, batch, 0)
+    
+    # Compute metrics
+    metrics = callback._init_metrics(device=torch.device("cpu"))
+    metrics.update(outputs["preds"], outputs["targets"])
+    res = metrics.compute()
+    assert "mse" in res
+    assert "mae" in res
+
+
+

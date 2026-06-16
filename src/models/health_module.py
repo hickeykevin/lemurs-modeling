@@ -2,7 +2,7 @@ from typing import Any, Dict, Tuple, Optional, List
 
 import torch
 from lightning import LightningModule
-from torchmetrics import MaxMetric, MeanMetric
+from torchmetrics import MaxMetric, MeanMetric, MinMetric, MeanSquaredError, MeanAbsoluteError
 from torchmetrics.classification.accuracy import Accuracy
 import numpy as np
 from functools import partial
@@ -550,3 +550,101 @@ class BaselineHealthModule(LightningModule):
 
 if __name__ == "__main__":
     _ = HealthLitModule(None, None, None, None)
+
+
+class HealthRegressionLitModule(LightningModule):
+    """A LightningModule for Health (LSTM) regression tasks.
+
+    This module handles the training, validation, and testing logic for a sequence-based
+    LSTM model designed to predict continuous outcomes from multimodal data.
+    """
+
+    def __init__(
+        self,
+        net: torch.nn.Module,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler = None,
+        compile: bool = False,
+        user_id_dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.save_hyperparameters(logger=False)
+
+        self.net = net
+        self.criterion = torch.nn.MSELoss()
+
+        # Averaging metrics over the entire epoch
+        self.train_loss = MeanMetric()
+        self.val_loss = MeanMetric()
+        self.test_loss = MeanMetric()
+
+    def forward(self, x: torch.Tensor, user_idx: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.net(x, user_idx)
+
+    def model_step(
+        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        x, y, user_idx = batch
+        
+        # Apply user ID dropout during training to fallback to the population average (index 0)
+        if self.training and self.hparams.user_id_dropout > 0:
+            mask = torch.rand(user_idx.shape, device=user_idx.device) < self.hparams.user_id_dropout
+            user_idx = torch.where(mask, torch.zeros_like(user_idx), user_idx)
+
+        logits = self.forward(x, user_idx) # shape [Batch, output_size=1]
+        preds = logits.squeeze(-1)
+        loss = self.criterion(preds, y.float())
+        return loss, preds, y, logits
+
+    def training_step(
+        self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
+        loss, preds, targets, _ = self.model_step(batch)
+        self.train_loss(loss)
+        self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
+        loss, preds, targets, logits = self.model_step(batch)
+        self.val_loss(loss)
+        self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
+        # Yield preds and targets so validation callbacks can compute regression metrics
+        return {"loss": loss, "preds": preds, "targets": targets}
+
+    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
+        loss, preds, targets, logits = self.model_step(batch)
+        self.test_loss(loss)
+        self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
+        # Yield preds and targets so test callbacks can compute regression metrics
+        return {"loss": loss, "preds": preds, "targets": targets}
+
+    def setup(self, stage: str, **kwargs) -> None:
+        if self.hparams.compile and stage == "fit":
+            self.net = torch.compile(self.net)
+
+        # Dynamically build user embedding on the net if user_to_idx is present on the datamodule
+        if self._trainer is not None and self.trainer.datamodule is not None:
+            dm = self.trainer.datamodule
+            if hasattr(dm, "user_to_idx") and dm.user_to_idx is not None:
+                self.num_users = len(dm.user_to_idx) + 1
+                if hasattr(self.net, "init_user_embedding"):
+                    self.net.init_user_embedding(self.num_users)
+                    self.net.to(self.device)  # Make sure embedding weights are moved to correct device
+
+        self.val_loss.reset()
+
+    def configure_optimizers(self) -> Dict[str, Any]:
+        optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
+        if self.hparams.scheduler is not None:
+            scheduler = self.hparams.scheduler(optimizer=optimizer)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "monitor": "val/loss",
+                    "interval": "epoch",
+                    "frequency": 1,
+                },
+            }
+        return {"optimizer": optimizer}
+

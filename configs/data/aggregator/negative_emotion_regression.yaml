@@ -1,0 +1,3 @@
+_target_: src.data.components.label_aggregators.RegressionAggregator
+likert_ids: [23, 24, 25, 26, 27, 28, 36]
+shift_likert: true

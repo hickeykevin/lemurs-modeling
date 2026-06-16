@@ -18,6 +18,11 @@ class LabelAggregator(ABC):
         """
         pass
 
+    @property
+    def is_regression(self) -> bool:
+        """Indicates whether this aggregator outputs a continuous regression target."""
+        return False
+
 class MeanAggregator(LabelAggregator):
     """Aggregates answers by taking the mean and optionally binarizing."""
     
@@ -151,5 +156,71 @@ class RuleBasedAggregator(LabelAggregator):
             'survey_response_id': pivoted.index,
             'answer': combined.astype(int)
         }).reset_index(drop=True)
+
+
+class RegressionAggregator(LabelAggregator):
+    """Aggregates survey answers by summing Likert scale questions to produce a continuous target."""
+    
+    def __init__(self, likert_ids: list, shift_likert: bool = True) -> None:
+        """Initializes the RegressionAggregator.
+
+        Args:
+            likert_ids (list[int]): Question IDs to target and sum.
+            shift_likert (bool): If True, shifts 1-indexed Likert scales to start at 0 by subtracting 1.
+        """
+        self.likert_ids = likert_ids
+        self.shift_likert = shift_likert
+
+    def get_question_ids(self) -> list:
+        """Retrieves targeted question IDs.
+
+        Returns:
+            list[int]: Targeted question IDs.
+        """
+        return list(set(self.likert_ids))
+
+    @property
+    def is_regression(self) -> bool:
+        return True
+
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Sums target question answers per response.
+
+        Args:
+            df (pd.DataFrame): Long-format answers with 'survey_response_id', 
+                'question_id', and 'answer'.
+
+        Returns:
+            pd.DataFrame: Aggregated continuous status per 'survey_response_id'.
+        """
+        if df.empty:
+            return pd.DataFrame(columns=['survey_response_id', 'answer'])
+            
+        pivoted = df.pivot(index='survey_response_id', columns='question_id', values='answer')
+        
+        likert_cols = [c for c in self.likert_ids if c in pivoted.columns]
+        if likert_cols:
+            likert_scores = pivoted[likert_cols]
+            if self.shift_likert:
+                # Check if values are already 0-indexed (i.e. min value is 0)
+                # We skip shifting if the min value is 0 to avoid double-shifting.
+                min_val = likert_scores.min(skipna=True).min(skipna=True)
+                if min_val == 0:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Dataset answers already contain 0. Skipping Likert shifting to avoid double-shifting."
+                    )
+                else:
+                    likert_scores = (likert_scores - 1).clip(lower=0)
+            # Use sum with min_count=1 to ensure that if all answers are NaN, we get NaN instead of 0
+            total_score = likert_scores.sum(axis=1, min_count=1)
+        else:
+            total_score = pd.Series(np.nan, index=pivoted.index)
+            
+        return pd.DataFrame({
+            'survey_response_id': total_score.index,
+            'answer': total_score.values
+        }).reset_index(drop=True)
+
 
 

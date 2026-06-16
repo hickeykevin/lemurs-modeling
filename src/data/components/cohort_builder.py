@@ -125,8 +125,10 @@ class CohortBuilder:
         question_ids = self.aggregator.get_question_ids()
         target_answers = answer_df[answer_df['question_id'].isin(question_ids)].copy()
 
-        # Coerce answer strings to numeric scores, dropping any nulls
-        target_answers['answer'] = pd.to_numeric(target_answers['answer'], errors='coerce')
+        # Coerce answer strings to numeric scores, mapping "yes" -> 1.0 and "no" -> 0.0, and dropping any nulls
+        clean_answers = target_answers['answer'].astype(str).str.strip().str.lower()
+        mapped_answers = clean_answers.map({'yes': 1.0, 'no': 0.0})
+        target_answers['answer'] = mapped_answers.fillna(pd.to_numeric(target_answers['answer'], errors='coerce'))
         target_answers = target_answers.dropna(subset=['answer'])
 
         # Aggregate daily scores via the configured binarization strategy

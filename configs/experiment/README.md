@@ -26,6 +26,13 @@ AutoML baseline specifically configured for running tabular model optimization o
     uv run src/train.py experiment=flaml_health
     ```
 
+### 3. `regression_health.yaml`
+Deep learning training run configured for regression tasks, utilizing the `HealthRegressionLitModule` to predict continuous target scores and logging regression-specific metrics (like RMSE, MAE, R², etc.) via the `RegressionMetricsCallback`.
+*   **Command:**
+    ```bash
+    uv run src/train.py experiment=regression_health data/aggregator=suicide_risk_regression
+    ```
+
 ---
 
 ## 🛠️ Creating Your Own Custom Experiment
