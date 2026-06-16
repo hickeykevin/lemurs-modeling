@@ -5,3 +5,4 @@ defaults:
 
 _target_: src.models.health_module.HealthLitModule
 compile: false
+user_id_dropout: 0.1

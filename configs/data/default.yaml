@@ -2,7 +2,7 @@ defaults:
   - _self_
   - aggregator: suicide_risk
   - sampler: block
-  - scaler: standard
+  - scaler: subject_standard
   - preprocessors: [step]
 
 _target_: src.data.health_datamodule.HealthDataModule

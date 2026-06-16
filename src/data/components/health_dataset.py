@@ -31,6 +31,7 @@ class HealthDataset(Dataset):
         modality_cols: Dict[str, str],
         sampler: TimeSampler,
         scaler: Optional[Any] = None,
+        user_to_idx: Optional[Dict[str, int]] = None,
     ) -> None:
         """Initializes the HealthDataset.
 
@@ -39,25 +40,26 @@ class HealthDataset(Dataset):
                 ``record_timestamp`` columns.
             modality_dfs (Dict[str, pd.DataFrame]): Health dataframes, e.g.
                 ``{'step': df}``.
-            modality_cols (Dict[str, str]): Value column names per modality, e.g.
-                ``{'step': 'steps'}``.
+            modality_cols (Dict[str, str]): Mapping of modality name to its value column.
             sampler (TimeSampler): Sampling strategy (BlockSampler, Rolling, etc.).
             scaler (Optional[Any]): A pre-fitted scaler (e.g. ``StandardScaler``).
+            user_to_idx (Optional[Dict[str, int]]): Mapping from app_user_id to user embedding index.
         """
         self.data_links = linked_data.reset_index(drop=True)
         self.sampler = sampler
         self.scaler = scaler
         self.modalities = sorted(list(modality_dfs.keys()))
+        self.user_to_idx = user_to_idx
 
         # Pre-compute all sequences and targets once at construction time.
         # __getitem__ then becomes a direct numpy array index — no Pandas overhead.
-        self._sequences, self._targets = self._precompute(modality_dfs, modality_cols)
+        self._sequences, self._targets, self._user_indices = self._precompute(modality_dfs, modality_cols)
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _precompute(self, modality_dfs: Dict[str, pd.DataFrame], modality_cols: Dict[str, str]) -> Tuple[np.ndarray, np.ndarray]:
+    def _precompute(self, modality_dfs: Dict[str, pd.DataFrame], modality_cols: Dict[str, str]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Pre-computes all sequences and targets, applying the scaler once.
 
         Runs the sampler for every record in ``data_links`` and stacks the
@@ -65,12 +67,14 @@ class HealthDataset(Dataset):
         matrix in one call, which is far cheaper than N individual calls.
 
         Returns:
-            Tuple[np.ndarray, np.ndarray]:
+            Tuple[np.ndarray, np.ndarray, np.ndarray]:
                 - sequences: ``float32`` array of shape ``[N, Time, Modalities]``.
                 - targets: ``int64`` array of shape ``[N]``.
+                - user_indices: ``int64`` array of shape ``[N]``.
         """
         sequences: List[np.ndarray] = []
         targets: List[int] = []
+        user_indices: List[int] = []
 
         for idx in range(len(self.data_links)):
             row = self.data_links.iloc[idx]
@@ -83,6 +87,13 @@ class HealthDataset(Dataset):
             )
             sequences.append(seq)
             targets.append(int(row["answer"]))
+
+            # Map user ID to integer index
+            uid = row["app_user_id"]
+            if self.user_to_idx is not None and uid in self.user_to_idx:
+                user_indices.append(self.user_to_idx[uid])
+            else:
+                user_indices.append(0)
 
         seqs_np = np.stack(sequences, axis=0).astype(np.float32)  # [N, T, F]
 
@@ -98,7 +109,7 @@ class HealthDataset(Dataset):
                     .astype(np.float32)
                 )
 
-        return seqs_np, np.array(targets, dtype=np.int64)
+        return seqs_np, np.array(targets, dtype=np.int64), np.array(user_indices, dtype=np.int64)
 
     # ------------------------------------------------------------------
     # Dataset interface
@@ -108,18 +119,20 @@ class HealthDataset(Dataset):
         """Returns the number of samples in the dataset."""
         return len(self._sequences)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Returns the pre-computed sequence and target for index *idx*.
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Returns the pre-computed sequence, target, and user index for index *idx*.
 
         Args:
             idx (int): Sample index.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
                 - features: ``float32`` tensor of shape ``[Time, Modalities]``.
                 - target: ``long`` scalar tensor.
+                - user_idx: ``long`` scalar tensor.
         """
         return (
             torch.from_numpy(self._sequences[idx]),
             torch.tensor(self._targets[idx], dtype=torch.long),
+            torch.tensor(self._user_indices[idx], dtype=torch.long),
         )

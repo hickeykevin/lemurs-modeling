@@ -169,7 +169,7 @@ def test_datamodule_normalization(dummy_data):
         
         # Get a sample
         train_ds = dm.data_train
-        seq, target = train_ds[0]
+        seq, target, _ = train_ds[0]
         
         # If mean was 15 (hypothetically), 20 would become (20-15)/std
         # The key is that the tensor should not be the raw [10, 20] values
@@ -399,6 +399,6 @@ def test_subject_scaler_normalization(mock_db_class):
     
     for ds in all_datasets:
         for i in range(len(ds)):
-            seq, _ = ds[i]
+            seq, _, _ = ds[i]
             assert torch.allclose(seq, expected_seq, atol=1e-5)
 

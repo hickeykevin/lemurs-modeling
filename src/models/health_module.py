@@ -32,6 +32,7 @@ class HealthLitModule(LightningModule):
         scheduler: torch.optim.lr_scheduler = None,
         compile: bool = False,
         class_weights: Optional[List[float]] = None,
+        user_id_dropout: float = 0.0,
     ) -> None:
         """Initializes the HealthLitModule.
 
@@ -41,6 +42,7 @@ class HealthLitModule(LightningModule):
             scheduler (torch.optim.lr_scheduler): The learning rate scheduler to use for training.
             compile (bool): Whether to compile the model for faster execution.
             class_weights (Optional[List[float]]): Optional weights for each class in the loss function.
+            user_id_dropout (float): Probability of dropping out user index (replacing with 0) during training.
         """
         super().__init__()
 
@@ -71,34 +73,41 @@ class HealthLitModule(LightningModule):
         # Track the best validation accuracy across epochs
         self.val_acc_best = MaxMetric()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, user_idx: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Perform a forward pass through the network.
 
         Args:
             x: Input tensor of shape [batch_size, sequence_length, features].
+            user_idx: Optional user indices tensor of shape [batch_size].
 
         Returns:
             Logits tensor of shape [batch_size, num_classes].
         """
-        return self.net(x)
+        return self.net(x, user_idx)
 
     def on_train_start(self) -> None:
         pass
 
 
     def model_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor]
+        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single step through the model.
 
         Args:
-            batch: A tuple containing (features, targets).
+            batch: A tuple containing (features, targets, user_indices).
 
         Returns:
             A tuple of (loss, predictions, targets, logits).
         """
-        x, y = batch
-        logits = self.forward(x)
+        x, y, user_idx = batch
+        
+        # Apply user ID dropout during training to fallback to the population average (index 0)
+        if self.training and self.hparams.user_id_dropout > 0:
+            mask = torch.rand(user_idx.shape, device=user_idx.device) < self.hparams.user_id_dropout
+            user_idx = torch.where(mask, torch.zeros_like(user_idx), user_idx)
+
+        logits = self.forward(x, user_idx)
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
         return loss, preds, y, logits
@@ -186,36 +195,42 @@ class HealthLitModule(LightningModule):
             num_classes = kwargs.get("num_classes")
             if num_classes is not None:
                 self.num_classes = num_classes
-            elif hasattr(self, "trainer") and self.trainer is not None:
+            elif self._trainer is not None and self.trainer.datamodule is not None:
                 # We look at the validation set to find the range of labels
                 val_dataloader = self.trainer.datamodule.val_dataloader()
                 y_list = []
                 for batch in val_dataloader:
-                    _, y = batch
+                    _, y = batch[:2]
                     y_list.append(y.cpu().numpy())
                 
                 y_train = np.concatenate(y_list, axis=0)
                 self.num_classes = int(np.max(y_train)) + 1
             else:
                 raise RuntimeError("Cannot determine num_classes: neither num_classes arg nor trainer is available.")
+        # Dynamically build user embedding on the net if user_to_idx is present on the datamodule
+        if self._trainer is not None and self.trainer.datamodule is not None:
+            dm = self.trainer.datamodule
+            if hasattr(dm, "user_to_idx") and dm.user_to_idx is not None:
+                self.num_users = len(dm.user_to_idx) + 1
+                if hasattr(self.net, "init_user_embedding"):
+                    self.net.init_user_embedding(self.num_users)
+                    self.net.to(self.device)  # Make sure embedding weights are moved to correct device
 
-
-            # Instantiate the actual Accuracy metrics with the correct task type
-            if self.num_classes <= 2:
-                # For binary tasks (0 or 1), torchmetrics Accuracy doesn't use num_classes
-                self.train_acc = Accuracy(task="binary")
-                self.val_acc = Accuracy(task="binary")
-                self.test_acc = Accuracy(task="binary")
-            else:
-                self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-                self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-                self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-            
-            # Reset metrics to ensure a clean start
-            self.val_loss.reset()
-            self.val_acc.reset()
-            self.val_acc_best.reset()
-
+        # Instantiate the actual Accuracy metrics with the correct task type
+        if self.num_classes <= 2:
+            # For binary tasks (0 or 1), torchmetrics Accuracy doesn't use num_classes
+            self.train_acc = Accuracy(task="binary")
+            self.val_acc = Accuracy(task="binary")
+            self.test_acc = Accuracy(task="binary")
+        else:
+            self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+            self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+            self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+        
+        # Reset metrics to ensure a clean start
+        self.val_loss.reset()
+        self.val_acc.reset()
+        self.val_acc_best.reset()
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """Choose what optimizers and learning-rate schedulers to use in your optimization.
@@ -296,7 +311,7 @@ class FLAMLHealthModule(LightningModule):
                 val_dataloader = self.trainer.datamodule.val_dataloader()
                 y_list = []
                 for batch in val_dataloader:
-                    _, y = batch
+                    _, y = batch[:2]
                     y_list.append(y.cpu().numpy())
                 y_val = np.concatenate(y_list, axis=0)
                 self.num_classes = int(np.max(y_val)) + 1
@@ -321,7 +336,7 @@ class FLAMLHealthModule(LightningModule):
             
             X_list, y_list = [], []
             for batch in train_dataloader:
-                x, y = batch
+                x, y = batch[:2]
                 X_list.append(self._flatten_batch(x))
                 y_list.append(y.cpu().numpy())
                 
@@ -363,10 +378,10 @@ class FLAMLHealthModule(LightningModule):
         """Evaluates the fitted FLAML model on a validation batch.
 
         Args:
-            batch: A tuple containing (features, targets).
+            batch: A tuple containing (features, targets, ...).
             batch_idx: The index of the current batch.
         """
-        x, y = batch
+        x, y = batch[:2]
         X_val = self._flatten_batch(x)
         
         # Predict using the fitted AutoML object
@@ -391,10 +406,10 @@ class FLAMLHealthModule(LightningModule):
         """Evaluates the fitted FLAML model on a test batch.
 
         Args:
-            batch: A tuple containing (features, targets).
+            batch: A tuple containing (features, targets, ...).
             batch_idx: The index of the current batch.
         """
-        x, y = batch
+        x, y = batch[:2]
         X_test = self._flatten_batch(x)
         
         y_pred = self.automl.predict(X_test)

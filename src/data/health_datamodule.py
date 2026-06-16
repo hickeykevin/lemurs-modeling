@@ -117,6 +117,11 @@ class HealthDataModule(LightningDataModule):
             if hasattr(self.hparams.sampler, "set_labels"):
                 self.hparams.sampler.set_labels(master_df)
 
+            # Create user_to_idx mapping based on training users
+            # Reserve 0 for unseen/average users
+            train_users = train_df["app_user_id"].unique()
+            self.user_to_idx = {uid: idx + 1 for idx, uid in enumerate(train_users)}
+
             # Fit the scaler on training sequences only
             if self.hparams.scaler is not None and hasattr(self.hparams.scaler, "fit"):
                 self._fit_scaler(train_df, modality_dfs)
@@ -124,15 +129,15 @@ class HealthDataModule(LightningDataModule):
             # Instantiate Dataset objects
             self.data_train = HealthDataset(
                 train_df, modality_dfs, self.hparams.modality_cols,
-                self.hparams.sampler, self.hparams.scaler
+                self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx
             )
             self.data_val = HealthDataset(
                 val_df, modality_dfs, self.hparams.modality_cols,
-                self.hparams.sampler, self.hparams.scaler
+                self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx
             )
             self.data_test = HealthDataset(
                 test_df, modality_dfs, self.hparams.modality_cols,
-                self.hparams.sampler, self.hparams.scaler
+                self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx
             )
 
     def _fit_scaler(self, train_df: pd.DataFrame, modality_dfs: Dict[str, pd.DataFrame]) -> None:
