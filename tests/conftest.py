@@ -8,6 +8,17 @@ from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
+from src.utils.resolvers import register_resolvers
+
+register_resolvers()
+
+import torch
+original_load = torch.load
+def safe_load(*args, **kwargs):
+    kwargs['weights_only'] = False
+    return original_load(*args, **kwargs)
+torch.load = safe_load
+
 
 @pytest.fixture(scope="package")
 def cfg_train_global() -> DictConfig:
@@ -22,9 +33,9 @@ def cfg_train_global() -> DictConfig:
         with open_dict(cfg):
             cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
             cfg.trainer.max_epochs = 1
-            cfg.trainer.limit_train_batches = 0.01
-            cfg.trainer.limit_val_batches = 0.1
-            cfg.trainer.limit_test_batches = 0.1
+            cfg.trainer.limit_train_batches = 1.0
+            cfg.trainer.limit_val_batches = 1.0
+            cfg.trainer.limit_test_batches = 1.0
             cfg.trainer.accelerator = "cpu"
             cfg.trainer.devices = 1
             cfg.data.num_workers = 0
@@ -49,7 +60,7 @@ def cfg_eval_global() -> DictConfig:
         with open_dict(cfg):
             cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
             cfg.trainer.max_epochs = 1
-            cfg.trainer.limit_test_batches = 0.1
+            cfg.trainer.limit_test_batches = 1.0
             cfg.trainer.accelerator = "cpu"
             cfg.trainer.devices = 1
             cfg.data.num_workers = 0

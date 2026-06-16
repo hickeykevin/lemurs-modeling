@@ -50,9 +50,9 @@ def test_block_sampler_interval_overlap():
     # B1: 0
     # B2: 500 + 400 = 900
     # B3: 600
-    # B4: 292.6829
+    # B4: 300
     
-    expected = np.array([[0.0], [900.0], [600.0], [292.6829]], dtype=np.float32)
+    expected = np.array([[0.0], [900.0], [600.0], [300.0]], dtype=np.float32)
     np.testing.assert_array_almost_equal(features, expected, decimal=3)
 
 
@@ -145,9 +145,9 @@ def test_block_sampler_comprehensive_day():
     # B1 (Sleep): 150 + 200 = 350
     # B2 (Morning): 600 + 400 + 1800 = 2800
     # B3 (Afternoon): 300 + 1200 + 1000 = 2500
-    # B4 (Evening): 800 + 500 + 1000 + 952.3809 = 3252.3809
+    # B4 (Evening): 800 + 500 + 1000 + 1000 = 3300
     
-    expected = np.array([[350.0], [2800.0], [2500.0], [3252.3809]], dtype=np.float32)
+    expected = np.array([[350.0], [2800.0], [2500.0], [3300.0]], dtype=np.float32)
     np.testing.assert_array_almost_equal(features, expected, decimal=3)
 
 

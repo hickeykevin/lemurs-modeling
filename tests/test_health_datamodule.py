@@ -149,7 +149,7 @@ def test_datamodule_normalization(dummy_data):
     from sklearn.preprocessing import StandardScaler
     from src.data.components.samplers import OffsetSampler
     
-    with patch('src.data.health_datamodule.DatabaseService') as mock_db_class:
+    with patch('src.data.components.cohort_builder.DatabaseService') as mock_db_class:
         mock_db = mock_db_class.return_value
         mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
         
@@ -247,7 +247,7 @@ def test_offset_sampler():
     # duration 12h. num_periods 12.
     # full_range starts at 18:00.
 
-@patch('src.data.health_datamodule.DatabaseService')
+@patch('src.data.components.cohort_builder.DatabaseService')
 def test_datamodule_user_split(mock_db_class, dummy_data):
     """Tests that user split results in disjoint users."""
     mock_db = mock_db_class.return_value
@@ -277,7 +277,7 @@ def test_datamodule_user_split(mock_db_class, dummy_data):
     assert train_users.isdisjoint(test_users)
     assert val_users.isdisjoint(test_users)
 
-@patch('src.data.health_datamodule.DatabaseService')
+@patch('src.data.components.cohort_builder.DatabaseService')
 def test_datamodule_longitudinal_split(mock_db_class, dummy_data):
     """Tests that longitudinal split respects chronology."""
     mock_db = mock_db_class.return_value
@@ -307,7 +307,7 @@ def test_datamodule_longitudinal_split(mock_db_class, dummy_data):
     # Check that train timestamp < test/val timestamp
     assert user1_train['record_timestamp'].max() < user1_test_or_val['record_timestamp'].min()
 
-@patch('src.data.health_datamodule.DatabaseService')
+@patch('src.data.components.cohort_builder.DatabaseService')
 def test_datamodule_multi_question_aggregation(mock_db_class, dummy_data):
     """Tests that labels are correctly aggregated from multiple question IDs."""
     mock_db = mock_db_class.return_value
@@ -331,3 +331,74 @@ def test_datamodule_multi_question_aggregation(mock_db_class, dummy_data):
         row_101 = dm.data_test.data_links[dm.data_test.data_links['survey_response_id'] == 101]
         
     assert row_101.iloc[0]['answer'] == 1
+
+
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_subject_scaler_normalization(mock_db_class):
+    """Tests that SubjectScaler standardizes features independently for each user."""
+    from sklearn.preprocessing import StandardScaler
+    from src.data.components.scalers import SubjectScaler
+    from src.data.components.samplers import OffsetSampler
+
+    # Define dummy data for two users with different scales of steps
+    # User 5 steps: always 10 and 20
+    # User 6 steps: always 100 and 200
+    step_df = pd.DataFrame({
+        'app_user_id': [5, 5, 5, 5, 6, 6, 6, 6],
+        'start_timestamp': pd.to_datetime([
+            '2026-01-01 10:00:00', '2026-01-01 11:00:00',
+            '2026-01-02 10:00:00', '2026-01-02 11:00:00',
+            '2026-01-01 10:00:00', '2026-01-01 11:00:00',
+            '2026-01-02 10:00:00', '2026-01-02 11:00:00',
+        ]),
+        'steps': [10, 20, 10, 20, 100, 200, 100, 200]
+    })
+    
+    # 2. Survey Responses - 2 per user
+    survey_df = pd.DataFrame({
+        'id': [101, 102, 103, 104],
+        'app_user_id': [5, 5, 6, 6],
+        'timestamp': pd.to_datetime([
+            '2026-01-01 12:00:00', '2026-01-02 12:00:00',
+            '2026-01-01 12:00:00', '2026-01-02 12:00:00'
+        ])
+    })
+    
+    # 3. Answers
+    answer_df = pd.DataFrame([
+        {'survey_response_id': 101, 'question_id': 2, 'answer': 1},
+        {'survey_response_id': 102, 'question_id': 2, 'answer': 1},
+        {'survey_response_id': 103, 'question_id': 2, 'answer': 1},
+        {'survey_response_id': 104, 'question_id': 2, 'answer': 1}
+    ])
+    
+    dummy_data = {"step": step_df, "survey_response": survey_df, "answer": answer_df}
+
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
+
+    # Instantiate datamodule with SubjectScaler wrapping StandardScaler
+    base_scaler = StandardScaler()
+    scaler = SubjectScaler(base_scaler=base_scaler)
+    
+    dm = HealthDataModule(
+        aggregator=MeanAggregator(question_ids=[2]),
+        sampler=OffsetSampler(start_offset_hours=10, end_offset_hours=12, resample_freq="1h"),
+        scaler=scaler,
+        train_val_test_split=(0.5, 0.25, 0.25),
+        split_mode="random"
+    )
+
+    dm.setup()
+    
+    # Gather all dataset splits (train, val, test) and verify they are correctly z-scored
+    all_datasets = [dm.data_train, dm.data_val, dm.data_test]
+    
+    expected_seq = torch.tensor([[-1.0], [1.0]], dtype=torch.float32)
+    
+    for ds in all_datasets:
+        for i in range(len(ds)):
+            seq, _ = ds[i]
+            assert torch.allclose(seq, expected_seq, atol=1e-5)
+
