@@ -8,11 +8,12 @@ This directory contains configuration files for the architectures and training t
 
 ### 1. `default.yaml` (Deep Learning LSTM)
 The primary deep learning model for longitudinal sequence learning. It takes time-series health features (e.g. daily step sequences) and processes them sequentially via a Recurrent Neural Network (LSTM).
-*   **Architecture:** Dynamically defined inside `model/net/lstm.yaml`.
+*   **Architecture:** Dynamically defined inside `model/net/lstm.yaml`. Supports user embedding lookup tables for personal baseline shifts.
+*   **Regularization:** Supports `user_id_dropout` to randomly replace user IDs with the average/unseen index (`0`) during training for cold-start fallback.
 *   **Optimizers:** Dynamically configured using PyTorch optimizers (e.g. Adam).
 *   **Command:**
     ```bash
-    uv run src/train.py model=health
+    uv run src/train.py model=default
     ```
 
 ### 2. `flaml.yaml` (AutoML Baseline)
@@ -71,11 +72,14 @@ Before deploying or optimizing an LSTM, ensure that it can significantly outperf
 uv run src/train.py model=majority
 ```
 
-### Scenario B: Tuning the Deep Model (LSTM layers and dropout)
-You can directly override the nested architecture parameters from your shell:
+### Scenario B: Tuning the Deep Model (LSTM layers, dropout, and user ID dropout)
+You can directly override the nested architecture and regularization parameters from your shell:
 ```bash
 # Double the hidden dim size and set a 30% dropout rate
-uv run src/train.py model=health model.net.hidden_size=128 model.net.dropout=0.3
+uv run src/train.py model.net.hidden_size=128 model.net.dropout=0.3
+
+# Set a 20% user ID dropout rate for fallback embedding regularization
+uv run src/train.py model.user_id_dropout=0.2
 ```
 
 ### Scenario C: Fast AutoML Benchmark Search

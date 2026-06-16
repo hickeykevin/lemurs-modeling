@@ -28,10 +28,10 @@ The data pipeline configuration is split into modular sub-directories. You can s
 ### 3. 📈 Feature Scalers
 * **Path**: `configs/data/scaler/`
 * **Purpose**: Applies feature normalization to time-series sequence tensors to facilitate gradient descent stability.
-* **Available Options**:
-  * [**`standard.yaml`**](scaler/standard.yaml): Standardizes features by removing the mean and scaling to unit variance.
-  * [**`minmax.yaml`**](scaler/minmax.yaml): Scales features to a specified range (typically 0 to 1).
-  * [**`robust.yaml`**](scaler/robust.yaml): Scales features using statistics that are robust to outliers (using interquartile range).
+  * [**`subject_standard.yaml`**](scaler/subject_standard.yaml): Standardizes features independently on a per-subject/user level, mapping individuals to their relative deviations.
+  * [**`standard.yaml`**](scaler/standard.yaml): Standardizes features globally by removing the population mean and scaling to unit variance.
+  * [**`minmax.yaml`**](scaler/minmax.yaml): Scales features globally to a specified range (typically 0 to 1).
+  * [**`robust.yaml`**](scaler/robust.yaml): Scales features globally using statistics that are robust to outliers (using interquartile range).
   * [**`none.yaml`**](scaler/none.yaml): Bypasses feature scaling.
 
 ---
