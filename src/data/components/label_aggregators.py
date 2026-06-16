@@ -114,23 +114,23 @@ class RuleBasedAggregator(LabelAggregator):
                 continue
                 
             op = rule['op']
-            
+            val = rule.get('val', rule.get('threshold'))
             if op == "mean":
                 score = pivoted[ids].mean(axis=1)
-                condition = score >= rule['threshold']
+                condition = score >= val
             elif op == "sum":
                 score = pivoted[ids].sum(axis=1)
-                condition = score >= rule['threshold']
+                condition = score >= val
             elif op == "sum_le":
                 score = pivoted[ids].sum(axis=1)
-                condition = score <= rule['threshold']
+                condition = score <= val
             elif op == "max":
                 score = pivoted[ids].max(axis=1)
-                condition = score >= rule['threshold']
+                condition = score >= val
             elif op == "ge":
-                condition = (pivoted[ids] >= rule['val']).any(axis=1)
+                condition = (pivoted[ids] >= val).any(axis=1)
             elif op == "any_eq":
-                condition = (pivoted[ids] == rule['val']).any(axis=1)
+                condition = (pivoted[ids] == val).any(axis=1)
             else:
                 raise ValueError(f"Unknown operation: {op}")
 
