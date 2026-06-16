@@ -123,7 +123,7 @@ def render_config_group_ui(group: str, selected_val: str, config_overrides: dict
     params = load_config_with_defaults(group, selected_val)
     if params:
         for param_name, original_val in params.items():
-            widget_key = f"param_{group.replace('/', '_')}_{param_name}"
+            widget_key = f"param_{group.replace('/', '_')}_{selected_val}_{param_name}"
             render_parameter_editor(f"{group.replace('/', '.')}.{param_name}", original_val, widget_key, config_overrides)
             
     # 2. Render subgroups (subdirectories)
@@ -160,7 +160,7 @@ def render_config_group_ui(group: str, selected_val: str, config_overrides: dict
                         sub_options, 
                         default=default_options, 
                         label_visibility="collapsed", 
-                        key=f"select_{sub_group.replace('/', '_')}"
+                        key=f"select_{group.replace('/', '_')}_{selected_val}_{subdir.name}"
                     )
                     
                     if selected_sub:
@@ -183,7 +183,7 @@ def render_config_group_ui(group: str, selected_val: str, config_overrides: dict
                         sub_options, 
                         index=sub_default_idx, 
                         label_visibility="collapsed", 
-                        key=f"select_{sub_group.replace('/', '_')}"
+                        key=f"select_{group.replace('/', '_')}_{selected_val}_{subdir.name}"
                     )
                     
                     if selected_sub != "None":
@@ -282,7 +282,7 @@ with col1:
                     default_options = []
                     
                 st.markdown(f"#### **{group.capitalize()}**")
-                selected_val = st.multiselect(f"{group.capitalize()}", options, default=default_options, label_visibility="collapsed")
+                selected_val = st.multiselect(f"{group.capitalize()}", options, default=default_options, label_visibility="collapsed", key=f"root_select_{mode}_{group}")
                 selected_configs[group] = selected_val
                 
                 # Subgroups and parameters tree
@@ -304,7 +304,7 @@ with col1:
                     default_index = options.index("None")
                     
                 st.markdown(f"#### **{group.capitalize()}**")
-                selected_val = st.selectbox(f"{group.capitalize()}", options, index=default_index, label_visibility="collapsed")
+                selected_val = st.selectbox(f"{group.capitalize()}", options, index=default_index, label_visibility="collapsed", key=f"root_select_{mode}_{group}")
                 selected_configs[group] = selected_val
                 
                 # Subgroups and parameters tree
