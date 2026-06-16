@@ -112,6 +112,38 @@ class ConfusionMatrixCallback(Callback):
         self.console.print("\n")
         self.console.print(table)
         self.console.print("\n")
+
+        # Log to Wandb if WandbLogger is used
+        from importlib.util import find_spec
+        if find_spec("wandb"):
+            import wandb
+            from lightning.pytorch.loggers.wandb import WandbLogger
+
+            for logger in trainer.loggers:
+                if isinstance(logger, WandbLogger):
+                    class_names = [f"Class {i}" for i in range(num_classes)]
+                    
+                    # Log as an interactive confusion matrix plot
+                    cm_plot = wandb.plot.confusion_matrix(
+                        probs=None,
+                        y_true=all_targets.cpu().numpy(),
+                        preds=all_preds.cpu().numpy(),
+                        class_names=class_names,
+                        title=f"Confusion Matrix (Val Epoch {trainer.current_epoch})"
+                    )
+                    
+                    # Log as a wandb Table (matrix grid representation)
+                    columns = ["Actual \\ Predicted"] + [f"P{i}" for i in range(num_classes)]
+                    table_data = []
+                    for i in range(num_classes):
+                        row = [f"Class {i}"] + [int(cm_np[i, j]) for j in range(num_classes)]
+                        table_data.append(row)
+                    wandb_table = wandb.Table(data=table_data, columns=columns)
+                    
+                    logger.experiment.log({
+                        "val/confusion_matrix": cm_plot,
+                        "val/confusion_matrix_table": wandb_table
+                    })
         
         # Reset collections for the next validation epoch
         self.preds = []
