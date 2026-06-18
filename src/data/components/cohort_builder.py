@@ -121,6 +121,9 @@ class CohortBuilder:
         survey_response_df = db.extract_from_database("survey_response")
         survey_response_df['timestamp'] = pd.to_datetime(survey_response_df["timestamp"]).astype("datetime64[ns]")
 
+        # Filter out duplicate responses submitted in quick succession
+        survey_response_df, answer_df = self._filter_duplicate_responses(survey_response_df, answer_df)
+
         # Extract only question IDs required by the chosen aggregator
         question_ids = self.aggregator.get_question_ids()
         target_answers = answer_df[answer_df['question_id'].isin(question_ids)].copy()
@@ -144,6 +147,82 @@ class CohortBuilder:
         ).rename(columns={'timestamp': 'record_timestamp'})
         
         return master_df
+
+    def _filter_duplicate_responses(
+        self, survey_response_df: pd.DataFrame, answer_df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Filters out duplicate survey responses submitted in quick succession (within 10 minutes)
+        by the same user for the same survey type with identical answers.
+
+        Args:
+            survey_response_df: Dataframe of survey responses.
+            answer_df: Dataframe of answers.
+
+        Returns:
+            Tuple of filtered (survey_response_df, answer_df).
+        """
+        if survey_response_df.empty or answer_df.empty:
+            return survey_response_df, answer_df
+
+        # Ensure timestamps are datetime
+        sr = survey_response_df.copy()
+        sr['timestamp'] = pd.to_datetime(sr['timestamp']).astype('datetime64[ns]')
+        
+        # Determine sorting and grouping keys (survey_id is optional to support mock schemas)
+        groupby_cols = ['app_user_id']
+        if 'survey_id' in sr.columns:
+            groupby_cols.append('survey_id')
+            
+        duplicate_ids = set()
+        
+        # Group answers by survey_response_id for O(1) comparison
+        import collections
+        ans_by_sr = collections.defaultdict(dict)
+        for _, row in answer_df.iterrows():
+            sr_id = row['survey_response_id']
+            q_id = row['question_id']
+            val = row['answer']
+            ans_by_sr[sr_id][q_id] = val
+            
+        for _, group in sr.groupby(groupby_cols):
+            # Sort responses chronologically
+            sorted_group = group.sort_values('timestamp')
+            
+            last_kept_id = None
+            last_kept_time = None
+            
+            for _, row in sorted_group.iterrows():
+                curr_id = row['id']
+                curr_time = row['timestamp']
+                
+                if last_kept_id is None:
+                    last_kept_id = curr_id
+                    last_kept_time = curr_time
+                    continue
+                    
+                time_diff = curr_time - last_kept_time
+                
+                if time_diff <= pd.Timedelta(minutes=10):
+                    ans_prev = ans_by_sr.get(last_kept_id, {})
+                    ans_curr = ans_by_sr.get(curr_id, {})
+                    
+                    if ans_prev == ans_curr:
+                        duplicate_ids.add(curr_id)
+                        continue
+                        
+                # Not a duplicate, update reference points
+                last_kept_id = curr_id
+                last_kept_time = curr_time
+                
+        if duplicate_ids:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Filtering out {len(duplicate_ids)} duplicate survey responses submitted within 10 minutes with identical answers."
+            )
+            survey_response_df = survey_response_df[~survey_response_df['id'].isin(duplicate_ids)]
+            answer_df = answer_df[~answer_df['survey_response_id'].isin(duplicate_ids)]
+            
+        return survey_response_df, answer_df
 
     def _apply_os_filtering(self, master_df: pd.DataFrame, modality_dfs: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         """Filters target labels to keep only users on the specified operating system.

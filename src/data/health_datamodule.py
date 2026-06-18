@@ -86,6 +86,14 @@ class HealthDataModule(LightningDataModule):
         self.data_val: Optional[Dataset] = None
         self.data_test: Optional[Dataset] = None
 
+        # List of question IDs that are asked twice daily (present in both morning and afternoon surveys)
+        self.ask_twice_question_ids = [
+            2, 3, 5, 7, 8, 9, 11, 12, 13, 15, 16, 17, 18,
+            21, 22, 23, 24, 25, 26, 27, 28,
+            31, 32, 33, 34, 35, 36, 37,
+            47, 48, 49, 50, 51, 52
+        ]
+
     def setup(self, stage: Optional[str] = None) -> None:
         """Load and prepare data for all stages.
 

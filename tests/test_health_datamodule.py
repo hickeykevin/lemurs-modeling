@@ -501,4 +501,79 @@ def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     assert "mae" in res
 
 
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_cohort_builder_deduplication(mock_db_class):
+    """Tests that CohortBuilder filters out duplicate survey responses within 10 minutes with identical answers."""
+    from src.data.components.cohort_builder import CohortBuilder
+    from src.data.components.label_aggregators import RuleBasedAggregator
+    
+    # Define answers:
+    # Response 101 and 102 are for same user and survey, 2 minutes apart, identical answers (should deduplicate 102)
+    # Response 103 is for same user and survey, 12 minutes after 101 (distinct, should keep)
+    # Response 104 and 105 are for same user and survey, 1 minute apart, different answers (should keep both)
+    survey_df = pd.DataFrame({
+        'id': [101, 102, 103, 104, 105],
+        'app_user_id': [1, 1, 1, 2, 2],
+        'survey_id': [0, 0, 0, 0, 0],
+        'timestamp': pd.to_datetime([
+            '2026-01-01 10:00:00', # 101
+            '2026-01-01 10:02:00', # 102 (duplicate of 101)
+            '2026-01-01 10:12:00', # 103 (too late)
+            '2026-01-01 10:00:00', # 104
+            '2026-01-01 10:01:00', # 105 (different answers from 104)
+        ])
+    })
+    
+    answer_df = pd.DataFrame([
+        # 101 answers
+        {'survey_response_id': 101, 'question_id': 2, 'answer': '1'},
+        {'survey_response_id': 101, 'question_id': 3, 'answer': '0'},
+        # 102 answers (identical to 101)
+        {'survey_response_id': 102, 'question_id': 2, 'answer': '1'},
+        {'survey_response_id': 102, 'question_id': 3, 'answer': '0'},
+        # 103 answers (identical to 101, but >10 mins)
+        {'survey_response_id': 103, 'question_id': 2, 'answer': '1'},
+        {'survey_response_id': 103, 'question_id': 3, 'answer': '0'},
+        # 104 answers
+        {'survey_response_id': 104, 'question_id': 2, 'answer': '1'},
+        {'survey_response_id': 104, 'question_id': 3, 'answer': '0'},
+        # 105 answers (different from 104)
+        {'survey_response_id': 105, 'question_id': 2, 'answer': '2'}, # different value
+        {'survey_response_id': 105, 'question_id': 3, 'answer': '0'},
+    ])
+    
+    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df}
+    
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
+    
+    rules = [{'ids': [2, 3], 'op': 'ge', 'val': 1}]
+    agg = RuleBasedAggregator(rules=rules, combination_logic="any")
+    
+    builder = CohortBuilder(
+        modalities=[],
+        modality_cols={},
+        preprocessors=None,
+        aggregator=agg,
+        os_filter='both'
+    )
+    
+    _, master_df = builder.build()
+    
+    # Master df should contain:
+    # 101 (kept)
+    # 103 (kept)
+    # 104 (kept)
+    # 105 (kept)
+    # 102 should be filtered out!
+    response_ids = master_df['survey_response_id'].tolist()
+    assert 101 in response_ids
+    assert 102 not in response_ids
+    assert 103 in response_ids
+    assert 104 in response_ids
+    assert 105 in response_ids
+    assert len(response_ids) == 4
+
+
 
