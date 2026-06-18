@@ -30,6 +30,7 @@ class CVHealthDataModule(HealthDataModule):
         train_val_test_split: Tuple[float, float, float] = (0.7, 0.15, 0.15),
         random_state: int = 42,
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
+        collapse_strategy: str = "mean",
     ) -> None:
         # Initialize the base class, split_mode doesn't strictly matter as we override _split_data
         super().__init__(
@@ -45,6 +46,7 @@ class CVHealthDataModule(HealthDataModule):
             random_state=random_state,
             split_mode="user", 
             os_filter=os_filter,
+            collapse_strategy=collapse_strategy,
         )
         # Re-save hyperparameters to capture num_folds and current_fold
         self.save_hyperparameters(logger=False)

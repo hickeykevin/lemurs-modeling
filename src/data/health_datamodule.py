@@ -51,6 +51,7 @@ class HealthDataModule(LightningDataModule):
         random_state: int = 42,
         split_mode: Literal["random", "user", "longitudinal"] = "random",
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
+        collapse_strategy: str = "mean",
     ) -> None:
 
 
@@ -72,6 +73,7 @@ class HealthDataModule(LightningDataModule):
                 - "random": Standard row-level random shuffle.
                 - "user": Split by user ID (ensures disjoint populations).
                 - "longitudinal": Temporal split per user (predict future from past).
+            collapse_strategy (str): Aggregation strategy to collapse multiple daily survey responses for non-yes-no questions.
         """
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -112,7 +114,8 @@ class HealthDataModule(LightningDataModule):
                 modality_cols=self.hparams.modality_cols,
                 preprocessors=self.hparams.preprocessors,
                 aggregator=self.hparams.aggregator,
-                os_filter=self.hparams.os_filter
+                os_filter=self.hparams.os_filter,
+                collapse_strategy=self.hparams.collapse_strategy
             )
             modality_dfs, master_df = builder.build()
             

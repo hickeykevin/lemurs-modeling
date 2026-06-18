@@ -562,18 +562,192 @@ def test_cohort_builder_deduplication(mock_db_class):
     _, master_df = builder.build()
     
     # Master df should contain:
-    # 101 (kept)
-    # 103 (kept)
-    # 104 (kept)
-    # 105 (kept)
-    # 102 should be filtered out!
+    # 103 (representative for User 1 after deduplicating 102 and collapsing 101/103)
+    # 105 (representative for User 2 after collapsing 104/105)
     response_ids = master_df['survey_response_id'].tolist()
-    assert 101 in response_ids
+    assert 101 not in response_ids
     assert 102 not in response_ids
     assert 103 in response_ids
-    assert 104 in response_ids
+    assert 104 not in response_ids
     assert 105 in response_ids
-    assert len(response_ids) == 4
+    assert len(response_ids) == 2
+
+
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_cohort_builder_collapsing(mock_db_class):
+    """Tests that CohortBuilder correctly collapses multiple surveys on the same day per user."""
+    from src.data.components.cohort_builder import CohortBuilder
+    from src.data.components.label_aggregators import RuleBasedAggregator
+    
+    # 2 responses on same day (101, 102), and 1 response on different day (103) for user 1
+    # 101: 9 AM, 102: 5 PM. 102 is the latest, should act as the representative.
+    survey_df = pd.DataFrame({
+        'id': [101, 102, 103],
+        'app_user_id': [1, 1, 1],
+        'survey_id': [0, 0, 0],
+        'timestamp': pd.to_datetime([
+            '2026-01-01 09:00:00', # 101
+            '2026-01-01 17:00:00', # 102 (latest response of the day, representative)
+            '2026-01-02 09:00:00', # 103
+        ])
+    })
+    
+    # Question 2: style '5-scale-much' (numeric scale, should mean: (2 + 4) / 2 = 3.0)
+    # Question 11: style 'yes-no' (yes-no, should max: max(0, 1) = 1.0)
+    answer_df = pd.DataFrame([
+        # 101 answers
+        {'survey_response_id': 101, 'question_id': 2, 'answer': '2'},
+        {'survey_response_id': 101, 'question_id': 11, 'answer': 'no'}, # 0.0
+        # 102 answers
+        {'survey_response_id': 102, 'question_id': 2, 'answer': '4'},
+        {'survey_response_id': 102, 'question_id': 11, 'answer': 'yes'}, # 1.0
+        # 103 answers
+        {'survey_response_id': 103, 'question_id': 2, 'answer': '1'},
+        {'survey_response_id': 103, 'question_id': 11, 'answer': 'no'},
+    ])
+    
+    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df}
+    
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
+    
+    # Test aggregator targeting numeric question 2 with mean logic
+    # Expected: 102 (representative) gets answer 3.0. ge 3.0 is True -> 1
+    # 103 gets answer 1.0. ge 3.0 is False -> 0
+    rules = [{'ids': [2], 'op': 'ge', 'val': 3}]
+    agg = RuleBasedAggregator(rules=rules, combination_logic="any")
+    
+    builder = CohortBuilder(
+        modalities=[],
+        modality_cols={},
+        preprocessors=None,
+        aggregator=agg,
+        os_filter='both'
+    )
+    
+    _, master_df = builder.build()
+    
+    # Check that 101 is collapsed and not present in master_df
+    # Representative 102 and distinct 103 are present
+    response_ids = master_df['survey_response_id'].tolist()
+    assert 101 not in response_ids
+    assert 102 in response_ids
+    assert 103 in response_ids
+    
+    # Value for 102 is 1 (True), 103 is 0 (False)
+    assert master_df.loc[master_df['survey_response_id'] == 102, 'answer'].values[0] == 1
+    assert master_df.loc[master_df['survey_response_id'] == 103, 'answer'].values[0] == 0
+
+
+def test_rule_based_aggregator_collapsed_values():
+    """Tests that RuleBasedAggregator's any_gt handles averaged/collapsed values conservatively, while any_eq is strictly exact."""
+    from src.data.components.label_aggregators import RuleBasedAggregator
+    
+    # Question 11 is yes-no and question 2 is Likert
+    # Group contains two survey responses, one yes (1) and one no (0), averaged or maxed:
+    # If yes-no is maxed -> 1.0
+    # If Likert is meaned -> 0.5
+    df_collapsed = pd.DataFrame({
+        'survey_response_id': [1, 1, 2, 2],
+        'question_id':        [2, 11, 2, 11],
+        # Response 1: Question 2 = 0.5 (averaged), Question 11 = 1.0 (maxed)
+        # Response 2: Question 2 = 0.0 (averaged), Question 11 = 0.0 (maxed)
+        'answer':             [0.5, 1.0, 0.0, 0.0]
+    })
+    
+    # 1. Test any_gt with val: 0 (should capture 0.5 as True, 0.0 as False)
+    rules_likert_gt = [{'ids': [2], 'op': 'any_gt', 'val': 0}]
+    agg_likert_gt = RuleBasedAggregator(rules=rules_likert_gt, combination_logic="any")
+    
+    result_likert_gt = agg_likert_gt(df_collapsed)
+    assert result_likert_gt.loc[result_likert_gt['survey_response_id'] == 1, 'answer'].values[0] == 1
+    assert result_likert_gt.loc[result_likert_gt['survey_response_id'] == 2, 'answer'].values[0] == 0
+
+    # 2. Test any_eq with val: 1 (should NOT capture 0.5 as True, because it's strictly 0.5 != 1.0)
+    rules_likert_eq = [{'ids': [2], 'op': 'any_eq', 'val': 1}]
+    agg_likert_eq = RuleBasedAggregator(rules=rules_likert_eq, combination_logic="any")
+    
+    result_likert_eq = agg_likert_eq(df_collapsed)
+    assert result_likert_eq.loc[result_likert_eq['survey_response_id'] == 1, 'answer'].values[0] == 0
+    assert result_likert_eq.loc[result_likert_eq['survey_response_id'] == 2, 'answer'].values[0] == 0
+
+    # 3. Question 11 = 1.0 (should match any_eq 1 since 1.0 == 1.0)
+    rules_yn = [{'ids': [11], 'op': 'any_eq', 'val': 1}]
+    agg_yn = RuleBasedAggregator(rules=rules_yn, combination_logic="any")
+    
+    result_yn = agg_yn(df_collapsed)
+    assert result_yn.loc[result_yn['survey_response_id'] == 1, 'answer'].values[0] == 1
+    assert result_yn.loc[result_yn['survey_response_id'] == 2, 'answer'].values[0] == 0
+
+
+
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_cohort_builder_collapsing_strategies(mock_db_class):
+    """Tests that CohortBuilder correctly collapses multiple surveys using different configurable strategies."""
+    from src.data.components.cohort_builder import CohortBuilder
+    from src.data.components.label_aggregators import RuleBasedAggregator
+    
+    # 2 responses on same day (101, 102) for user 1
+    # 101: 9 AM, 102: 5 PM. 102 is the latest (representative).
+    survey_df = pd.DataFrame({
+        'id': [101, 102],
+        'app_user_id': [1, 1],
+        'survey_id': [0, 0],
+        'timestamp': pd.to_datetime([
+            '2026-01-01 09:00:00', # 101
+            '2026-01-01 17:00:00', # 102 (representative)
+        ])
+    })
+    
+    # Question 2: style '5-scale-much' (numeric scale, can test mean, max, min, first, last)
+    # Question 11: style 'yes-no' (yes-no, should always use max regardless of strategy)
+    answer_df = pd.DataFrame([
+        # 101 answers (first)
+        {'survey_response_id': 101, 'question_id': 2, 'answer': '2'},
+        {'survey_response_id': 101, 'question_id': 11, 'answer': 'no'}, # 0.0
+        # 102 answers (last)
+        {'survey_response_id': 102, 'question_id': 2, 'answer': '4'},
+        {'survey_response_id': 102, 'question_id': 11, 'answer': 'yes'}, # 1.0
+    ])
+    
+    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df}
+    
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    
+    for strat, expected_q2, expected_q11 in [
+        ("mean", 3.0, 1.0),
+        ("max", 4.0, 1.0),
+        ("min", 2.0, 1.0),
+        ("first", 2.0, 1.0),
+        ("last", 4.0, 1.0)
+    ]:
+        mock_db.extract_from_database.side_effect = lambda table: dummy_data[table].copy()
+        
+        rules = [{'ids': [2, 11], 'op': 'ge', 'val': 0}]
+        agg = RuleBasedAggregator(rules=rules, combination_logic="any")
+        
+        builder = CohortBuilder(
+            modalities=[],
+            modality_cols={},
+            preprocessors=None,
+            aggregator=agg,
+            os_filter='both',
+            collapse_strategy=strat
+        )
+        
+        # Manually collapse responses and check answer values
+        collapsed_sr, collapsed_ans = builder._collapse_daily_responses(survey_df, answer_df, mock_db)
+        
+        # check question 2
+        q2_ans = collapsed_ans.loc[collapsed_ans['question_id'] == 2, 'answer'].values[0]
+        assert q2_ans == expected_q2, f"Strategy {strat} failed for question 2: expected {expected_q2}, got {q2_ans}"
+        
+        # check question 11 (yes-no should always be maxed)
+        q11_ans = collapsed_ans.loc[collapsed_ans['question_id'] == 11, 'answer'].values[0]
+        assert q11_ans == expected_q11, f"Strategy {strat} failed for question 11: expected {expected_q11}, got {q11_ans}"
+
 
 
 
