@@ -26,7 +26,7 @@ class TimeSampler(ABC):
 class RollingSampler(TimeSampler):
     """New logic: Samples X hours exactly preceding the survey timestamp."""
     
-    def __init__(self, lookback_hours: float = 24.0, resample_freq: str = "1h"):
+    def __init__(self, lookback_hours: float = 24.0, resample_freq: str = "1h", **kwargs):
         self.lookback_hours = lookback_hours
         self.resample_freq = resample_freq
         
@@ -94,7 +94,7 @@ class OffsetSampler(TimeSampler):
             end_offset_hours = 9
     """
     
-    def __init__(self, start_offset_hours: float = -24.0, end_offset_hours: float = 0.0, resample_freq: str = "1h"):
+    def __init__(self, start_offset_hours: float = -24.0, end_offset_hours: float = 0.0, resample_freq: str = "1h", **kwargs):
         self.start_offset_hours = start_offset_hours
         self.end_offset_hours = end_offset_hours
         self.resample_freq = resample_freq
@@ -174,7 +174,7 @@ class BlockSampler(TimeSampler):
     """
 
     
-    def __init__(self, lookback_days: int = 1):
+    def __init__(self, lookback_days: int = 1, **kwargs):
         self.lookback_days = lookback_days
         
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
@@ -278,7 +278,7 @@ class LagSampler(TimeSampler):
     user's previous survey response. This allows the model to use the previous 
     state as the prediction for the current state.
     """
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.label_lookup = {} # (user_id, timestamp) -> prev_label
 
     def set_labels(self, master_df: pd.DataFrame):

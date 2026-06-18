@@ -4,7 +4,7 @@ rules:
   rule_1:
     ids: [9]
     op: "ge"
-    val: 2
+    val: 1
   rule_2:
     ids: [11, 15, 16, 17, 18]
     op: "any_eq"
