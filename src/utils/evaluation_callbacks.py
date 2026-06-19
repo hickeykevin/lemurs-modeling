@@ -421,3 +421,77 @@ class RegressionMetricsCallback(Callback):
                 pl_module.log(f"test/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
             self.test_metrics.reset()
 
+
+class TargetDistributionCallback(Callback):
+    """A Lightning callback that logs the distribution of targets/answers to WandB.
+    
+    Logs a histogram of the target values exactly once during the first validation run.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.targets: List[torch.Tensor] = []
+        self.has_logged = False
+
+    def on_validation_batch_end(
+        self, 
+        trainer: Trainer, 
+        pl_module: LightningModule, 
+        outputs: Optional[Dict[str, torch.Tensor]], 
+        batch: Any, 
+        batch_idx: int, 
+        dataloader_idx: int = 0
+    ) -> None:
+        if trainer.sanity_checking or self.has_logged:
+            return
+
+        if outputs is not None and "targets" in outputs:
+            self.targets.append(outputs["targets"].detach().cpu())
+
+    def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        if trainer.sanity_checking or self.has_logged:
+            return
+
+        if not self.targets:
+            return
+
+        # Concatenate all targets
+        all_targets = torch.cat(self.targets).numpy().flatten()
+        
+        # Log to Wandb if WandbLogger is used
+        from importlib.util import find_spec
+        if find_spec("wandb"):
+            import wandb
+            from lightning.pytorch.loggers.wandb import WandbLogger
+
+            for logger in trainer.loggers:
+                if isinstance(logger, WandbLogger):
+                    import matplotlib.pyplot as plt
+                    import io
+                    from PIL import Image
+                    
+                    # Create the matplotlib histogram
+                    plt.figure(figsize=(8, 6))
+                    plt.hist(all_targets, bins=30, color='skyblue', edgecolor='black', alpha=0.8)
+                    plt.title("Validation Target Distribution", fontsize=14)
+                    plt.xlabel("Target Value", fontsize=12)
+                    plt.ylabel("Count", fontsize=12)
+                    plt.grid(axis='y', alpha=0.3)
+                    
+                    # Save plot to an in-memory buffer and convert to PIL Image
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format='png', bbox_inches='tight')
+                    buf.seek(0)
+                    img = Image.open(buf)
+                    plt.close()
+                    
+                    logger.experiment.log({
+                        "val/target_distribution": wandb.Image(img, caption="Validation Target Distribution"),
+                    })
+                    self.has_logged = True
+        
+        # Reset targets list
+        self.targets = []
+
+
+
