@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import torch
 from lightning import Callback, LightningModule, Trainer
 from torchmetrics import MetricCollection, MaxMetric, MinMetric
-from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix, BinaryConfusionMatrix
+from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix, BinaryConfusionMatrix, Precision, Recall
 from rich.table import Table
 from rich.console import Console
 from rich import box
@@ -160,7 +160,13 @@ class ClassificationMetricsCallback(Callback):
     Structure allows for easy addition of new metrics to the collection.
     """
 
-    def __init__(self, f1_average: str = "macro", auroc_average: str = "macro") -> None:
+    def __init__(
+        self, 
+        f1_average: str = "macro", 
+        auroc_average: str = "macro",
+        precision_average: str = "macro",
+        recall_average: str = "macro",
+    ) -> None:
         """Initializes the ClassificationMetricsCallback.
 
         Args:
@@ -168,10 +174,16 @@ class ClassificationMetricsCallback(Callback):
                 Defaults to "macro".
             auroc_average (str): Averaging strategy for AUROC (e.g., 'macro', 'weighted').
                 Defaults to "macro".
+            precision_average (str): Averaging strategy for Precision (e.g., 'macro', 'micro', 'weighted').
+                Defaults to "macro".
+            recall_average (str): Averaging strategy for Recall (e.g., 'macro', 'micro', 'weighted').
+                Defaults to "macro".
         """
         super().__init__()
         self.f1_params = {"task": "multiclass", "average": f1_average}
         self.auroc_params = {"task": "multiclass", "average": auroc_average}
+        self.precision_params = {"task": "multiclass", "average": precision_average}
+        self.recall_params = {"task": "multiclass", "average": recall_average}
         
         self.val_metrics: Optional[MetricCollection] = None
         self.test_metrics: Optional[MetricCollection] = None
@@ -181,7 +193,7 @@ class ClassificationMetricsCallback(Callback):
         self.val_auroc_best = MaxMetric()
 
     def _init_metrics(self, num_classes: int, device: torch.device) -> MetricCollection:
-        """Initializes the MetricCollection with F1 and AUROC.
+        """Initializes the MetricCollection with F1, AUROC, Precision, and Recall.
 
         To add new metrics, simply add them to this dictionary.
 
@@ -196,7 +208,8 @@ class ClassificationMetricsCallback(Callback):
         metrics = MetricCollection({
             "f1": F1Score(num_classes=num_classes, **self.f1_params),
             "auroc": AUROC(num_classes=num_classes, **self.auroc_params),
-            # Add more metrics here in the future
+            "precision": Precision(num_classes=num_classes, **self.precision_params),
+            "recall": Recall(num_classes=num_classes, **self.recall_params),
         })
         return metrics.to(device)
 
