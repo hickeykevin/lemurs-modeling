@@ -21,6 +21,7 @@ for arg in "$@"; do
     arg=${arg/scaler_choice=/data/scaler=}
     arg=${arg/modalities_choice=/data.modalities=}
     arg=${arg/split_mode_choice=/data.split_mode=}
+    arg=${arg/resample_freq_choice=/++data.sampler.resample_freq=}
     
     # Only add LSTM-specific params if it's the 'health' model
     if [[ "$arg" == *"hidden_size_choice"* || "$arg" == *"num_layers_choice"* || "$arg" == *"lr_choice"* ]]; then
