@@ -115,7 +115,9 @@ def test_classification_metrics_callback():
     # Extract logged metrics from pl_module.log calls
     logged_keys = [call[0][0] for call in pl_module.log.call_args_list]
     assert "val/precision" in logged_keys
+    assert "val/precision_best" in logged_keys
     assert "val/recall" in logged_keys
+    assert "val/recall_best" in logged_keys
     assert "val/f1" in logged_keys
     assert "val/auroc" in logged_keys
 

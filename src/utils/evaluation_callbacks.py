@@ -191,6 +191,8 @@ class ClassificationMetricsCallback(Callback):
         # Track the best metrics over validation epochs
         self.val_f1_best = MaxMetric()
         self.val_auroc_best = MaxMetric()
+        self.val_precision_best = MaxMetric()
+        self.val_recall_best = MaxMetric()
 
     def _init_metrics(self, num_classes: int, device: torch.device) -> MetricCollection:
         """Initializes the MetricCollection with F1, AUROC, Precision, and Recall.
@@ -273,6 +275,16 @@ class ClassificationMetricsCallback(Callback):
                         self.val_auroc_best = self.val_auroc_best.to(pl_module.device)
                     self.val_auroc_best(value)
                     pl_module.log("val/auroc_best", self.val_auroc_best.compute(), sync_dist=True, prog_bar=True)
+                elif name == "precision":
+                    if self.val_precision_best.device != pl_module.device:
+                        self.val_precision_best = self.val_precision_best.to(pl_module.device)
+                    self.val_precision_best(value)
+                    pl_module.log("val/precision_best", self.val_precision_best.compute(), sync_dist=True, prog_bar=True)
+                elif name == "recall":
+                    if self.val_recall_best.device != pl_module.device:
+                        self.val_recall_best = self.val_recall_best.to(pl_module.device)
+                    self.val_recall_best(value)
+                    pl_module.log("val/recall_best", self.val_recall_best.compute(), sync_dist=True, prog_bar=True)
                     
             self.val_metrics.reset()
 
