@@ -121,3 +121,56 @@ def test_classification_metrics_callback():
     assert "val/f1" in logged_keys
     assert "val/auroc" in logged_keys
 
+
+def test_confusion_matrix_callback_logs_to_file(tmp_path):
+    # Arrange
+    callback = ConfusionMatrixCallback(frequency=1)
+    
+    trainer = MagicMock(spec=Trainer)
+    trainer.current_epoch = 2
+    trainer.loggers = []
+    trainer.log_dir = str(tmp_path)
+    
+    pl_module = MagicMock(spec=LightningModule)
+    pl_module.num_classes = 3
+    
+    outputs = {
+        "preds": torch.tensor([0, 1, 2, 0]),
+        "targets": torch.tensor([0, 1, 1, 2])
+    }
+    
+    # Act
+    callback.on_validation_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
+    callback.on_validation_epoch_end(trainer, pl_module)
+    
+    # Assert
+    log_file = tmp_path / "confusion_matrix.txt"
+    assert log_file.exists()
+    
+    content = log_file.read_text()
+    assert "=== Confusion Matrix (Validation Epoch 2) ===" in content
+    assert "Actual \\ Predicted" in content
+    assert "Class 0" in content
+    assert "Class 1" in content
+    assert "Class 2" in content
+    
+    # Assert that no ANSI escape sequences (like \x1b or escape brackets) are in the plain text output
+    assert "\x1b" not in content
+    assert "[3m" not in content
+    assert "[1;35m" not in content
+    
+    # Simulate a second epoch write to verify appending
+    trainer.current_epoch = 3
+    outputs_epoch3 = {
+        "preds": torch.tensor([1, 1, 1]),
+        "targets": torch.tensor([1, 1, 1])
+    }
+    callback.on_validation_batch_end(trainer, pl_module, outputs_epoch3, batch=None, batch_idx=0)
+    callback.on_validation_epoch_end(trainer, pl_module)
+    
+    content2 = log_file.read_text()
+    assert "=== Confusion Matrix (Validation Epoch 2) ===" in content2
+    assert "=== Confusion Matrix (Validation Epoch 3) ===" in content2
+    assert "\x1b" not in content2
+
+

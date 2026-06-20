@@ -108,10 +108,41 @@ class ConfusionMatrixCallback(Callback):
             row = [f"Class {i}"] + [str(cm_np[i, j]) for j in range(num_classes)]
             table.add_row(*row)
 
-        # Print to terminal
-        self.console.print("\n")
-        self.console.print(table)
-        self.console.print("\n")
+        # Capture the Rich table with color/style for terminal printing
+        with self.console.capture() as capture:
+            self.console.print(table)
+        table_text = capture.get()
+
+        # Print to terminal safely if tqdm is present, otherwise standard print
+        try:
+            from tqdm import tqdm
+            tqdm.write(table_text)
+        except ImportError:
+            self.console.print("\n")
+            self.console.print(table)
+            self.console.print("\n")
+
+        # Save confusion matrix to a file in the log directory
+        import os
+        log_dir = None
+        if hasattr(trainer, "log_dir") and isinstance(trainer.log_dir, str):
+            log_dir = trainer.log_dir
+        elif hasattr(trainer, "default_root_dir") and isinstance(trainer.default_root_dir, str):
+            log_dir = trainer.default_root_dir
+
+        if log_dir is not None:
+            # Capture a clean plain text table without ANSI colors/styles for file logging
+            clean_console = Console(no_color=True, force_terminal=False)
+            with clean_console.capture() as capture_clean:
+                clean_console.print(table)
+            clean_table_text = capture_clean.get()
+
+            os.makedirs(log_dir, exist_ok=True)
+            log_file_path = os.path.join(log_dir, "confusion_matrix.txt")
+            with open(log_file_path, "a", encoding="utf-8") as f:
+                f.write(f"\n=== Confusion Matrix (Validation Epoch {trainer.current_epoch}) ===\n")
+                f.write(clean_table_text)
+                f.write("\n")
 
         # Log to Wandb if WandbLogger is used
         from importlib.util import find_spec
