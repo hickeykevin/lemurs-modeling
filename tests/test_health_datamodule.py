@@ -485,20 +485,46 @@ def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     assert loss.dtype == torch.float32
 
     # 3. Verify regression metrics callback
-    callback = RegressionMetricsCallback()
-    outputs = model.validation_step(batch, 0)
+    callback = RegressionMetricsCallback(frequency=1)
     
-    # Simulate batch end
+    # Mock trainer and model logging
     trainer = MagicMock()
     trainer.sanity_checking = False
+    trainer.current_epoch = 1
+    
+    model.log = MagicMock()
+    
+    # Simulate epoch start
+    callback.on_validation_epoch_start(trainer, model)
+    
+    # Create outputs for a batch of size 2 with different target values (e.g. 1.0 and 2.0)
+    batch_preds = torch.tensor([1.5, 3.5])
+    batch_targets = torch.tensor([1.0, 2.0])
+    batch = (None, batch_targets, None)
+    outputs = {"loss": torch.tensor(0.5), "preds": batch_preds, "targets": batch_targets}
+    
+    # Simulate batch end
     callback.on_validation_batch_end(trainer, model, outputs, batch, 0)
     
-    # Compute metrics
-    metrics = callback._init_metrics(device=torch.device("cpu"))
-    metrics.update(outputs["preds"], outputs["targets"])
-    res = metrics.compute()
-    assert "mse" in res
-    assert "mae" in res
+    # Simulate epoch end
+    callback.on_validation_epoch_end(trainer, model)
+    
+    # Assert model.log was called for standard val/mse and val/mae (via metrics collection),
+    # plus val/mse_non_min and val/mae_non_min
+    # The minimum target is 1.0. The non-minimum targets are targets > 1.0 (which is [2.0]).
+    # Corresponding prediction is 3.5.
+    # Expected non-minimum MSE is (3.5 - 2.0)^2 = 2.25.
+    # Expected non-minimum MAE is |3.5 - 2.0| = 1.5.
+    model.log.assert_any_call("val/mse_non_min", torch.tensor(2.25), on_step=False, on_epoch=True, prog_bar=True)
+    model.log.assert_any_call("val/mae_non_min", torch.tensor(1.5), on_step=False, on_epoch=True, prog_bar=True)
+
+    # Also verify test hooks
+    callback.on_test_epoch_start(trainer, model)
+    callback.on_test_batch_end(trainer, model, outputs, batch, 0)
+    callback.on_test_epoch_end(trainer, model)
+    
+    model.log.assert_any_call("test/mse_non_min", torch.tensor(2.25), on_step=False, on_epoch=True, prog_bar=True)
+    model.log.assert_any_call("test/mae_non_min", torch.tensor(1.5), on_step=False, on_epoch=True, prog_bar=True)
 
 
 @patch('src.data.components.cohort_builder.DatabaseService')
