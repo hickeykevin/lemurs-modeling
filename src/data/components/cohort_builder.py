@@ -170,6 +170,9 @@ class CohortBuilder:
         Returns:
             Tuple of collapsed (survey_response_df, answer_df).
         """
+        if self.collapse_strategy == "none" or self.collapse_strategy is None:
+            return survey_response_df, answer_df
+
         if survey_response_df.empty or answer_df.empty:
             return survey_response_df, answer_df
 

@@ -34,6 +34,15 @@ The data pipeline configuration is split into modular sub-directories. You can s
   * [**`robust.yaml`**](scaler/robust.yaml): Scales features globally using statistics that are robust to outliers (using interquartile range).
   * [**`none.yaml`**](scaler/none.yaml): Bypasses feature scaling.
 
+### 🔄 Daily Survey Collapsing (`collapse_strategy`)
+When a user submits multiple survey responses on the same day, the data module collapses them to ensure a single representative target label per calendar day (except for `"none"`). Yes-no question styles are always aggregated using a conservative `max` strategy. All other question styles are collapsed using the configured `collapse_strategy`:
+* **`mean`** (default): Takes the average value across responses.
+* **`max`**: Takes the maximum value across responses.
+* **`min`**: Takes the minimum value across responses.
+* **`first`**: Takes the earliest response value of the day.
+* **`last`**: Takes the latest response value of the day.
+* **`none`**: Bypasses collapsing entirely, treating each survey submission as a separate, independent sample.
+
 ---
 
 ## 💡 CLI Override Examples

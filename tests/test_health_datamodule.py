@@ -749,5 +749,54 @@ def test_cohort_builder_collapsing_strategies(mock_db_class):
         assert q11_ans == expected_q11, f"Strategy {strat} failed for question 11: expected {expected_q11}, got {q11_ans}"
 
 
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_cohort_builder_no_collapsing(mock_db_class):
+    """Tests that CohortBuilder with collapse_strategy='none' preserves both survey responses."""
+    from src.data.components.cohort_builder import CohortBuilder
+    from src.data.components.label_aggregators import RuleBasedAggregator
+    
+    # 2 responses on same day for user 1
+    survey_df = pd.DataFrame({
+        'id': [101, 102],
+        'app_user_id': [1, 1],
+        'survey_id': [0, 0],
+        'timestamp': pd.to_datetime([
+            '2026-01-01 09:00:00',
+            '2026-01-01 17:00:00',
+        ])
+    })
+    
+    answer_df = pd.DataFrame([
+        {'survey_response_id': 101, 'question_id': 2, 'answer': '2'},
+        {'survey_response_id': 102, 'question_id': 2, 'answer': '4'},
+    ])
+    
+    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df}
+    
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table].copy()
+    
+    rules = [{'ids': [2], 'op': 'ge', 'val': 0}]
+    agg = RuleBasedAggregator(rules=rules, combination_logic="any")
+    
+    # Test strategy = 'none'
+    builder_none = CohortBuilder(
+        modalities=[],
+        modality_cols={},
+        preprocessors=None,
+        aggregator=agg,
+        os_filter='both',
+        collapse_strategy='none'
+    )
+    collapsed_sr, collapsed_ans = builder_none._collapse_daily_responses(survey_df, answer_df, mock_db)
+    
+    # Verify that the original responses and answers are kept intact (not collapsed)
+    assert len(collapsed_sr) == 2
+    assert 101 in collapsed_sr['id'].tolist()
+    assert 102 in collapsed_sr['id'].tolist()
+
+
+
 
 
