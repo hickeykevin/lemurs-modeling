@@ -18,15 +18,18 @@ class ConfusionMatrixCallback(Callback):
         frequency (int): How often to print the confusion matrix (e.g., 5 means every 5 epochs).
     """
 
-    def __init__(self, frequency: int = 1) -> None:
+    def __init__(self, frequency: int = 1, print_report: bool = True) -> None:
         """Initializes the ConfusionMatrixCallback.
 
         Args:
             frequency (int): How often to print the confusion matrix (e.g., 5 means every 5 epochs).
                 Defaults to 1 (every epoch).
+            print_report (bool): Whether to print the scikit-learn classification report.
+                Defaults to False.
         """
         super().__init__()
         self.frequency = frequency
+        self.print_report = print_report
         self.preds: List[torch.Tensor] = []
         self.targets: List[torch.Tensor] = []
         self.console = Console()
@@ -108,6 +111,22 @@ class ConfusionMatrixCallback(Callback):
             row = [f"Class {i}"] + [str(cm_np[i, j]) for j in range(num_classes)]
             table.add_row(*row)
 
+        report_text = ""
+        if self.print_report:
+            from sklearn.metrics import classification_report
+            y_true = all_targets.cpu().numpy()
+            y_pred = all_preds.cpu().numpy()
+            target_names = [f"Class {i}" for i in range(num_classes)]
+            labels = list(range(num_classes))
+            report = classification_report(
+                y_true, 
+                y_pred, 
+                labels=labels, 
+                target_names=target_names, 
+                zero_division=0
+            )
+            report_text = f"\n=== Classification Report (Validation Epoch {trainer.current_epoch}) ===\n{report}\n"
+
         # Capture the Rich table with color/style for terminal printing
         with self.console.capture() as capture:
             self.console.print(table)
@@ -117,10 +136,14 @@ class ConfusionMatrixCallback(Callback):
         try:
             from tqdm import tqdm
             tqdm.write(table_text)
+            if self.print_report:
+                tqdm.write(report_text)
         except ImportError:
             self.console.print("\n")
             self.console.print(table)
             self.console.print("\n")
+            if self.print_report:
+                self.console.print(report_text)
 
         # Save confusion matrix to a file in the log directory
         import os
@@ -143,6 +166,8 @@ class ConfusionMatrixCallback(Callback):
                 f.write(f"\n=== Confusion Matrix (Validation Epoch {trainer.current_epoch}) ===\n")
                 f.write(clean_table_text)
                 f.write("\n")
+                if self.print_report:
+                    f.write(report_text)
 
         # Log to Wandb if WandbLogger is used
         from importlib.util import find_spec
