@@ -7,5 +7,6 @@ rules:
     val: 1
   rule_2:
     ids: [11, 15, 16, 17, 18]
-    op: "any_eq"
-    val: 1
+    op: "any_gt"
+    val: 0
+

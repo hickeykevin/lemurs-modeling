@@ -364,16 +364,31 @@ class RegressionMetricsCallback(Callback):
     
     This callback updates metrics at each batch and logs them via the LightningModule 
     at the end of validation and test epochs.
+
+    Args:
+        frequency (int): How often to print/log the non-minimum metrics table (e.g., 5 means every 5 epochs).
     """
 
-    def __init__(self) -> None:
-        """Initializes the RegressionMetricsCallback."""
+    def __init__(self, frequency: int = 5) -> None:
+        """Initializes the RegressionMetricsCallback.
+
+        Args:
+            frequency (int): How often to print/log the non-minimum metrics table (e.g., 5 means every 5 epochs).
+                Defaults to 5 (every 5 epochs).
+        """
         super().__init__()
+        self.frequency = frequency
         self.val_metrics: Optional[MetricCollection] = None
         self.test_metrics: Optional[MetricCollection] = None
         
         # Track the best (lowest) validation MSE over epochs
         self.val_mse_best = MinMetric()
+
+        # Lists to collect targets and predictions for non-minimum metric calculations
+        self.val_preds: List[torch.Tensor] = []
+        self.val_targets: List[torch.Tensor] = []
+        self.test_preds: List[torch.Tensor] = []
+        self.test_targets: List[torch.Tensor] = []
 
     def _init_metrics(self, device: torch.device) -> MetricCollection:
         """Initializes the MetricCollection with MSE and MAE.
@@ -397,6 +412,8 @@ class RegressionMetricsCallback(Callback):
             return
         if self.val_metrics is not None:
             self.val_metrics.reset()
+        self.val_preds = []
+        self.val_targets = []
 
     def on_validation_batch_end(
         self, 
@@ -424,6 +441,11 @@ class RegressionMetricsCallback(Callback):
                 targets = targets.unsqueeze(0)
                 
             self.val_metrics.update(preds, targets)
+            
+            # Collect for epoch-end non-minimum metrics calculation only on matching epochs
+            if trainer.current_epoch % self.frequency == 0:
+                self.val_preds.append(preds.detach().cpu())
+                self.val_targets.append(targets.detach().cpu())
 
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Computes and logs validation metrics at the end of the epoch."""
@@ -443,6 +465,79 @@ class RegressionMetricsCallback(Callback):
                     pl_module.log("val/mse_best", self.val_mse_best.compute(), sync_dist=True, prog_bar=True)
                     
             self.val_metrics.reset()
+
+        if trainer.current_epoch % self.frequency != 0:
+            return
+
+        if self.val_preds:
+            all_preds = torch.cat(self.val_preds)
+            all_targets = torch.cat(self.val_targets)
+            
+            min_target = all_targets.min().item()
+            mask = all_targets > min_target
+            
+            if mask.any():
+                non_min_preds = all_preds[mask]
+                non_min_targets = all_targets[mask]
+                
+                mse_non_min = torch.mean((non_min_preds - non_min_targets) ** 2)
+                mae_non_min = torch.mean(torch.abs(non_min_preds - non_min_targets))
+                
+                # Log to pl_module
+                pl_module.log("val/mse_non_min", mse_non_min, on_step=False, on_epoch=True, prog_bar=True)
+                pl_module.log("val/mae_non_min", mae_non_min, on_step=False, on_epoch=True, prog_bar=True)
+                
+                # Print to stdout
+                count_non_min = mask.sum().item()
+                total_count = len(all_targets)
+                msg = (
+                    f"\n=== Regression Metrics for Targets > {min_target:.4f} (Validation Epoch {trainer.current_epoch}) ===\n"
+                    f"Samples: {count_non_min}/{total_count} ({count_non_min/total_count*100:.1f}%)\n"
+                    f"MSE: {mse_non_min.item():.4f}\n"
+                    f"MAE: {mae_non_min.item():.4f}\n"
+                    f"=========================================================================\n"
+                )
+                try:
+                    from tqdm import tqdm
+                    tqdm.write(msg)
+                except ImportError:
+                    print(msg)
+            else:
+                msg = (
+                    f"\n=== Regression Metrics (Validation Epoch {trainer.current_epoch}) ===\n"
+                    f"All validation targets are equal to the minimum value: {min_target:.4f}\n"
+                    f"Cannot calculate metrics for targets > min_target.\n"
+                    f"=========================================================================\n"
+                )
+                try:
+                    from tqdm import tqdm
+                    tqdm.write(msg)
+                except ImportError:
+                    print(msg)
+            
+            # Save non-minimum metrics to a file in the log directory
+            import os
+            log_dir = None
+            if hasattr(trainer, "log_dir") and isinstance(trainer.log_dir, str):
+                log_dir = trainer.log_dir
+            elif hasattr(trainer, "default_root_dir") and isinstance(trainer.default_root_dir, str):
+                log_dir = trainer.default_root_dir
+
+            if log_dir is not None:
+                os.makedirs(log_dir, exist_ok=True)
+                log_file_path = os.path.join(log_dir, "regression_metrics.txt")
+                with open(log_file_path, "a", encoding="utf-8") as f:
+                    f.write(msg)
+            
+            self.val_preds = []
+            self.val_targets = []
+
+    def on_test_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Resets metrics at the beginning of the test epoch."""
+        if self.test_metrics is not None:
+            self.test_metrics.reset()
+        self.test_preds = []
+        self.test_targets = []
 
     def on_test_batch_end(
         self, 
@@ -468,6 +563,10 @@ class RegressionMetricsCallback(Callback):
                 
             self.test_metrics.update(preds, targets)
 
+            # Collect for epoch-end non-minimum metrics calculation
+            self.test_preds.append(preds.detach().cpu())
+            self.test_targets.append(targets.detach().cpu())
+
     def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Computes and logs test metrics at the end of the epoch."""
         if self.test_metrics is not None:
@@ -476,4 +575,141 @@ class RegressionMetricsCallback(Callback):
             for name, value in output.items():
                 pl_module.log(f"test/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
             self.test_metrics.reset()
+
+        if self.test_preds:
+            all_preds = torch.cat(self.test_preds)
+            all_targets = torch.cat(self.test_targets)
+            
+            min_target = all_targets.min().item()
+            mask = all_targets > min_target
+            
+            if mask.any():
+                non_min_preds = all_preds[mask]
+                non_min_targets = all_targets[mask]
+                
+                mse_non_min = torch.mean((non_min_preds - non_min_targets) ** 2)
+                mae_non_min = torch.mean(torch.abs(non_min_preds - non_min_targets))
+                
+                # Log to pl_module
+                pl_module.log("test/mse_non_min", mse_non_min, on_step=False, on_epoch=True, prog_bar=True)
+                pl_module.log("test/mae_non_min", mae_non_min, on_step=False, on_epoch=True, prog_bar=True)
+                
+                # Print to stdout
+                count_non_min = mask.sum().item()
+                total_count = len(all_targets)
+                msg = (
+                    f"\n=== Regression Metrics for Targets > {min_target:.4f} (Test Epoch) ===\n"
+                    f"Samples: {count_non_min}/{total_count} ({count_non_min/total_count*100:.1f}%)\n"
+                    f"MSE: {mse_non_min.item():.4f}\n"
+                    f"MAE: {mae_non_min.item():.4f}\n"
+                    f"=========================================================================\n"
+                )
+                try:
+                    from tqdm import tqdm
+                    tqdm.write(msg)
+                except ImportError:
+                    print(msg)
+            else:
+                msg = (
+                    f"\n=== Regression Metrics (Test Epoch) ===\n"
+                    f"All test targets are equal to the minimum value: {min_target:.4f}\n"
+                    f"Cannot calculate metrics for targets > min_target.\n"
+                    f"=========================================================================\n"
+                )
+                try:
+                    from tqdm import tqdm
+                    tqdm.write(msg)
+                except ImportError:
+                    print(msg)
+            
+            # Save non-minimum metrics to a file in the log directory
+            import os
+            log_dir = None
+            if hasattr(trainer, "log_dir") and isinstance(trainer.log_dir, str):
+                log_dir = trainer.log_dir
+            elif hasattr(trainer, "default_root_dir") and isinstance(trainer.default_root_dir, str):
+                log_dir = trainer.default_root_dir
+
+            if log_dir is not None:
+                os.makedirs(log_dir, exist_ok=True)
+                log_file_path = os.path.join(log_dir, "regression_metrics.txt")
+                with open(log_file_path, "a", encoding="utf-8") as f:
+                    f.write(msg)
+
+            self.test_preds = []
+            self.test_targets = []
+
+
+class TargetDistributionCallback(Callback):
+    """A Lightning callback that logs the distribution of targets/answers to WandB.
+    
+    Logs a histogram of the target values exactly once during the first validation run.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.targets: List[torch.Tensor] = []
+        self.has_logged = False
+
+    def on_validation_batch_end(
+        self, 
+        trainer: Trainer, 
+        pl_module: LightningModule, 
+        outputs: Optional[Dict[str, torch.Tensor]], 
+        batch: Any, 
+        batch_idx: int, 
+        dataloader_idx: int = 0
+    ) -> None:
+        if trainer.sanity_checking or self.has_logged:
+            return
+
+        if outputs is not None and "targets" in outputs:
+            self.targets.append(outputs["targets"].detach().cpu())
+
+    def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        if trainer.sanity_checking or self.has_logged:
+            return
+
+        if not self.targets:
+            return
+
+        # Concatenate all targets
+        all_targets = torch.cat(self.targets).numpy().flatten()
+        
+        # Log to Wandb if WandbLogger is used
+        from importlib.util import find_spec
+        if find_spec("wandb"):
+            import wandb
+            from lightning.pytorch.loggers.wandb import WandbLogger
+
+            for logger in trainer.loggers:
+                if isinstance(logger, WandbLogger):
+                    import matplotlib.pyplot as plt
+                    import io
+                    from PIL import Image
+                    
+                    # Create the matplotlib histogram
+                    plt.figure(figsize=(8, 6))
+                    plt.hist(all_targets, bins=30, color='skyblue', edgecolor='black', alpha=0.8)
+                    plt.title("Validation Target Distribution", fontsize=14)
+                    plt.xlabel("Target Value", fontsize=12)
+                    plt.ylabel("Count", fontsize=12)
+                    plt.grid(axis='y', alpha=0.3)
+                    
+                    # Save plot to an in-memory buffer and convert to PIL Image
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format='png', bbox_inches='tight')
+                    buf.seek(0)
+                    img = Image.open(buf)
+                    plt.close()
+                    
+                    logger.experiment.log({
+                        "val/target_distribution": wandb.Image(img, caption="Validation Target Distribution"),
+                    })
+                    self.has_logged = True
+        
+        # Reset targets list
+        self.targets = []
+
+
 

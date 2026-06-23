@@ -1,2 +1,2 @@
 _target_: src.data.components.samplers.BlockSampler
-lookback_days: 2
+lookback_days: 3

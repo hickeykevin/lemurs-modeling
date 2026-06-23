@@ -136,6 +136,8 @@ class RuleBasedAggregator(LabelAggregator):
                 condition = (pivoted[ids] >= val).any(axis=1)
             elif op == "any_eq":
                 condition = (pivoted[ids] == val).any(axis=1)
+            elif op == "any_gt":
+                condition = (pivoted[ids] > val).any(axis=1)
             else:
                 raise ValueError(f"Unknown operation: {op}")
 

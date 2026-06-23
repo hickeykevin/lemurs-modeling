@@ -1,24 +1,39 @@
 # W&B Sweep Configuration
-name: health_hyperparameter_sweep
+name: regression_hyperparameter_sweep
 project: lemurs-modeling
 method: grid
 metric:
-  name: val/f1
-  goal: maximize
+  name: val/mse
+  goal: minimize
 
 parameters:
-  # Sweep variables
-  model_choice:
-    values: [health, majority, lag, flaml]
-  aggregator_choice:
-    values: [suicide_risk, self_harm, negative_emotion, positive_emotion, emotion_regulation, minority_stress, social_connection, social_stress]
-  sampler_choice:
-    values: [block, daily, lag, offset, rolling_hour]
+  data/aggregator:
+    values: [positive_emotion_regression, self_harm_regression, suicide_risk_regression]
+  data/scaler:
+    values: [standard, subject_standard]
+  data/sampler:
+    values: [block, offset]
+  ++data.sampler.resample_freq:
+    values: [4h, 6h, 12h]
+  data.os_filter:
+    values: [ios, both]
+  data.collapse_strategy:
+    values: [mean, last, none]
+  ++data.sampler.lookback_days:
+    values: [3, 5, 7]
+  ++data.sampler.start_offset_hours:
+    values: [-72, -120, -168]
   
-  split_mode_choice:
-    values: [user, longitudinal]
-  
+
 command:
-  - bash
-  - scripts/sweep_wrapper.sh
+  - python
+  - src/train.py
+  - "++data.sampler.end_offset_hours=0"
+  - "data.modalities=[step]"
+  - "data/preprocessors=[step]"
+  - "trainer.max_epochs=75"
+  - "callbacks=[regression_metrics,target_distribution]"
+  - "logger.wandb.group=regression_sweep"
+  - "logger=[csv,wandb]"
+  - "model=regression"
   - ${args_no_hyphens}

@@ -1,0 +1,32 @@
+# W&B Sweep Configuration
+name: classification_hyperparameter_sweep
+project: lemurs-modeling
+method: grid
+metric:
+  name: val/f1
+  goal: maximize
+
+parameters:
+  aggregator_choice:
+    values: [emotion_regulation, minority_stress, negative_emotion, positive_emotion, self_harm, social_connection, social_stress, suicide_risk]
+  scaler_choice:
+    values: [standard, subject_standard]
+  sampler_choice:
+    values: [block, offset]
+  resample_freq_choice:
+    values: [4h, 6h, 12h]
+
+command:
+  - bash
+  - scripts/sweep_wrapper.sh
+  - "++data.sampler.lookback_days=3"
+  - "++data.sampler.start_offset_hours=-72"
+  - "++data.sampler.end_offset_hours=0"
+  - "data.modalities=[step]"
+  - "data/preprocessors=[step]"
+  - "trainer.max_epochs=75"
+  - "callbacks=[classification_metrics,confusion_matrix,target_distribution]"
+  - "logger.wandb.group=classification_sweep"
+  - "logger=[csv,wandb]"
+  - "model=default"
+  - ${args_no_hyphens}

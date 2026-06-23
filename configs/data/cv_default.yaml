@@ -17,3 +17,5 @@ num_workers: 1
 pin_memory: False
 random_state: ${seed}
 os_filter: ios # both, ios, android
+collapse_strategy: mean
+

@@ -3,4 +3,5 @@ automl_config:
   time_budget: 30  # total time in seconds
   metric: 'accuracy'
   estimator_list: ['lgbm', 'rf', 'xgboost', 'extra_tree']
+  n_jobs: 1
 task: 'classification'
