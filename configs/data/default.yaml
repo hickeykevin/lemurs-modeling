@@ -6,7 +6,7 @@ defaults:
   - preprocessors: [step]
 
 _target_: src.data.health_datamodule.HealthDataModule
-modalities: ["step", "calorie"]
+modalities: ["step"]
 
 batch_size: 16
 train_val_test_split: [0.7, 0.15, 0.15]
@@ -14,6 +14,6 @@ num_workers: 1
 pin_memory: False
 random_state: ${seed}
 split_mode: longitudinal # random, user, longitudinal
-os_filter: ios # both, ios, android
-collapse_strategy: mean
+os_filter: both # both, ios, android
+collapse_strategy: mean #mean, max, min, first, last, none
 
