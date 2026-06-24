@@ -11,6 +11,7 @@ We use the `RuleBasedAggregator` class to translate clinical criteria into logic
 ### Available Operators
 *   `ge`: Greater than or equal to (e.g., at least one answer in the set is $\ge X$).
 *   `any_eq`: Any equal to (e.g., at least one answer is exactly $X$).
+*   `any_gt`: Any greater than (e.g., at least one answer in the set is $> X$).
 *   `sum`: Sums up scores of all questions in the set and compares to a threshold.
 *   `mean`: Computes the mean score of questions and compares to a threshold.
 

@@ -98,3 +98,15 @@ uv run src/cv_train.py model=default data=default data.num_folds=5
 ```bash
 uv run src/eval.py model=default data=default ckpt_path=/path/to/checkpoint.ckpt
 ```
+
+#### Re-using Configuration from a Previous Run
+To evaluate a checkpoint using the exact configuration used during its training (to avoid parameter mismatch), you can point Hydra directly to the run's saved config directory using the `--config-dir` and `--config-name` flags:
+
+```bash
+uv run src/eval.py \
+  --config-dir logs/train/runs/<run_timestamp>/.hydra \
+  --config-name config \
+  ckpt_path=logs/train/runs/<run_timestamp>/checkpoints/last.ckpt
+```
+
+You can append any additional evaluation-time overrides at the end of the command. Since the saved configuration is already composed, you must use the `+` prefix and surround the list in quotes to prevent shell parsing/globbing issues (e.g., `"+callbacks=[classification_metrics,confusion_matrix]"`).

@@ -66,6 +66,7 @@ For more detailed guides on core modules, refer to:
 * 📊 [src/data/README.md](src/data/README.md) - Pipeline architecture & DataModules
 * 🧠 [src/models/README.md](src/models/README.md) - Class hierarchy & Neural Networks
 * 🛠️ [src/utils/README.md](src/utils/README.md) - Helper utilities & Callbacks
+* 💻 [src/README.md](src/README.md) - Entrypoint scripts usage & GUI guide
 
 ---
 
@@ -296,14 +297,14 @@ Run the experiment with:
 uv run src/train.py experiment=lstm_health
 ```
 
-### 4. Hyperparameter Sweeps with Optuna
+### 5. Hyperparameter Sweeps with Optuna
 To search for the best learning rates, batch sizes, and model shapes automatically, run a multi-run sweep using the Optuna optimizer plugin:
 ```bash
 uv run src/train.py -m hparams_search=health_optuna experiment=lstm_health
 ```
 Optuna dynamically executes trials based on the search space defined in `configs/hparams_search/health_optuna.yaml` and logs the best trial configuration to your run logs.
 
-### 5. Cross-Validation (Group K-Fold)
+### 6. Cross-Validation (Group K-Fold)
 
 For robust evaluation on longitudinal health data, you can run Group K-Fold cross validation grouped by `app_user_id` (ensuring disjoint user populations across train, validation, and test splits).
 
@@ -318,7 +319,7 @@ uv run python src/cv_train.py data.num_folds=-1
 
 All folds are logged under a single run prefix (e.g., logging to WandB or local CSV), with fold-specific metrics formatted as `val/loss_fold_0` and aggregated final statistics logged at the end as `val/loss_mean` and `val/loss_std`.
 
-### 6. Distributed Training & Cluster Submissions
+### 7. Distributed Training & Cluster Submissions
 For large-scale training across multiple GPUs or cluster nodes:
 ```bash
 # Train on 4 GPUs with Distributed Data Parallel (DDP)
@@ -330,7 +331,7 @@ To submit runs to a **SLURM cluster**, use our wrapper configs or batch submit s
 sbatch scripts/run_sweep.sbatch
 ```
 
-### 7. Debugging & Troubleshooting
+### 8. Debugging & Troubleshooting
 
 To troubleshoot bugs in your models, data pipelines, or training loops, you can combine interactive debugging with quick trial-run configurations:
 
@@ -360,4 +361,29 @@ Running a full dataset or training run takes time. You can use Hydra's debug con
     uv run src/train.py debug=overfit
     ```
 
+### 9. Model Evaluation & Testing
+
+To evaluate a trained model checkpoint (`.ckpt`) on the test dataset split, use `src/eval.py`.
+
+#### Standard Evaluation
+By default, you can evaluate a checkpoint using:
+```bash
+uv run src/eval.py model=default data=default ckpt_path=/path/to/checkpoint.ckpt
+```
+
+#### Re-using Configuration from a Previous Run
+To evaluate a checkpoint using the **exact configuration** used during its training (to avoid parameter mismatches or having to manually specify every configuration value), point Hydra directly to the run's saved config directory (typically located in the `.hydra/` subdirectory inside the timestamped training run folder) using the `--config-dir` and `--config-name` flags:
+
+```bash
+uv run src/eval.py \
+  --config-dir logs/train/runs/<run_timestamp>/.hydra \
+  --config-name config \
+  ckpt_path=logs/train/runs/<run_timestamp>/checkpoints/last.ckpt
+```
+
+> [!NOTE]
+> *   `config.yaml` is the complete composed config saved under `.hydra/`, so we pass `--config-name config`.
+> *   Since the saved configuration is already composed, you must use the `+` prefix and quotes to append/override callbacks groups (e.g., `"+callbacks=[classification_metrics,confusion_matrix]"`). without the quotes, shells like `zsh` will fail with pattern matching errors.
+
 ---
+

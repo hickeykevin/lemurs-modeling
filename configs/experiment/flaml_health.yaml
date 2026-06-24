@@ -1,21 +1,29 @@
 # @package _global_
 
 # to execute this experiment run:
-# python train.py experiment=flaml_suicide
+# python train.py experiment=flaml_health
 
 defaults:
-  - override /data: health
+  - override /data: default
+  - override /data/preprocessors: [step]
   - override /model: flaml
   - override /callbacks: [classification_metrics,confusion_matrix]
   - override /trainer: cpu
+  - override /logger: csv
 
 tags: ["health", "flaml"]
 
-seed: 12345
+seed: 42
 
 trainer:
   min_epochs: 1
   max_epochs: 1
 
+callbacks:
+  confusion_matrix:
+    frequency: 1
+
 data:
-  batch_size: 16
+  os_filter: both
+  collapse_strategy: mean  
+  modalities: ["step"]

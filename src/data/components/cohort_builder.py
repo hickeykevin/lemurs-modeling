@@ -18,7 +18,8 @@ class CohortBuilder:
         modality_cols: Dict[str, str],
         preprocessors: Optional[Dict[str, Any]],
         aggregator: LabelAggregator,
-        os_filter: Optional[Literal["ios", "android", "both"]] = "both"
+        os_filter: Optional[Literal["ios", "android", "both"]] = "both",
+        collapse_strategy: str = "mean"
     ):
         """Initializes the CohortBuilder.
 
@@ -28,12 +29,14 @@ class CohortBuilder:
             preprocessors: Map of modality names to preprocessor callables.
             aggregator: Strategy object for binarizing/aggregating daily survey responses.
             os_filter: Operating system filter mode ("ios", "android", or "both").
+            collapse_strategy: Aggregation strategy to collapse multiple daily survey responses for non-yes-no questions.
         """
         self.modalities = modalities
         self.modality_cols = modality_cols
         self.preprocessors = preprocessors
         self.aggregator = aggregator
         self.os_filter = os_filter
+        self.collapse_strategy = collapse_strategy
 
     def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
         """Orchestrates the entire cohort building pipeline.
@@ -121,6 +124,12 @@ class CohortBuilder:
         survey_response_df = db.extract_from_database("survey_response")
         survey_response_df['timestamp'] = pd.to_datetime(survey_response_df["timestamp"]).astype("datetime64[ns]")
 
+        # Filter out duplicate responses submitted in quick succession
+        survey_response_df, answer_df = self._filter_duplicate_responses(survey_response_df, answer_df)
+
+        # Collapse multiple survey responses per user per day
+        survey_response_df, answer_df = self._collapse_daily_responses(survey_response_df, answer_df, db)
+
         # Extract only question IDs required by the chosen aggregator
         question_ids = self.aggregator.get_question_ids()
         target_answers = answer_df[answer_df['question_id'].isin(question_ids)].copy()
@@ -144,6 +153,166 @@ class CohortBuilder:
         ).rename(columns={'timestamp': 'record_timestamp'})
         
         return master_df
+
+    def _collapse_daily_responses(
+        self, survey_response_df: pd.DataFrame, answer_df: pd.DataFrame, db: DatabaseService
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Collapses multiple survey responses for the same user on the same calendar day into a single response.
+
+        Yes-no questions are aggregated using 'max' (conservative).
+        All other questions are aggregated using 'mean'.
+
+        Args:
+            survey_response_df: Dataframe of survey responses.
+            answer_df: Dataframe of answers.
+            db: Connected DatabaseService instance.
+
+        Returns:
+            Tuple of collapsed (survey_response_df, answer_df).
+        """
+        if self.collapse_strategy == "none" or self.collapse_strategy is None:
+            return survey_response_df, answer_df
+
+        if survey_response_df.empty or answer_df.empty:
+            return survey_response_df, answer_df
+
+        # Get question styles to identify yes-no questions
+        try:
+            question_df = db.extract_from_database("question")
+            yes_no_qids = set(question_df[question_df['style'] == 'yes-no']['id'])
+        except Exception:
+            # Fallback to standard yes-no question IDs from the schema if query fails
+            yes_no_qids = {8, 11, 12, 13, 15, 16, 17, 18}
+
+        # Work on copies
+        sr = survey_response_df.copy()
+        sr['timestamp'] = pd.to_datetime(sr['timestamp']).astype('datetime64[ns]')
+        sr['date'] = sr['timestamp'].dt.date
+
+        # Clean/coerce answers to numeric
+        ans = answer_df.copy()
+        ans['answer_clean'] = ans['answer'].astype(str).str.strip().str.lower()
+        mapped_vals = ans['answer_clean'].map({'yes': 1.0, 'no': 0.0})
+        ans['answer_numeric'] = mapped_vals.fillna(pd.to_numeric(ans['answer_clean'], errors='coerce'))
+        ans = ans.dropna(subset=['answer_numeric'])
+
+        # Merge answers with survey response to obtain app_user_id and date
+        merged = pd.merge(ans, sr[['id', 'app_user_id', 'date']], left_on='survey_response_id', right_on='id')
+
+        # Find the latest survey response ID per user-date to act as the daily representative
+        latest_sr = sr.sort_values('timestamp').groupby(['app_user_id', 'date']).last().reset_index()
+
+        # Group by app_user_id, date, question_id and aggregate
+        is_yes_no = merged['question_id'].isin(yes_no_qids)
+        
+        merged_yn = merged[is_yes_no]
+        merged_other = merged[~is_yes_no]
+        
+        agg_yn = merged_yn.groupby(['app_user_id', 'date', 'question_id'])['answer_numeric'].max().reset_index() if not merged_yn.empty else pd.DataFrame(columns=['app_user_id', 'date', 'question_id', 'answer_numeric'])
+        agg_other = merged_other.groupby(['app_user_id', 'date', 'question_id'])['answer_numeric'].agg(self.collapse_strategy).reset_index() if not merged_other.empty else pd.DataFrame(columns=['app_user_id', 'date', 'question_id', 'answer_numeric'])
+        
+        collapsed_ans = pd.concat([agg_yn, agg_other], ignore_index=True)
+        
+        # Link daily aggregated answers to the representative survey_response_id
+        collapsed_ans = pd.merge(
+            collapsed_ans,
+            latest_sr[['app_user_id', 'date', 'id']],
+            on=['app_user_id', 'date']
+        ).rename(columns={'id': 'survey_response_id', 'answer_numeric': 'answer'})
+
+        # Keep only the representative survey responses in the main dataframe
+        collapsed_sr = latest_sr.drop(columns=['date'])
+        
+        # Recreate sequential id column
+        collapsed_ans['id'] = range(len(collapsed_ans))
+        collapsed_ans = collapsed_ans[['id', 'survey_response_id', 'question_id', 'answer']]
+        
+        # Log summary
+        orig_count = len(survey_response_df)
+        new_count = len(collapsed_sr)
+        if orig_count > new_count:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Collapsed {orig_count} survey responses into {new_count} unique daily samples per user."
+            )
+
+        return collapsed_sr, collapsed_ans
+
+    def _filter_duplicate_responses(
+        self, survey_response_df: pd.DataFrame, answer_df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Filters out duplicate survey responses submitted in quick succession (within 10 minutes)
+        by the same user for the same survey type with identical answers.
+
+        Args:
+            survey_response_df: Dataframe of survey responses.
+            answer_df: Dataframe of answers.
+
+        Returns:
+            Tuple of filtered (survey_response_df, answer_df).
+        """
+        if survey_response_df.empty or answer_df.empty:
+            return survey_response_df, answer_df
+
+        # Ensure timestamps are datetime
+        sr = survey_response_df.copy()
+        sr['timestamp'] = pd.to_datetime(sr['timestamp']).astype('datetime64[ns]')
+        
+        # Determine sorting and grouping keys (survey_id is optional to support mock schemas)
+        groupby_cols = ['app_user_id']
+        if 'survey_id' in sr.columns:
+            groupby_cols.append('survey_id')
+            
+        duplicate_ids = set()
+        
+        # Group answers by survey_response_id for O(1) comparison
+        import collections
+        ans_by_sr = collections.defaultdict(dict)
+        for _, row in answer_df.iterrows():
+            sr_id = row['survey_response_id']
+            q_id = row['question_id']
+            val = row['answer']
+            ans_by_sr[sr_id][q_id] = val
+            
+        for _, group in sr.groupby(groupby_cols):
+            # Sort responses chronologically
+            sorted_group = group.sort_values('timestamp')
+            
+            last_kept_id = None
+            last_kept_time = None
+            
+            for _, row in sorted_group.iterrows():
+                curr_id = row['id']
+                curr_time = row['timestamp']
+                
+                if last_kept_id is None:
+                    last_kept_id = curr_id
+                    last_kept_time = curr_time
+                    continue
+                    
+                time_diff = curr_time - last_kept_time
+                
+                if time_diff <= pd.Timedelta(minutes=10):
+                    ans_prev = ans_by_sr.get(last_kept_id, {})
+                    ans_curr = ans_by_sr.get(curr_id, {})
+                    
+                    if ans_prev == ans_curr:
+                        duplicate_ids.add(curr_id)
+                        continue
+                        
+                # Not a duplicate, update reference points
+                last_kept_id = curr_id
+                last_kept_time = curr_time
+                
+        if duplicate_ids:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Filtering out {len(duplicate_ids)} duplicate survey responses submitted within 10 minutes with identical answers."
+            )
+            survey_response_df = survey_response_df[~survey_response_df['id'].isin(duplicate_ids)]
+            answer_df = answer_df[~answer_df['survey_response_id'].isin(duplicate_ids)]
+            
+        return survey_response_df, answer_df
 
     def _apply_os_filtering(self, master_df: pd.DataFrame, modality_dfs: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         """Filters target labels to keep only users on the specified operating system.

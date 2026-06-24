@@ -7,20 +7,26 @@ metric:
   goal: minimize
 
 parameters:
-  aggregator_choice:
-    values: [emotion_regulation_regression, minority_stress_regression, negative_emotion_regression, positive_emotion_regression, self_harm_regression, social_connection_regression, social_stress_regression, suicide_risk_regression]
-  scaler_choice:
+  data/aggregator:
+    values: [positive_emotion_regression, self_harm_regression, suicide_risk_regression]
+  data/scaler:
     values: [standard, subject_standard]
-  sampler_choice:
+  data/sampler:
     values: [block, offset]
-  resample_freq_choice:
+  ++data.sampler.resample_freq:
     values: [4h, 6h, 12h]
+  data.os_filter:
+    values: [ios, both]
+  data.collapse_strategy:
+    values: [mean, last, none]
+  ++data.sampler.lookback_days:
+    values: [3, 5, 7]
+  ++data.sampler.start_offset_hours:
+    values: [-72, -120, -168]
 
 command:
-  - bash
-  - scripts/regression_sweep_wrapper.sh
-  - "++data.sampler.lookback_days=3"
-  - "++data.sampler.start_offset_hours=-72"
+  - python
+  - src/train.py
   - "++data.sampler.end_offset_hours=0"
   - "data.modalities=[step]"
   - "data/preprocessors=[step]"

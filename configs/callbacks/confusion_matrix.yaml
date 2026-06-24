@@ -1,3 +1,4 @@
 confusion_matrix:
   _target_: src.utils.evaluation_callbacks.ConfusionMatrixCallback
   frequency: 10
+  print_report: true
