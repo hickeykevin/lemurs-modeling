@@ -213,7 +213,7 @@ def test_classification_metrics_callback_test_stage():
     assert "test/precision_var" in logged_keys
 
 
-def test_regression_metrics_callback_test_stage():
+def test_regression_metrics_callback_test_stage(tmp_path):
     from src.utils.evaluation_callbacks import RegressionMetricsCallback
     
     # Arrange
@@ -221,6 +221,7 @@ def test_regression_metrics_callback_test_stage():
     
     trainer = MagicMock(spec=Trainer)
     trainer.loggers = []
+    trainer.log_dir = str(tmp_path)
     
     pl_module = MagicMock(spec=LightningModule)
     pl_module.device = torch.device("cpu")
@@ -256,6 +257,109 @@ def test_regression_metrics_callback_test_stage():
     assert "test/mae_non_min_mean" in logged_keys
     assert "test/mae_non_min_std" in logged_keys
     assert "test/mae_non_min_var" in logged_keys
+
+    # Check file output
+    log_file = tmp_path / "regression_metrics.txt"
+    assert log_file.exists()
+    content = log_file.read_text()
+    assert "=== Overall Regression Metrics (Test Epoch) ===" in content
+    assert "MSE Mean:" in content
+    assert "=== Regression Metrics for Targets > 1.2000 (Test Epoch) ===" in content
+
+
+def test_confusion_matrix_callback_test_stage_no_logger():
+    # Arrange
+    callback = ConfusionMatrixCallback(frequency=1)
+    
+    trainer = MagicMock(spec=Trainer)
+    trainer.current_epoch = 0
+    trainer.loggers = []
+    
+    pl_module = MagicMock(spec=LightningModule)
+    pl_module.num_classes = 3
+    
+    outputs = {
+        "preds": torch.tensor([0, 1, 2, 0]),
+        "targets": torch.tensor([0, 1, 1, 2])
+    }
+    
+    # Act & Assert
+    callback.on_test_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
+    callback.on_test_epoch_end(trainer, pl_module)
+
+
+def test_confusion_matrix_callback_test_stage_with_wandb():
+    # Arrange
+    callback = ConfusionMatrixCallback(frequency=1)
+    
+    trainer = MagicMock(spec=Trainer)
+    trainer.current_epoch = 0
+    
+    # Mock WandbLogger and its experiment property
+    wandb_logger = MagicMock(spec=WandbLogger)
+    mock_experiment = MagicMock()
+    type(wandb_logger).experiment = property(lambda self: mock_experiment)
+    
+    trainer.loggers = [wandb_logger]
+    
+    pl_module = MagicMock(spec=LightningModule)
+    pl_module.num_classes = 3
+    
+    outputs = {
+        "preds": torch.tensor([0, 1, 2, 0]),
+        "targets": torch.tensor([0, 1, 1, 2])
+    }
+    
+    # Act
+    callback.on_test_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
+    callback.on_test_epoch_end(trainer, pl_module)
+    
+    # Assert
+    mock_experiment.log.assert_called_once()
+    logged_dict = mock_experiment.log.call_args[0][0]
+    
+    assert "test/confusion_matrix" in logged_dict
+    assert "test/confusion_matrix_table" in logged_dict
+    
+    table = logged_dict["test/confusion_matrix_table"]
+    assert table.columns == ["Actual \\ Predicted", "P0", "P1", "P2"]
+    assert table.data[0] == ["Class 0", 1, 0, 0]
+    assert table.data[1] == ["Class 1", 0, 1, 1]
+    assert table.data[2] == ["Class 2", 1, 0, 0]
+
+
+def test_confusion_matrix_callback_test_stage_logs_to_file(tmp_path):
+    # Arrange
+    callback = ConfusionMatrixCallback(frequency=1)
+    
+    trainer = MagicMock(spec=Trainer)
+    trainer.current_epoch = 2
+    trainer.loggers = []
+    trainer.log_dir = str(tmp_path)
+    
+    pl_module = MagicMock(spec=LightningModule)
+    pl_module.num_classes = 3
+    
+    outputs = {
+        "preds": torch.tensor([0, 1, 2, 0]),
+        "targets": torch.tensor([0, 1, 1, 2])
+    }
+    
+    # Act
+    callback.on_test_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
+    callback.on_test_epoch_end(trainer, pl_module)
+    
+    # Assert
+    log_file = tmp_path / "confusion_matrix.txt"
+    assert log_file.exists()
+    
+    content = log_file.read_text()
+    assert "=== Confusion Matrix (Test) ===" in content
+    assert "Actual \\ Predicted" in content
+    assert "Class 0" in content
+    assert "Class 1" in content
+    assert "Class 2" in content
+
 
 
 

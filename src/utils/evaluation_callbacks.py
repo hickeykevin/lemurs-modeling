@@ -62,16 +62,8 @@ class ConfusionMatrixCallback(Callback):
             self.preds.append(outputs["preds"].detach().cpu())
             self.targets.append(outputs["targets"].detach().cpu())
 
-    def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        """Computes and prints the confusion matrix at the end of the validation epoch.
-
-        Args:
-            trainer (Trainer): The Lightning trainer object.
-            pl_module (LightningModule): The Lightning module being validated.
-        """
-        if trainer.current_epoch % self.frequency != 0:
-            return
-
+    def _print_and_log_confusion_matrix(self, trainer: Trainer, pl_module: LightningModule, stage: str) -> None:
+        """Computes, prints, and logs the confusion matrix for validation or test stage."""
         if not self.preds:
             return
 
@@ -94,9 +86,12 @@ class ConfusionMatrixCallback(Callback):
         cm = cm_metric(all_preds, all_targets)
         cm_np = cm.numpy().astype(int)
 
+        stage_title = "Validation" if stage == "val" else "Test"
+        epoch_info = f" Epoch {trainer.current_epoch}" if stage == "val" else ""
+
         # Create a Rich table for display
         table = Table(
-            title=f"Confusion Matrix (Validation Epoch {trainer.current_epoch})",
+            title=f"Confusion Matrix ({stage_title}{epoch_info})",
             box=box.ROUNDED,
             show_header=True,
             header_style="bold magenta",
@@ -126,7 +121,7 @@ class ConfusionMatrixCallback(Callback):
                 target_names=target_names, 
                 zero_division=0
             )
-            report_text = f"\n=== Classification Report (Validation Epoch {trainer.current_epoch}) ===\n{report}\n"
+            report_text = f"\n=== Classification Report ({stage_title}{epoch_info}) ===\n{report}\n"
 
         # Capture the Rich table with color/style for terminal printing
         with self.console.capture() as capture:
@@ -164,7 +159,7 @@ class ConfusionMatrixCallback(Callback):
             os.makedirs(log_dir, exist_ok=True)
             log_file_path = os.path.join(log_dir, "confusion_matrix.txt")
             with open(log_file_path, "a", encoding="utf-8") as f:
-                f.write(f"\n=== Confusion Matrix (Validation Epoch {trainer.current_epoch}) ===\n")
+                f.write(f"\n=== Confusion Matrix ({stage_title}{epoch_info}) ===\n")
                 f.write(clean_table_text)
                 f.write("\n")
                 if self.print_report:
@@ -186,7 +181,7 @@ class ConfusionMatrixCallback(Callback):
                         y_true=all_targets.cpu().numpy(),
                         preds=all_preds.cpu().numpy(),
                         class_names=class_names,
-                        title=f"Confusion Matrix (Val Epoch {trainer.current_epoch})"
+                        title=f"Confusion Matrix ({stage_title}{epoch_info})"
                     )
                     
                     # Log as a wandb Table (matrix grid representation)
@@ -198,13 +193,37 @@ class ConfusionMatrixCallback(Callback):
                     wandb_table = wandb.Table(data=table_data, columns=columns)
                     
                     logger.experiment.log({
-                        "val/confusion_matrix": cm_plot,
-                        "val/confusion_matrix_table": wandb_table
+                        f"{stage}/confusion_matrix": cm_plot,
+                        f"{stage}/confusion_matrix_table": wandb_table
                     })
         
         # Reset collections for the next validation epoch
         self.preds = []
         self.targets = []
+
+    def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Computes and prints the confusion matrix at the end of the validation epoch."""
+        if trainer.current_epoch % self.frequency != 0:
+            return
+        self._print_and_log_confusion_matrix(trainer, pl_module, stage="val")
+
+    def on_test_batch_end(
+        self, 
+        trainer: Trainer, 
+        pl_module: LightningModule, 
+        outputs: Optional[Dict[str, torch.Tensor]], 
+        batch: Any, 
+        batch_idx: int, 
+        dataloader_idx: int = 0
+    ) -> None:
+        """Collects predictions and targets from the test batch."""
+        if outputs is not None and "preds" in outputs and "targets" in outputs:
+            self.preds.append(outputs["preds"].detach().cpu())
+            self.targets.append(outputs["targets"].detach().cpu())
+
+    def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Computes and prints the confusion matrix at the end of the test epoch."""
+        self._print_and_log_confusion_matrix(trainer, pl_module, stage="test")
 
 
 class ClassificationMetricsCallback(Callback):
@@ -629,6 +648,7 @@ class RegressionMetricsCallback(Callback):
 
     def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Computes and logs test metrics at the end of the epoch."""
+        overall_msg = ""
         if self.test_metrics is not None:
             output = self.test_metrics.compute()
             # Log all metrics in the collection
@@ -638,8 +658,29 @@ class RegressionMetricsCallback(Callback):
                     var_name = name[:-4] + "_var"
                     var_value = value ** 2
                     pl_module.log(f"test/{var_name}", var_value, on_step=False, on_epoch=True, prog_bar=True)
+            
+            # Extract standard metrics for stdout/file logging
+            mse_mean = output.get("mse_mean")
+            mse_std = output.get("mse_std")
+            mae_mean = output.get("mae_mean")
+            mae_std = output.get("mae_std")
+            
+            if mse_mean is not None and mse_std is not None and mae_mean is not None and mae_std is not None:
+                overall_msg = (
+                    f"\n=== Overall Regression Metrics (Test Epoch) ===\n"
+                    f"MSE Mean: {mse_mean.item():.4f}, Std: {mse_std.item():.4f}, Var: {(mse_std**2).item():.4f}\n"
+                    f"MAE Mean: {mae_mean.item():.4f}, Std: {mae_std.item():.4f}, Var: {(mae_std**2).item():.4f}\n"
+                    f"================================================\n"
+                )
+                try:
+                    from tqdm import tqdm
+                    tqdm.write(overall_msg)
+                except ImportError:
+                    print(overall_msg)
+                    
             self.test_metrics.reset()
 
+        msg = ""
         if self.test_preds:
             all_preds = torch.cat(self.test_preds)
             all_targets = torch.cat(self.test_targets)
@@ -707,7 +748,7 @@ class RegressionMetricsCallback(Callback):
                 except ImportError:
                     print(msg)
             
-            # Save non-minimum metrics to a file in the log directory
+            # Save metrics to a file in the log directory
             import os
             log_dir = None
             if hasattr(trainer, "log_dir") and isinstance(trainer.log_dir, str):
@@ -719,6 +760,8 @@ class RegressionMetricsCallback(Callback):
                 os.makedirs(log_dir, exist_ok=True)
                 log_file_path = os.path.join(log_dir, "regression_metrics.txt")
                 with open(log_file_path, "a", encoding="utf-8") as f:
+                    if overall_msg:
+                        f.write(overall_msg)
                     f.write(msg)
 
             self.test_preds = []

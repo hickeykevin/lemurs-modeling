@@ -245,111 +245,130 @@ with col1:
                 
     selected_configs = {}
     config_overrides = {}
+    seed = None
+    config_dir = ""
     
     # Load defaults from configs/train.yaml, configs/cv_train.yaml or configs/eval.yaml
-    if mode == "Train":
-        config_file = "configs/train.yaml"
-    elif mode == "Cross Validate":
-        config_file = "configs/cv_train.yaml"
-    else:
-        config_file = "configs/eval.yaml"
-    group_defaults = load_defaults_from_config(Path(config_file))
-    
-    # Custom group ordering: data, model, trainer, callbacks, then the rest
-    custom_order = ["data", "model", "trainer", "callbacks"]
-    ordered_keys = sorted(
-        group_defaults.keys(),
-        key=lambda x: custom_order.index(x) if x in custom_order else len(custom_order) + list(group_defaults.keys()).index(x)
-    )
-    group_defaults = {k: group_defaults[k] for k in ordered_keys}
-    
-    st.subheader("Core Groups")
-    for group, default_val in group_defaults.items():
-        group_dir = CONFIG_DIR / group
-        if group_dir.exists():
-            options = get_options_for_group(group_dir)
-            if "None" not in options and "null" not in options:
-                options = ["None"] + options
+    if mode != "Evaluate":
+        if mode == "Train":
+            config_file = "configs/train.yaml"
+        else:
+            config_file = "configs/cv_train.yaml"
+        group_defaults = load_defaults_from_config(Path(config_file))
+        
+        # Custom group ordering: data, model, trainer, callbacks, then the rest
+        custom_order = ["data", "model", "trainer", "callbacks"]
+        ordered_keys = sorted(
+            group_defaults.keys(),
+            key=lambda x: custom_order.index(x) if x in custom_order else len(custom_order) + list(group_defaults.keys()).index(x)
+        )
+        group_defaults = {k: group_defaults[k] for k in ordered_keys}
+        
+        st.subheader("Core Groups")
+        for group, default_val in group_defaults.items():
+            group_dir = CONFIG_DIR / group
+            if group_dir.exists():
+                options = get_options_for_group(group_dir)
+                if "None" not in options and "null" not in options:
+                    options = ["None"] + options
+                    
+                is_list_default = isinstance(default_val, list) or group in LIST_GROUPS
                 
-            is_list_default = isinstance(default_val, list) or group in LIST_GROUPS
-            
-            if is_list_default:
-                if isinstance(default_val, list):
-                    default_options = [x for x in default_val if x in options]
-                elif default_val in options:
-                    default_options = [default_val]
+                if is_list_default:
+                    if isinstance(default_val, list):
+                        default_options = [x for x in default_val if x in options]
+                    elif default_val in options:
+                        default_options = [default_val]
+                    else:
+                        default_options = []
+                        
+                    st.markdown(f"#### **{group.capitalize()}**")
+                    selected_val = st.multiselect(f"{group.capitalize()}", options, default=default_options, label_visibility="collapsed", key=f"root_select_{mode}_{group}")
+                    selected_configs[group] = selected_val
+                    
+                    # Subgroups and parameters tree
+                    if selected_val:
+                        with st.expander(f"📁 {group} settings ({', '.join(selected_val)})", expanded=False):
+                            for val in selected_val:
+                                st.markdown(f"⚙️ **{val} parameters**")
+                                st.markdown('<div style="padding-left: 20px; border-left: 2px dashed #666; margin-top: 10px; margin-bottom: 20px;">', unsafe_allow_html=True)
+                                render_config_group_ui(group, val, config_overrides, selected_configs)
+                                st.markdown('</div>', unsafe_allow_html=True)
                 else:
-                    default_options = []
+                    # Find default index
+                    default_index = 0
+                    if default_val in options:
+                        default_index = options.index(default_val)
+                    elif str(default_val).lower() == "null" and "null" in options:
+                        default_index = options.index("null")
+                    elif default_val is None and "None" in options:
+                        default_index = options.index("None")
+                        
+                    st.markdown(f"#### **{group.capitalize()}**")
+                    selected_val = st.selectbox(f"{group.capitalize()}", options, index=default_index, label_visibility="collapsed", key=f"root_select_{mode}_{group}")
+                    selected_configs[group] = selected_val
                     
-                st.markdown(f"#### **{group.capitalize()}**")
-                selected_val = st.multiselect(f"{group.capitalize()}", options, default=default_options, label_visibility="collapsed", key=f"root_select_{mode}_{group}")
-                selected_configs[group] = selected_val
-                
-                # Subgroups and parameters tree
-                if selected_val:
-                    with st.expander(f"📁 {group} settings ({', '.join(selected_val)})", expanded=False):
-                        for val in selected_val:
-                            st.markdown(f"⚙️ **{val} parameters**")
-                            st.markdown('<div style="padding-left: 20px; border-left: 2px dashed #666; margin-top: 10px; margin-bottom: 20px;">', unsafe_allow_html=True)
-                            render_config_group_ui(group, val, config_overrides, selected_configs)
-                            st.markdown('</div>', unsafe_allow_html=True)
-            else:
-                # Find default index
-                default_index = 0
-                if default_val in options:
-                    default_index = options.index(default_val)
-                elif str(default_val).lower() == "null" and "null" in options:
-                    default_index = options.index("null")
-                elif default_val is None and "None" in options:
-                    default_index = options.index("None")
-                    
-                st.markdown(f"#### **{group.capitalize()}**")
-                selected_val = st.selectbox(f"{group.capitalize()}", options, index=default_index, label_visibility="collapsed", key=f"root_select_{mode}_{group}")
-                selected_configs[group] = selected_val
-                
-                # Subgroups and parameters tree
-                if selected_val not in ("None", "null", None):
-                    with st.expander(f"📁 {group} settings ({selected_val})", expanded=False):
-                        render_config_group_ui(group, selected_val, config_overrides, selected_configs)
-    
-    st.subheader("Other Options")
-    seed = st.number_input("Seed (leave blank for null)", value=None, step=1, placeholder="e.g. 42")
-    ckpt_path = st.text_input("Checkpoint Path", value="", placeholder="path/to/checkpoint.ckpt")
-    
-    custom_overrides = st.text_area("Custom Overrides (one per line)", placeholder="trainer.max_epochs=10\ndata.batch_size=32")
+                    # Subgroups and parameters tree
+                    if selected_val not in ("None", "null", None):
+                        with st.expander(f"📁 {group} settings ({selected_val})", expanded=False):
+                            render_config_group_ui(group, selected_val, config_overrides, selected_configs)
+        
+        st.subheader("Other Options")
+        seed = st.number_input("Seed (leave blank for null)", value=None, step=1, placeholder="e.g. 42")
+        ckpt_path = st.text_input("Checkpoint Path", value="", placeholder="path/to/checkpoint.ckpt")
+        
+        custom_overrides = st.text_area("Custom Overrides (one per line)", placeholder="trainer.max_epochs=10\ndata.batch_size=32")
+    else:
+        st.subheader("Evaluation Settings")
+        config_dir = st.text_input("Hydra Config Directory (.hydra)", value="", placeholder="e.g. logs/train/runs/YYYY-MM-DD_HH-MM-SS/.hydra")
+        ckpt_path = st.text_input("Checkpoint Path (.ckpt)", value="", placeholder="e.g. logs/train/runs/YYYY-MM-DD_HH-MM-SS/checkpoints/last.ckpt")
+        
+        st.subheader("Other Options")
+        custom_overrides = st.text_area("Custom Overrides (one per line)", placeholder="e.g.\ncallbacks=[classification_metrics,confusion_matrix]\ndata.batch_size=16")
 
 # Construct the run command dynamically for real-time display
-cmd = srun_prefix + ["uv", "run", script]
-for k, v in selected_configs.items():
-    if isinstance(v, list):
-        if len(v) == 1:
-            cmd.append(f"{k}={v[0]}")
+if mode == "Evaluate":
+    cmd = srun_prefix + ["uv", "run", script]
+    if config_dir:
+        cmd += ["--config-dir", config_dir, "--config-name", "config"]
+    if ckpt_path:
+        cmd.append(f"ckpt_path={ckpt_path}")
+    if custom_overrides:
+        for line in custom_overrides.split("\n"):
+            if line.strip():
+                cmd.append(line.strip())
+else:
+    cmd = srun_prefix + ["uv", "run", script]
+    for k, v in selected_configs.items():
+        if isinstance(v, list):
+            if len(v) == 1:
+                cmd.append(f"{k}={v[0]}")
+            else:
+                list_str = f"[{','.join(v)}]"
+                cmd.append(f"{k}={list_str}")
+        elif v and v != "None" and v != "default" and v != "null":
+            cmd.append(f"{k}={v}")
+        elif v == "null":
+            cmd.append(f"{k}=null")
+
+    # Add the edited parameters as overrides
+    for k, v in config_overrides.items():
+        if isinstance(v, bool):
+            cmd.append(f"{k}={str(v).lower()}")
+        elif isinstance(v, list):
+            cmd.append(f"{k}={str(v).replace(' ', '')}")
         else:
-            list_str = f"[{','.join(v)}]"
-            cmd.append(f"{k}={list_str}")
-    elif v and v != "None" and v != "default" and v != "null":
-        cmd.append(f"{k}={v}")
-    elif v == "null":
-        cmd.append(f"{k}=null")
+            cmd.append(f"{k}={v}")
 
-# Add the edited parameters as overrides
-for k, v in config_overrides.items():
-    if isinstance(v, bool):
-        cmd.append(f"{k}={str(v).lower()}")
-    elif isinstance(v, list):
-        cmd.append(f"{k}={str(v).replace(' ', '')}")
-    else:
-        cmd.append(f"{k}={v}")
-
-if seed is not None:
-    cmd.append(f"seed={int(seed)}")
-if ckpt_path:
-    cmd.append(f"ckpt_path={ckpt_path}")
-    
-if custom_overrides:
-    for line in custom_overrides.split("\n"):
-        if line.strip():
-            cmd.append(line.strip())
+    if seed is not None:
+        cmd.append(f"seed={int(seed)}")
+    if ckpt_path:
+        cmd.append(f"ckpt_path={ckpt_path}")
+        
+    if custom_overrides:
+        for line in custom_overrides.split("\n"):
+            if line.strip():
+                cmd.append(line.strip())
 
 with col2:
     st.header("Execution")
@@ -416,6 +435,10 @@ with col2:
     if run_btn:
         if st.session_state.process is not None:
             st.warning("A process is already running. Stop it first.")
+        elif mode == "Evaluate" and not config_dir:
+            st.error("Please specify a Hydra Config Directory (.hydra) to evaluate.")
+        elif mode == "Evaluate" and not ckpt_path:
+            st.error("Please specify a Checkpoint Path (.ckpt) to evaluate.")
         else:
             st.info(f"Executing: `{' '.join(cmd)}`")
             
