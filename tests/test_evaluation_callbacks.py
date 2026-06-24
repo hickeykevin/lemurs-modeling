@@ -174,3 +174,88 @@ def test_confusion_matrix_callback_logs_to_file(tmp_path):
     assert "\x1b" not in content2
 
 
+def test_classification_metrics_callback_test_stage():
+    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+    
+    # Arrange
+    callback = ClassificationMetricsCallback(num_bootstraps=5, sampling_strategy="multinomial")
+    
+    trainer = MagicMock(spec=Trainer)
+    
+    pl_module = MagicMock(spec=LightningModule)
+    pl_module.num_classes = 3
+    pl_module.device = torch.device("cpu")
+    
+    # Act
+    # Simulating test batch end and epoch end
+    outputs = {
+        "logits": torch.tensor([[2.0, 0.5, 0.1], [0.1, 3.0, 0.2]]),
+        "targets": torch.tensor([0, 1])
+    }
+    callback.on_test_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
+    callback.on_test_epoch_end(trainer, pl_module)
+    
+    # Assert
+    # Extract logged metrics from pl_module.log calls
+    logged_keys = [call[0][0] for call in pl_module.log.call_args_list]
+    
+    # Bootstrapping adds mean, std, and we computed var
+    assert "test/f1_mean" in logged_keys
+    assert "test/f1_std" in logged_keys
+    assert "test/f1_var" in logged_keys
+    
+    assert "test/auroc_mean" in logged_keys
+    assert "test/auroc_std" in logged_keys
+    assert "test/auroc_var" in logged_keys
+    
+    assert "test/precision_mean" in logged_keys
+    assert "test/precision_std" in logged_keys
+    assert "test/precision_var" in logged_keys
+
+
+def test_regression_metrics_callback_test_stage():
+    from src.utils.evaluation_callbacks import RegressionMetricsCallback
+    
+    # Arrange
+    callback = RegressionMetricsCallback(num_bootstraps=5, sampling_strategy="multinomial")
+    
+    trainer = MagicMock(spec=Trainer)
+    trainer.loggers = []
+    
+    pl_module = MagicMock(spec=LightningModule)
+    pl_module.device = torch.device("cpu")
+    
+    # Act
+    # Simulating test batch end and epoch end
+    outputs = {
+        "preds": torch.tensor([1.0, 2.0, 3.0]),
+        "targets": torch.tensor([1.2, 1.8, 3.1])
+    }
+    
+    callback.on_test_epoch_start(trainer, pl_module)
+    callback.on_test_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
+    callback.on_test_epoch_end(trainer, pl_module)
+    
+    # Assert
+    logged_keys = [call[0][0] for call in pl_module.log.call_args_list]
+    
+    # Standard regression metrics
+    assert "test/mse_mean" in logged_keys
+    assert "test/mse_std" in logged_keys
+    assert "test/mse_var" in logged_keys
+    
+    assert "test/mae_mean" in logged_keys
+    assert "test/mae_std" in logged_keys
+    assert "test/mae_var" in logged_keys
+    
+    # Non-minimum bootstrapped metrics
+    assert "test/mse_non_min_mean" in logged_keys
+    assert "test/mse_non_min_std" in logged_keys
+    assert "test/mse_non_min_var" in logged_keys
+    
+    assert "test/mae_non_min_mean" in logged_keys
+    assert "test/mae_non_min_std" in logged_keys
+    assert "test/mae_non_min_var" in logged_keys
+
+
+

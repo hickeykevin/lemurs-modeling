@@ -4,6 +4,7 @@ import torch
 from lightning import Callback, LightningModule, Trainer
 from torchmetrics import MetricCollection, MaxMetric, MinMetric
 from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix, BinaryConfusionMatrix, Precision, Recall
+from torchmetrics.wrappers import BootStrapper
 from rich.table import Table
 from rich.console import Console
 from rich import box
@@ -197,6 +198,8 @@ class ClassificationMetricsCallback(Callback):
         auroc_average: str = "macro",
         precision_average: str = "macro",
         recall_average: str = "macro",
+        num_bootstraps: int = 200,
+        sampling_strategy: str = "poisson",
     ) -> None:
         """Initializes the ClassificationMetricsCallback.
 
@@ -209,12 +212,18 @@ class ClassificationMetricsCallback(Callback):
                 Defaults to "macro".
             recall_average (str): Averaging strategy for Recall (e.g., 'macro', 'micro', 'weighted').
                 Defaults to "macro".
+            num_bootstraps (int): The number of bootstrap resamples to use in the test stage.
+                Defaults to 200.
+            sampling_strategy (str): The sampling strategy to use for BootStrapper ('poisson' or 'multinomial').
+                Defaults to "poisson".
         """
         super().__init__()
         self.f1_params = {"task": "multiclass", "average": f1_average}
         self.auroc_params = {"task": "multiclass", "average": auroc_average}
         self.precision_params = {"task": "multiclass", "average": precision_average}
         self.recall_params = {"task": "multiclass", "average": recall_average}
+        self.num_bootstraps = num_bootstraps
+        self.sampling_strategy = sampling_strategy
         
         self.val_metrics: Optional[MetricCollection] = None
         self.test_metrics: Optional[MetricCollection] = None
@@ -225,7 +234,7 @@ class ClassificationMetricsCallback(Callback):
         self.val_precision_best = MaxMetric()
         self.val_recall_best = MaxMetric()
 
-    def _init_metrics(self, num_classes: int, device: torch.device) -> MetricCollection:
+    def _init_metrics(self, num_classes: int, device: torch.device, bootstrap: bool = False) -> MetricCollection:
         """Initializes the MetricCollection with F1, AUROC, Precision, and Recall.
 
         To add new metrics, simply add them to this dictionary.
@@ -233,17 +242,26 @@ class ClassificationMetricsCallback(Callback):
         Args:
             num_classes (int): The number of target classes.
             device (torch.device): The device (CPU/GPU) where metrics should be allocated.
+            bootstrap (bool): Whether to wrap metrics in a BootStrapper. Defaults to False.
 
         Returns:
             MetricCollection: A collection of initialized torchmetrics.
         """
         num_classes = max(2, num_classes)
-        metrics = MetricCollection({
-            "f1": F1Score(num_classes=num_classes, **self.f1_params),
-            "auroc": AUROC(num_classes=num_classes, **self.auroc_params),
-            "precision": Precision(num_classes=num_classes, **self.precision_params),
-            "recall": Recall(num_classes=num_classes, **self.recall_params),
-        })
+        if bootstrap:
+            metrics = MetricCollection({
+                "f1": BootStrapper(F1Score(num_classes=num_classes, **self.f1_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
+                "auroc": BootStrapper(AUROC(num_classes=num_classes, **self.auroc_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
+                "precision": BootStrapper(Precision(num_classes=num_classes, **self.precision_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
+                "recall": BootStrapper(Recall(num_classes=num_classes, **self.recall_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
+            })
+        else:
+            metrics = MetricCollection({
+                "f1": F1Score(num_classes=num_classes, **self.f1_params),
+                "auroc": AUROC(num_classes=num_classes, **self.auroc_params),
+                "precision": Precision(num_classes=num_classes, **self.precision_params),
+                "recall": Recall(num_classes=num_classes, **self.recall_params),
+            })
         return metrics.to(device)
 
 
@@ -339,7 +357,7 @@ class ClassificationMetricsCallback(Callback):
             dataloader_idx (int): The index of the dataloader.
         """
         if self.test_metrics is None:
-            self.test_metrics = self._init_metrics(pl_module.num_classes, pl_module.device)
+            self.test_metrics = self._init_metrics(pl_module.num_classes, pl_module.device, bootstrap=True)
             
         if outputs is not None and "logits" in outputs and "targets" in outputs:
             self.test_metrics.update(outputs["logits"], outputs["targets"])
@@ -356,6 +374,10 @@ class ClassificationMetricsCallback(Callback):
             # Log all metrics in the collection
             for name, value in output.items():
                 pl_module.log(f"test/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
+                if name.endswith("_std"):
+                    var_name = name[:-4] + "_var"
+                    var_value = value ** 2
+                    pl_module.log(f"test/{var_name}", var_value, on_step=False, on_epoch=True, prog_bar=True)
             self.test_metrics.reset()
 
 
@@ -369,15 +391,21 @@ class RegressionMetricsCallback(Callback):
         frequency (int): How often to print/log the non-minimum metrics table (e.g., 5 means every 5 epochs).
     """
 
-    def __init__(self, frequency: int = 5) -> None:
+    def __init__(self, frequency: int = 5, num_bootstraps: int = 200, sampling_strategy: str = "poisson") -> None:
         """Initializes the RegressionMetricsCallback.
 
         Args:
             frequency (int): How often to print/log the non-minimum metrics table (e.g., 5 means every 5 epochs).
                 Defaults to 5 (every 5 epochs).
+            num_bootstraps (int): The number of bootstrap resamples to use in the test stage.
+                Defaults to 200.
+            sampling_strategy (str): The sampling strategy to use for BootStrapper ('poisson' or 'multinomial').
+                Defaults to "poisson".
         """
         super().__init__()
         self.frequency = frequency
+        self.num_bootstraps = num_bootstraps
+        self.sampling_strategy = sampling_strategy
         self.val_metrics: Optional[MetricCollection] = None
         self.test_metrics: Optional[MetricCollection] = None
         
@@ -390,20 +418,27 @@ class RegressionMetricsCallback(Callback):
         self.test_preds: List[torch.Tensor] = []
         self.test_targets: List[torch.Tensor] = []
 
-    def _init_metrics(self, device: torch.device) -> MetricCollection:
+    def _init_metrics(self, device: torch.device, bootstrap: bool = False) -> MetricCollection:
         """Initializes the MetricCollection with MSE and MAE.
 
         Args:
             device (torch.device): The device (CPU/GPU) where metrics should be allocated.
+            bootstrap (bool): Whether to wrap metrics in a BootStrapper. Defaults to False.
 
         Returns:
             MetricCollection: A collection of initialized torchmetrics.
         """
         from torchmetrics import MeanSquaredError, MeanAbsoluteError
-        metrics = MetricCollection({
-            "mse": MeanSquaredError(),
-            "mae": MeanAbsoluteError(),
-        })
+        if bootstrap:
+            metrics = MetricCollection({
+                "mse": BootStrapper(MeanSquaredError(), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
+                "mae": BootStrapper(MeanAbsoluteError(), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
+            })
+        else:
+            metrics = MetricCollection({
+                "mse": MeanSquaredError(),
+                "mae": MeanAbsoluteError(),
+            })
         return metrics.to(device)
 
     def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
@@ -550,7 +585,7 @@ class RegressionMetricsCallback(Callback):
     ) -> None:
         """Updates test metrics with results from the current batch."""
         if self.test_metrics is None:
-            self.test_metrics = self._init_metrics(pl_module.device)
+            self.test_metrics = self._init_metrics(pl_module.device, bootstrap=True)
             
         if outputs is not None and "preds" in outputs and "targets" in outputs:
             preds = outputs["preds"].squeeze()
@@ -574,6 +609,10 @@ class RegressionMetricsCallback(Callback):
             # Log all metrics in the collection
             for name, value in output.items():
                 pl_module.log(f"test/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
+                if name.endswith("_std"):
+                    var_name = name[:-4] + "_var"
+                    var_value = value ** 2
+                    pl_module.log(f"test/{var_name}", var_value, on_step=False, on_epoch=True, prog_bar=True)
             self.test_metrics.reset()
 
         if self.test_preds:
@@ -584,15 +623,36 @@ class RegressionMetricsCallback(Callback):
             mask = all_targets > min_target
             
             if mask.any():
-                non_min_preds = all_preds[mask]
-                non_min_targets = all_targets[mask]
+                non_min_preds = all_preds[mask].to(pl_module.device)
+                non_min_targets = all_targets[mask].to(pl_module.device)
                 
-                mse_non_min = torch.mean((non_min_preds - non_min_targets) ** 2)
-                mae_non_min = torch.mean(torch.abs(non_min_preds - non_min_targets))
+                from torchmetrics import MeanSquaredError, MeanAbsoluteError
+                
+                bs_mse = BootStrapper(MeanSquaredError(), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy).to(pl_module.device)
+                bs_mae = BootStrapper(MeanAbsoluteError(), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy).to(pl_module.device)
+                
+                bs_mse.update(non_min_preds, non_min_targets)
+                bs_mae.update(non_min_preds, non_min_targets)
+                
+                res_mse = bs_mse.compute()
+                res_mae = bs_mae.compute()
+                
+                mse_non_min_mean = res_mse["mean"]
+                mse_non_min_std = res_mse["std"]
+                mse_non_min_var = mse_non_min_std ** 2
+                
+                mae_non_min_mean = res_mae["mean"]
+                mae_non_min_std = res_mae["std"]
+                mae_non_min_var = mae_non_min_std ** 2
                 
                 # Log to pl_module
-                pl_module.log("test/mse_non_min", mse_non_min, on_step=False, on_epoch=True, prog_bar=True)
-                pl_module.log("test/mae_non_min", mae_non_min, on_step=False, on_epoch=True, prog_bar=True)
+                pl_module.log("test/mse_non_min_mean", mse_non_min_mean, on_step=False, on_epoch=True, prog_bar=True)
+                pl_module.log("test/mse_non_min_std", mse_non_min_std, on_step=False, on_epoch=True, prog_bar=True)
+                pl_module.log("test/mse_non_min_var", mse_non_min_var, on_step=False, on_epoch=True, prog_bar=True)
+                
+                pl_module.log("test/mae_non_min_mean", mae_non_min_mean, on_step=False, on_epoch=True, prog_bar=True)
+                pl_module.log("test/mae_non_min_std", mae_non_min_std, on_step=False, on_epoch=True, prog_bar=True)
+                pl_module.log("test/mae_non_min_var", mae_non_min_var, on_step=False, on_epoch=True, prog_bar=True)
                 
                 # Print to stdout
                 count_non_min = mask.sum().item()
@@ -600,8 +660,8 @@ class RegressionMetricsCallback(Callback):
                 msg = (
                     f"\n=== Regression Metrics for Targets > {min_target:.4f} (Test Epoch) ===\n"
                     f"Samples: {count_non_min}/{total_count} ({count_non_min/total_count*100:.1f}%)\n"
-                    f"MSE: {mse_non_min.item():.4f}\n"
-                    f"MAE: {mae_non_min.item():.4f}\n"
+                    f"MSE Mean: {mse_non_min_mean.item():.4f}, Std: {mse_non_min_std.item():.4f}, Var: {mse_non_min_var.item():.4f}\n"
+                    f"MAE Mean: {mae_non_min_mean.item():.4f}, Std: {mae_non_min_std.item():.4f}, Var: {mae_non_min_var.item():.4f}\n"
                     f"=========================================================================\n"
                 )
                 try:

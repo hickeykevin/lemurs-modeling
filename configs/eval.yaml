@@ -4,11 +4,12 @@ defaults:
   - _self_
   - data: default
   - model: default
-  - logger: null
-  - trainer: default
+  - logger: csv
+  - trainer: cpu
   - paths: default
   - extras: default
   - hydra: default
+  - callbacks: [classification_metrics]
 
 task_name: "eval"
 

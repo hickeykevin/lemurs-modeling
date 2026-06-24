@@ -485,7 +485,7 @@ def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     assert loss.dtype == torch.float32
 
     # 3. Verify regression metrics callback
-    callback = RegressionMetricsCallback(frequency=1)
+    callback = RegressionMetricsCallback(frequency=1, num_bootstraps=5, sampling_strategy="multinomial")
     
     # Mock trainer and model logging
     trainer = MagicMock()
@@ -523,8 +523,8 @@ def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     callback.on_test_batch_end(trainer, model, outputs, batch, 0)
     callback.on_test_epoch_end(trainer, model)
     
-    model.log.assert_any_call("test/mse_non_min", torch.tensor(2.25), on_step=False, on_epoch=True, prog_bar=True)
-    model.log.assert_any_call("test/mae_non_min", torch.tensor(1.5), on_step=False, on_epoch=True, prog_bar=True)
+    model.log.assert_any_call("test/mse_non_min_mean", torch.tensor(2.25), on_step=False, on_epoch=True, prog_bar=True)
+    model.log.assert_any_call("test/mae_non_min_mean", torch.tensor(1.5), on_step=False, on_epoch=True, prog_bar=True)
 
 
 @patch('src.data.components.cohort_builder.DatabaseService')
