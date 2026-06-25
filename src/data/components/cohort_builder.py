@@ -135,10 +135,15 @@ class CohortBuilder:
         target_answers = answer_df[answer_df['question_id'].isin(question_ids)].copy()
 
         # Coerce answer strings to numeric scores, mapping "yes" -> 1.0 and "no" -> 0.0, and dropping any nulls
-        clean_answers = target_answers['answer'].astype(str).str.strip().str.lower()
-        mapped_answers = clean_answers.map({'yes': 1.0, 'no': 0.0})
-        target_answers['answer'] = mapped_answers.fillna(pd.to_numeric(target_answers['answer'], errors='coerce'))
-        target_answers = target_answers.dropna(subset=['answer'])
+        # BUT ONLY IF the aggregator does not require strings!
+        if not getattr(self.aggregator, 'requires_strings', False):
+            clean_answers = target_answers['answer'].astype(str).str.strip().str.lower()
+            mapped_answers = clean_answers.map({'yes': 1.0, 'no': 0.0})
+            target_answers['answer'] = mapped_answers.fillna(pd.to_numeric(target_answers['answer'], errors='coerce'))
+            target_answers = target_answers.dropna(subset=['answer'])
+        else:
+            # Just drop nulls, keep strings
+            target_answers = target_answers.dropna(subset=['answer'])
 
         # Aggregate daily scores via the configured binarization strategy
         aggregated_answers = self.aggregator(target_answers)
@@ -191,27 +196,49 @@ class CohortBuilder:
 
         # Clean/coerce answers to numeric
         ans = answer_df.copy()
-        ans['answer_clean'] = ans['answer'].astype(str).str.strip().str.lower()
-        mapped_vals = ans['answer_clean'].map({'yes': 1.0, 'no': 0.0})
-        ans['answer_numeric'] = mapped_vals.fillna(pd.to_numeric(ans['answer_clean'], errors='coerce'))
-        ans = ans.dropna(subset=['answer_numeric'])
+        
+        # Identify string-based questions needed by the aggregator
+        string_qids = set()
+        if getattr(self.aggregator, 'requires_strings', False):
+            string_qids = set(self.aggregator.get_question_ids())
+
+        # Split into string-based and numeric-based answers
+        is_str_q = ans['question_id'].isin(string_qids)
+        ans_str = ans[is_str_q].copy()
+        ans_num = ans[~is_str_q].copy()
+
+        # Process numeric answers as before
+        ans_num['answer_clean'] = ans_num['answer'].astype(str).str.strip().str.lower()
+        mapped_vals = ans_num['answer_clean'].map({'yes': 1.0, 'no': 0.0})
+        ans_num['answer_numeric'] = mapped_vals.fillna(pd.to_numeric(ans_num['answer_clean'], errors='coerce'))
+        ans_num = ans_num.dropna(subset=['answer_numeric'])
+
+        # For string answers, we keep the original string value in 'answer_numeric'
+        ans_str['answer_numeric'] = ans_str['answer']
+        ans_str = ans_str.dropna(subset=['answer_numeric'])
+
+        # Combine back
+        ans_processed = pd.concat([ans_num, ans_str], ignore_index=True)
 
         # Merge answers with survey response to obtain app_user_id and date
-        merged = pd.merge(ans, sr[['id', 'app_user_id', 'date']], left_on='survey_response_id', right_on='id')
+        merged = pd.merge(ans_processed, sr[['id', 'app_user_id', 'date']], left_on='survey_response_id', right_on='id')
 
         # Find the latest survey response ID per user-date to act as the daily representative
         latest_sr = sr.sort_values('timestamp').groupby(['app_user_id', 'date']).last().reset_index()
 
         # Group by app_user_id, date, question_id and aggregate
         is_yes_no = merged['question_id'].isin(yes_no_qids)
+        is_string = merged['question_id'].isin(string_qids)
         
         merged_yn = merged[is_yes_no]
-        merged_other = merged[~is_yes_no]
+        merged_other = merged[~is_yes_no & ~is_string]
+        merged_str = merged[is_string]
         
         agg_yn = merged_yn.groupby(['app_user_id', 'date', 'question_id'])['answer_numeric'].max().reset_index() if not merged_yn.empty else pd.DataFrame(columns=['app_user_id', 'date', 'question_id', 'answer_numeric'])
         agg_other = merged_other.groupby(['app_user_id', 'date', 'question_id'])['answer_numeric'].agg(self.collapse_strategy).reset_index() if not merged_other.empty else pd.DataFrame(columns=['app_user_id', 'date', 'question_id', 'answer_numeric'])
+        agg_str = merged_str.groupby(['app_user_id', 'date', 'question_id'])['answer_numeric'].last().reset_index() if not merged_str.empty else pd.DataFrame(columns=['app_user_id', 'date', 'question_id', 'answer_numeric'])
         
-        collapsed_ans = pd.concat([agg_yn, agg_other], ignore_index=True)
+        collapsed_ans = pd.concat([agg_yn, agg_other, agg_str], ignore_index=True)
         
         # Link daily aggregated answers to the representative survey_response_id
         collapsed_ans = pd.merge(

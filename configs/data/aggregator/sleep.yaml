@@ -1,0 +1,6 @@
+_target_: src.data.components.label_aggregators.SleepAggregator
+asleep_id: 54
+awake_id: 55
+short_sleep_threshold: 5.0
+long_sleep_threshold: 10.0
+num_classes: 3

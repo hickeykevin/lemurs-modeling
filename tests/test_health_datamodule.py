@@ -823,6 +823,84 @@ def test_cohort_builder_no_collapsing(mock_db_class):
     assert 102 in collapsed_sr['id'].tolist()
 
 
+def test_sleep_aggregator_logic():
+    """Tests that SleepAggregator correctly parses times, computes durations, and classifies them."""
+    from src.data.components.label_aggregators import SleepAggregator
+    
+    # Create sample answers for SleepAggregator (questions 54 & 55)
+    # response 1: 10:30 PM (22.5) to 7:00 AM (7.0) -> 8.5 hours -> class 1
+    # response 2: 1:00 AM (1.0) to 8:00 AM (8.0) -> 7.0 hours -> class 1
+    # response 3: 11:30 PM (23.5) to 4:00 AM (4.0) -> 4.5 hours -> class 0
+    # response 4: 10:00 PM (22.0) to 9:00 AM (9.0) -> 11.0 hours -> class 2
+    # response 5: missing awake answer -> should be dropped
+    # response 6: malformed format -> should be dropped
+    df = pd.DataFrame({
+        'survey_response_id': [1, 1, 2, 2, 3, 3, 4, 4, 5, 6, 6],
+        'question_id':        [54, 55, 54, 55, 54, 55, 54, 55, 54, 54, 55],
+        'answer':             ["10:30 PM", "07:00 AM", "1:00 AM", "8:00 AM", "11:30 PM", "4:00 AM", "10:00 PM", "9:00 AM", "11:00 PM", "bad time", "07:00 AM"]
+    })
+    
+    agg = SleepAggregator(asleep_id=54, awake_id=55)
+    result = agg(df)
+    
+    # 5 and 6 should be dropped because of missing/malformed info
+    assert len(result) == 4
+    assert result.loc[result['survey_response_id'] == 1, 'answer'].values[0] == 1
+    assert result.loc[result['survey_response_id'] == 2, 'answer'].values[0] == 1
+    assert result.loc[result['survey_response_id'] == 3, 'answer'].values[0] == 0
+    assert result.loc[result['survey_response_id'] == 4, 'answer'].values[0] == 2
+
+
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_cohort_builder_with_sleep_aggregator(mock_db_class):
+    """Tests CohortBuilder integration with SleepAggregator, ensuring strings are not dropped."""
+    from src.data.components.cohort_builder import CohortBuilder
+    from src.data.components.label_aggregators import SleepAggregator
+
+    survey_df = pd.DataFrame({
+        'id': [101, 102],
+        'app_user_id': [10, 10], # Use active/non-dropped users
+        'timestamp': pd.to_datetime(['2025-10-01 08:00:00', '2025-10-01 09:00:00'])
+    })
+    
+    answer_df = pd.DataFrame([
+        # response 101 has fall asleep
+        {'survey_response_id': 101, 'question_id': 54, 'answer': "10:00 PM"},
+        # response 102 has wake up
+        {'survey_response_id': 102, 'question_id': 55, 'answer': "07:00 AM"},
+    ])
+    
+    # The two responses are on the same day for user 10, so they will be collapsed
+    # Into one daily response containing both question 54 and question 55 answers.
+    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df}
+    
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table].copy()
+    
+    agg = SleepAggregator(asleep_id=54, awake_id=55)
+    
+    builder = CohortBuilder(
+        modalities=[],
+        modality_cols={},
+        preprocessors=None,
+        aggregator=agg,
+        os_filter='both',
+        collapse_strategy='mean'
+    )
+    
+    # Collapsed daily responses should preserve the string values and resolve them together
+    collapsed_sr, collapsed_ans = builder._collapse_daily_responses(survey_df, answer_df, mock_db)
+    
+    # They should collapse to 1 survey response
+    assert len(collapsed_sr) == 1
+    # Both question 54 and 55 answers should exist in the collapsed answers
+    assert len(collapsed_ans) == 2
+    assert "10:00 PM" in collapsed_ans['answer'].values
+    assert "07:00 AM" in collapsed_ans['answer'].values
+
+
+
 
 
 

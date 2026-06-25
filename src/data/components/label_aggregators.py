@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Optional, Union
@@ -23,10 +24,15 @@ class LabelAggregator(ABC):
         """Indicates whether this aggregator outputs a continuous regression target."""
         return False
 
+    @property
+    def num_classes(self) -> int:
+        """Returns the number of target classes for classification, or 1 for regression."""
+        return 1 if self.is_regression else 2
+
 class MeanAggregator(LabelAggregator):
     """Aggregates answers by taking the mean and optionally binarizing."""
     
-    def __init__(self, question_ids: Optional[list] = None, threshold: Optional[float] = None):
+    def __init__(self, question_ids: Optional[list] = None, threshold: Optional[float] = None, **kwargs):
         self.question_ids = question_ids if question_ids is not None else [2, 3]
         self.threshold = threshold
 
@@ -42,7 +48,7 @@ class MeanAggregator(LabelAggregator):
 class MaxAggregator(LabelAggregator):
     """Aggregates answers by taking the max and optionally binarizing."""
     
-    def __init__(self, question_ids: Optional[list] = None, threshold: Optional[float] = None):
+    def __init__(self, question_ids: Optional[list] = None, threshold: Optional[float] = None, **kwargs):
         self.question_ids = question_ids if question_ids is not None else [2, 3]
         self.threshold = threshold
 
@@ -65,7 +71,7 @@ class RuleBasedAggregator(LabelAggregator):
     'all' (AND) logic to yield binary risk labels.
     """
     
-    def __init__(self, rules: Union[list, dict, Mapping], combination_logic: str = "any") -> None:
+    def __init__(self, rules: Union[list, dict, Mapping], combination_logic: str = "any", **kwargs) -> None:
         """Initializes the RuleBasedAggregator.
 
         Args:
@@ -163,7 +169,7 @@ class RuleBasedAggregator(LabelAggregator):
 class RegressionAggregator(LabelAggregator):
     """Aggregates survey answers by summing Likert scale questions to produce a continuous target."""
     
-    def __init__(self, likert_ids: list, shift_likert: bool = True) -> None:
+    def __init__(self, likert_ids: list, shift_likert: bool = True, **kwargs) -> None:
         """Initializes the RegressionAggregator.
 
         Args:
@@ -223,6 +229,108 @@ class RegressionAggregator(LabelAggregator):
             'survey_response_id': total_score.index,
             'answer': total_score.values
         }).reset_index(drop=True)
+
+
+class SleepAggregator(LabelAggregator):
+    """Aggregates sleep duration survey responses into categorical classes.
+    
+    Morning surveys ask:
+      - Question 54: What time did you fall asleep last night? (HH:MM am/pm)
+      - Question 55: What time did you wake up this morning? (HH:MM am/pm)
+      
+    This aggregator:
+      1. Parses time picker strings (e.g. "10:30 PM", "07:00 AM").
+      2. Computes sleep duration in hours, accounting for overnight wraps.
+      3. Classifies sleep hours:
+         - < 5.0 hours -> Class 0
+         - 5.0 to 10.0 hours -> Class 1
+         - > 10.0 hours -> Class 2
+    """
+    
+    requires_strings = True
+
+    @property
+    def num_classes(self) -> int:
+        return 3
+
+    def __init__(
+        self,
+        asleep_id: int = 54,
+        awake_id: int = 55,
+        short_sleep_threshold: float = 5.0,
+        long_sleep_threshold: float = 10.0,
+        **kwargs
+    ) -> None:
+        self.asleep_id = asleep_id
+        self.awake_id = awake_id
+        self.short_sleep_threshold = short_sleep_threshold
+        self.long_sleep_threshold = long_sleep_threshold
+
+    def get_question_ids(self) -> list:
+        return [self.asleep_id, self.awake_id]
+
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return pd.DataFrame(columns=['survey_response_id', 'answer'])
+
+        # Pivot to long format: columns are question_ids, index is survey_response_id
+        pivoted = df.pivot(index='survey_response_id', columns='question_id', values='answer')
+        
+        # Ensure both question columns exist in the pivoted dataframe
+        for qid in [self.asleep_id, self.awake_id]:
+            if qid not in pivoted.columns:
+                pivoted[qid] = None
+
+        def calc_hours(row) -> Optional[float]:
+            asleep = row[self.asleep_id]
+            awake = row[self.awake_id]
+            
+            if pd.isna(asleep) or pd.isna(awake):
+                return None
+                
+            try:
+                def to_hours(t_str) -> Optional[float]:
+                    if not isinstance(t_str, str):
+                        return None
+                    t_str = t_str.strip().upper()
+                    dt = pd.to_datetime(t_str, format="%I:%M %p")
+                    return dt.hour + dt.minute / 60.0
+
+                asleep_h = to_hours(asleep)
+                awake_h = to_hours(awake)
+                
+                if asleep_h is None or awake_h is None:
+                    return None
+                    
+                if awake_h >= asleep_h:
+                    return awake_h - asleep_h
+                else:
+                    return (awake_h - asleep_h) + 24.0
+            except Exception:
+                return None
+
+        sleep_hours = pivoted.apply(calc_hours, axis=1)
+
+        def categorize(hours) -> Optional[int]:
+            if pd.isna(hours) or hours is None:
+                return None
+            if hours < self.short_sleep_threshold:
+                return 0
+            elif hours <= self.long_sleep_threshold:
+                return 1
+            else:
+                return 2
+
+        labels = sleep_hours.apply(categorize)
+        
+        res = pd.DataFrame({
+            'survey_response_id': pivoted.index,
+            'answer': labels
+        }).dropna(subset=['answer'])
+        
+        res['answer'] = res['answer'].astype(int)
+        return res.reset_index(drop=True)
+
 
 
 

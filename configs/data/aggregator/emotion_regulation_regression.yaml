@@ -1,3 +1,4 @@
 _target_: src.data.components.label_aggregators.RegressionAggregator
 likert_ids: [47, 48, 49, 50, 51, 52]
 shift_likert: true
+num_classes: 1
