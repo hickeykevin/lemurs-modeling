@@ -75,6 +75,7 @@ class HealthDataModule(LightningDataModule):
                 - "user": Split by user ID (ensures disjoint populations).
                 - "longitudinal": Temporal split per user (predict future from past).
             collapse_strategy (str): Aggregation strategy to collapse multiple daily survey responses for non-yes-no questions.
+            use_prev_prediction (bool): Whether to use the previous day's prediction as input to the model.
         """
         super().__init__()
         self.save_hyperparameters(logger=False)

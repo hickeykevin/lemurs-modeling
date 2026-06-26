@@ -10,6 +10,10 @@ This directory contains configuration files for the architectures and training t
 The primary deep learning model for longitudinal sequence learning. It takes time-series health features (e.g. daily step sequences) and processes them sequentially via a Recurrent Neural Network (LSTM).
 *   **Architecture:** Dynamically defined inside `model/net/lstm.yaml`. Supports user embedding lookup tables for personal baseline shifts.
 *   **Regularization:** Supports `user_id_dropout` to randomly replace user IDs with the average/unseen index (`0`) during training for cold-start fallback.
+*   **Configuration Flags & Ablations:**
+    *   `use_prev_prediction` (default: `false`): Whether to use the previous day's prediction as input to the model.
+    *   `use_subject_embedding` (default: `false`): Whether to include subject embeddings to personalize model predictions.
+    *   `use_sequence_data` (default: `true`): Whether to include sequence data. Should be set to `true` unless performing sequence-data ablation.
 *   **Optimizers:** Dynamically configured using PyTorch optimizers (e.g. Adam).
 *   **Command:**
     ```bash

@@ -7,3 +7,6 @@ _target_: src.models.health_module.HealthLitModule
 compile: false
 user_id_dropout: 0.1
 use_prev_prediction: false
+use_subject_embedding: false
+use_sequence_data: true # this should be set to true unless ablating 
+

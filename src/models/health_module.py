@@ -34,6 +34,8 @@ class HealthLitModule(LightningModule):
         class_weights: Optional[List[float]] = None,
         user_id_dropout: float = 0.0,
         use_prev_prediction: bool = False,
+        use_subject_embedding: bool = False,
+        use_sequence_data: bool = True,
     ) -> None:
         """Initializes the HealthLitModule.
 
@@ -44,6 +46,9 @@ class HealthLitModule(LightningModule):
             compile (bool): Whether to compile the model for faster execution.
             class_weights (Optional[List[float]]): Optional weights for each class in the loss function.
             user_id_dropout (float): Probability of dropping out user index (replacing with 0) during training.
+            use_prev_prediction (bool): Whether to use previous prediction as input to the model.
+            use_subject_embedding (bool): Whether to include subject embeddings.
+            use_sequence_data (bool): Whether to include sequence data.
         """
         super().__init__()
 
