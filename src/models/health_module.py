@@ -33,6 +33,7 @@ class HealthLitModule(LightningModule):
         compile: bool = False,
         class_weights: Optional[List[float]] = None,
         user_id_dropout: float = 0.0,
+        use_prev_prediction: bool = False,
     ) -> None:
         """Initializes the HealthLitModule.
 
@@ -73,43 +74,68 @@ class HealthLitModule(LightningModule):
         # Track the best validation accuracy across epochs
         self.val_acc_best = MaxMetric()
 
-    def forward(self, x: torch.Tensor, user_idx: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, user_idx: Optional[torch.Tensor] = None, prev_pred: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Perform a forward pass through the network.
 
         Args:
             x: Input tensor of shape [batch_size, sequence_length, features].
             user_idx: Optional user indices tensor of shape [batch_size].
+            prev_pred: Optional previous predictions tensor of shape [batch_size].
 
         Returns:
             Logits tensor of shape [batch_size, num_classes].
         """
-        return self.net(x, user_idx)
+        return self.net(x, user_idx, prev_pred)
 
     def on_train_start(self) -> None:
         pass
 
+    def _update_predictions_cache(self, idx: torch.Tensor, preds: torch.Tensor) -> None:
+        if self.trainer is not None and self.trainer.datamodule is not None:
+            if self.training:
+                dataset = getattr(self.trainer.datamodule, "data_train", None)
+            elif getattr(self.trainer, "validating", False) or getattr(self.trainer, "sanity_checking", False):
+                dataset = getattr(self.trainer.datamodule, "data_val", None)
+            elif getattr(self.trainer, "testing", False):
+                dataset = getattr(self.trainer.datamodule, "data_test", None)
+            else:
+                dataset = None
+
+            if dataset is not None and hasattr(dataset, "predictions_cache"):
+                indices = idx.detach().cpu().numpy()
+                values = preds.detach().cpu().numpy()
+                dataset.predictions_cache[indices] = values
 
     def model_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        self, batch: Any
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single step through the model.
 
         Args:
-            batch: A tuple containing (features, targets, user_indices).
+            batch: A tuple containing features, targets, user_indices, etc.
 
         Returns:
             A tuple of (loss, predictions, targets, logits).
         """
-        x, y, user_idx = batch
+        if self.hparams.use_prev_prediction:
+            x, y, user_idx, prev_pred, idx = batch
+        else:
+            x, y, user_idx = batch
+            prev_pred, idx = None, None
         
         # Apply user ID dropout during training to fallback to the population average (index 0)
         if self.training and self.hparams.user_id_dropout > 0:
             mask = torch.rand(user_idx.shape, device=user_idx.device) < self.hparams.user_id_dropout
             user_idx = torch.where(mask, torch.zeros_like(user_idx), user_idx)
 
-        logits = self.forward(x, user_idx)
+        logits = self.forward(x, user_idx, prev_pred)
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
+
+        # Update cache if use_prev_prediction is True
+        if self.hparams.use_prev_prediction and idx is not None:
+            self._update_predictions_cache(idx, preds)
+
         return loss, preds, y, logits
 
     def training_step(
@@ -231,6 +257,15 @@ class HealthLitModule(LightningModule):
         self.val_loss.reset()
         self.val_acc.reset()
         self.val_acc_best.reset()
+
+    def load_state_dict(self, state_dict: Dict[str, Any], strict: bool = True) -> Any:
+        """Dynamically adjust user embedding shapes if present in state_dict before loading."""
+        weight_key = "net.user_embedding.weight"
+        if weight_key in state_dict:
+            num_users = state_dict[weight_key].shape[0]
+            if hasattr(self.net, "init_user_embedding"):
+                self.net.init_user_embedding(num_users)
+        return super().load_state_dict(state_dict, strict=strict)
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """Choose what optimizers and learning-rate schedulers to use in your optimization.
@@ -566,6 +601,7 @@ class HealthRegressionLitModule(LightningModule):
         scheduler: torch.optim.lr_scheduler = None,
         compile: bool = False,
         user_id_dropout: float = 0.0,
+        use_prev_prediction: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -578,22 +614,47 @@ class HealthRegressionLitModule(LightningModule):
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
 
-    def forward(self, x: torch.Tensor, user_idx: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.net(x, user_idx)
+    def forward(self, x: torch.Tensor, user_idx: Optional[torch.Tensor] = None, prev_pred: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.net(x, user_idx, prev_pred)
+
+    def _update_predictions_cache(self, idx: torch.Tensor, preds: torch.Tensor) -> None:
+        if self.trainer is not None and self.trainer.datamodule is not None:
+            if self.training:
+                dataset = getattr(self.trainer.datamodule, "data_train", None)
+            elif getattr(self.trainer, "validating", False) or getattr(self.trainer, "sanity_checking", False):
+                dataset = getattr(self.trainer.datamodule, "data_val", None)
+            elif getattr(self.trainer, "testing", False):
+                dataset = getattr(self.trainer.datamodule, "data_test", None)
+            else:
+                dataset = None
+
+            if dataset is not None and hasattr(dataset, "predictions_cache"):
+                indices = idx.detach().cpu().numpy()
+                values = preds.detach().cpu().numpy()
+                dataset.predictions_cache[indices] = values
 
     def model_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        self, batch: Any
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        x, y, user_idx = batch
-        
+        if self.hparams.use_prev_prediction:
+            x, y, user_idx, prev_pred, idx = batch
+        else:
+            x, y, user_idx = batch
+            prev_pred, idx = None, None
+            
         # Apply user ID dropout during training to fallback to the population average (index 0)
         if self.training and self.hparams.user_id_dropout > 0:
             mask = torch.rand(user_idx.shape, device=user_idx.device) < self.hparams.user_id_dropout
             user_idx = torch.where(mask, torch.zeros_like(user_idx), user_idx)
 
-        logits = self.forward(x, user_idx) # shape [Batch, output_size=1]
+        logits = self.forward(x, user_idx, prev_pred) # shape [Batch, output_size=1]
         preds = logits.squeeze(-1)
         loss = self.criterion(preds, y.float())
+
+        # Update cache if use_prev_prediction is True
+        if self.hparams.use_prev_prediction and idx is not None:
+            self._update_predictions_cache(idx, preds)
+
         return loss, preds, y, logits
 
     def training_step(
@@ -632,6 +693,15 @@ class HealthRegressionLitModule(LightningModule):
                     self.net.to(self.device)  # Make sure embedding weights are moved to correct device
 
         self.val_loss.reset()
+
+    def load_state_dict(self, state_dict: Dict[str, Any], strict: bool = True) -> Any:
+        """Dynamically adjust user embedding shapes if present in state_dict before loading."""
+        weight_key = "net.user_embedding.weight"
+        if weight_key in state_dict:
+            num_users = state_dict[weight_key].shape[0]
+            if hasattr(self.net, "init_user_embedding"):
+                self.net.init_user_embedding(num_users)
+        return super().load_state_dict(state_dict, strict=strict)
 
     def configure_optimizers(self) -> Dict[str, Any]:
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())

@@ -31,6 +31,7 @@ class CVHealthDataModule(HealthDataModule):
         random_state: int = 42,
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
         collapse_strategy: str = "mean",
+        use_prev_prediction: bool = False,
     ) -> None:
         # Initialize the base class, split_mode doesn't strictly matter as we override _split_data
         super().__init__(
@@ -47,6 +48,7 @@ class CVHealthDataModule(HealthDataModule):
             split_mode="user", 
             os_filter=os_filter,
             collapse_strategy=collapse_strategy,
+            use_prev_prediction=use_prev_prediction,
         )
         # Re-save hyperparameters to capture num_folds and current_fold
         self.save_hyperparameters(logger=False)

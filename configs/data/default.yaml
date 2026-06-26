@@ -16,4 +16,5 @@ random_state: ${seed}
 split_mode: longitudinal # random, user, longitudinal
 os_filter: both # both, ios, android
 collapse_strategy: mean #mean, max, min, first, last, none
+use_prev_prediction: ${model.use_prev_prediction}
 

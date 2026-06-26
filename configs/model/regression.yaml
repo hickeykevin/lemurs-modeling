@@ -8,3 +8,4 @@ net:
     output_size: 1
 compile: false
 user_id_dropout: false
+use_prev_prediction: false

@@ -18,4 +18,5 @@ pin_memory: False
 random_state: ${seed}
 os_filter: ios # both, ios, android
 collapse_strategy: mean
+use_prev_prediction: ${model.use_prev_prediction}
 

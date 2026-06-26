@@ -52,6 +52,7 @@ class HealthDataModule(LightningDataModule):
         split_mode: Literal["random", "user", "longitudinal"] = "random",
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
         collapse_strategy: str = "mean",
+        use_prev_prediction: bool = False,
     ) -> None:
 
 
@@ -137,22 +138,40 @@ class HealthDataModule(LightningDataModule):
             if self.hparams.scaler is not None and hasattr(self.hparams.scaler, "fit"):
                 self._fit_scaler(train_df, modality_dfs)
 
+            # Sort chronologically and precompute link mappings if use_prev_prediction is True
+            if self.hparams.use_prev_prediction:
+                train_df = train_df.sort_values(['app_user_id', 'record_timestamp']).reset_index(drop=True)
+                val_df = val_df.sort_values(['app_user_id', 'record_timestamp']).reset_index(drop=True)
+                test_df = test_df.sort_values(['app_user_id', 'record_timestamp']).reset_index(drop=True)
+                
+                for df in [train_df, val_df, test_df]:
+                    prev_indices = []
+                    for idx in range(len(df)):
+                        if idx > 0 and df.iloc[idx - 1]['app_user_id'] == df.iloc[idx]['app_user_id']:
+                            prev_indices.append(idx - 1)
+                        else:
+                            prev_indices.append(-1)
+                    df['prev_sample_idx'] = prev_indices
+
             # Instantiate Dataset objects
             is_regression = getattr(self.hparams.aggregator, "is_regression", False)
             self.data_train = HealthDataset(
                 train_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
-                is_regression=is_regression
+                is_regression=is_regression,
+                use_prev_prediction=self.hparams.use_prev_prediction
             )
             self.data_val = HealthDataset(
                 val_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
-                is_regression=is_regression
+                is_regression=is_regression,
+                use_prev_prediction=self.hparams.use_prev_prediction
             )
             self.data_test = HealthDataset(
                 test_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
-                is_regression=is_regression
+                is_regression=is_regression,
+                use_prev_prediction=self.hparams.use_prev_prediction
             )
 
     def _fit_scaler(self, train_df: pd.DataFrame, modality_dfs: Dict[str, pd.DataFrame]) -> None:

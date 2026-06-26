@@ -33,6 +33,7 @@ class HealthDataset(Dataset):
         scaler: Optional[Any] = None,
         user_to_idx: Optional[Dict[str, int]] = None,
         is_regression: bool = False,
+        use_prev_prediction: bool = False,
     ) -> None:
         """Initializes the HealthDataset.
 
@@ -53,6 +54,10 @@ class HealthDataset(Dataset):
         self.modalities = sorted(list(modality_dfs.keys()))
         self.user_to_idx = user_to_idx
         self.is_regression = is_regression
+        self.use_prev_prediction = use_prev_prediction
+        
+        if self.use_prev_prediction:
+            self.predictions_cache = np.zeros(len(self.data_links), dtype=np.float32)
 
         # Pre-compute all sequences and targets once at construction time.
         # __getitem__ then becomes a direct numpy array index — no Pandas overhead.
@@ -126,21 +131,31 @@ class HealthDataset(Dataset):
         """Returns the number of samples in the dataset."""
         return len(self._sequences)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, ...]:
         """Returns the pre-computed sequence, target, and user index for index *idx*.
 
         Args:
             idx (int): Sample index.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            Tuple[torch.Tensor, ...]:
                 - features: ``float32`` tensor of shape ``[Time, Modalities]``.
-                - target: ``long`` scalar tensor.
+                - target: ``long`` or ``float32`` scalar tensor.
                 - user_idx: ``long`` scalar tensor.
+                - (optional) prev_pred: ``float32`` scalar tensor.
+                - (optional) idx: ``long`` scalar tensor.
         """
         target_dtype = torch.float32 if self.is_regression else torch.long
-        return (
+        base_tuple = (
             torch.from_numpy(self._sequences[idx]),
             torch.tensor(self._targets[idx], dtype=target_dtype),
             torch.tensor(self._user_indices[idx], dtype=torch.long),
         )
+        if self.use_prev_prediction:
+            prev_idx = self.data_links.iloc[idx]["prev_sample_idx"]
+            prev_pred = self.predictions_cache[prev_idx] if prev_idx != -1 else 0.0
+            return base_tuple + (
+                torch.tensor(prev_pred, dtype=torch.float32),
+                torch.tensor(idx, dtype=torch.long),
+            )
+        return base_tuple

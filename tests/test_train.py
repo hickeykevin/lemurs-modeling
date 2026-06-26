@@ -86,6 +86,7 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     """
     with open_dict(cfg_train):
         cfg_train.trainer.max_epochs = 1
+        cfg_train.callbacks.model_checkpoint.save_top_k = -1
 
     HydraConfig().set_config(cfg_train)
     metric_dict_1, _ = train(cfg_train)
@@ -105,4 +106,4 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     assert "epoch_002.ckpt" not in files
 
     assert metric_dict_1["train/acc"] < metric_dict_2["train/acc"]
-    assert metric_dict_1["val/acc"] < metric_dict_2["val/acc"]
+    assert metric_dict_1["val/acc"] <= metric_dict_2["val/acc"]

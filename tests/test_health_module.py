@@ -1,5 +1,6 @@
 import torch
 import pytest
+import numpy as np
 from src.models.health_module import HealthLitModule
 from src.models.components.simple_lstm import SimpleLSTM
 
@@ -106,7 +107,7 @@ def test_health_lit_module_with_user_embeddings():
     
     # Override network forward to inspect user_idx
     received_user_idx = []
-    def dummy_net_forward(x, uid):
+    def dummy_net_forward(x, uid, prev_pred=None):
         received_user_idx.append(uid.clone())
         return torch.zeros(batch_size, num_classes)
         
@@ -117,5 +118,137 @@ def test_health_lit_module_with_user_embeddings():
     assert torch.all(received_user_idx[0] == 0) # All user IDs should have dropped out to 0
 
 
+def test_health_lit_module_ablation():
+    """
+    Tests SimpleLSTM ablation configurations:
+    1. use_user_embedding=False (sequence data only)
+    2. use_sequence_data=False (user embedding only)
+    """
+    batch_size = 4
+    time_steps = 24
+    input_size = 2
+    num_classes = 5
+    num_users = 10
+    
+    # -------------------------------------------------------------
+    # Case 1: Sequence data only (use_user_embedding=False)
+    # -------------------------------------------------------------
+    net_seq_only = SimpleLSTM(
+        input_size=input_size, 
+        hidden_size=16, 
+        num_layers=1, 
+        output_size=num_classes,
+        user_embedding_dim=8,
+        use_user_embedding=False,
+        use_sequence_data=True
+    )
+    # Even if init_user_embedding is called (e.g. by health module), it should not build embedding
+    net_seq_only.init_user_embedding(num_users=num_users)
+    assert not hasattr(net_seq_only, "user_embedding")
+    assert net_seq_only.fc.in_features == 16 # Just the hidden size
+    
+    # Forward pass
+    x = torch.randn(batch_size, time_steps, input_size)
+    user_idx = torch.randint(0, num_users, (batch_size,))
+    output_seq = net_seq_only(x, user_idx)
+    assert output_seq.shape == (batch_size, num_classes)
+
+    # -------------------------------------------------------------
+    # Case 2: User embedding only (use_sequence_data=False)
+    # -------------------------------------------------------------
+    net_user_only = SimpleLSTM(
+        input_size=input_size, 
+        hidden_size=16, 
+        num_layers=1, 
+        output_size=num_classes,
+        user_embedding_dim=8,
+        use_user_embedding=True,
+        use_sequence_data=False
+    )
+    # Ensure lstm is not created
+    assert not hasattr(net_user_only, "lstm")
+    
+    # Initialize embedding
+    net_user_only.init_user_embedding(num_users=num_users)
+    assert hasattr(net_user_only, "user_embedding")
+    assert net_user_only.fc.in_features == 8 # Just the user embedding dim
+    
+    # Forward pass
+    output_user = net_user_only(x, user_idx)
+    assert output_user.shape == (batch_size, num_classes)
+
+
+def test_health_lit_module_use_prev_prediction():
+    """
+    Tests that the use_prev_prediction flag:
+    1. Adjusts SimpleLSTM's fc projection layer size.
+    2. Allows forward pass with prev_pred.
+    3. Handles updates to predictions cache in LitModule.
+    """
+    batch_size = 2
+    time_steps = 24
+    input_size = 2
+    num_classes = 5
+    num_users = 10
+    
+    # 1. Instantiate network with use_prev_prediction=True
+    net = SimpleLSTM(
+        input_size=input_size,
+        hidden_size=16,
+        num_layers=1,
+        output_size=num_classes,
+        user_embedding_dim=8,
+        use_user_embedding=True,
+        use_sequence_data=True,
+        use_prev_prediction=True
+    )
+    net.init_user_embedding(num_users=num_users)
+    # in_features should be hidden_size (16) + user_embedding_dim (8) + prev_pred (1) = 25
+    assert net.fc.in_features == 25
+    
+    # 2. Forward pass with prev_pred
+    x = torch.randn(batch_size, time_steps, input_size)
+    user_idx = torch.randint(0, num_users, (batch_size,))
+    prev_pred = torch.randn(batch_size)
+    output = net(x, user_idx=user_idx, prev_pred=prev_pred)
+    assert output.shape == (batch_size, num_classes)
+
+    # 3. Test update predictions cache logic in HealthLitModule
+    def optimizer_func(params):
+        return torch.optim.Adam(params, lr=0.001)
+
+    module = HealthLitModule(net=net, optimizer=optimizer_func, use_prev_prediction=True)
+    module.setup(stage="fit", num_classes=num_classes)
+
+    # Mock datamodule/datasets for predictions_cache update
+    class MockDataset:
+        def __init__(self):
+            self.predictions_cache = np.zeros(10, dtype=np.float32)
+
+    class MockDataModule:
+        def __init__(self):
+            self.data_train = MockDataset()
+            self.data_val = MockDataset()
+            self.data_test = MockDataset()
+
+    class MockTrainer:
+        def __init__(self):
+            self.datamodule = MockDataModule()
+
+    # Set trainer and trigger training mode
+    module.trainer = MockTrainer()
+    module.train()
+
+    # Call _update_predictions_cache directly
+    idx = torch.tensor([1, 3], dtype=torch.long)
+    preds = torch.tensor([2, 4], dtype=torch.float32)
+    module._update_predictions_cache(idx, preds)
+
+    # Assert cache is updated on train dataset
+    assert module.trainer.datamodule.data_train.predictions_cache[1] == 2.0
+    assert module.trainer.datamodule.data_train.predictions_cache[3] == 4.0
+
+
 if __name__ == "__main__":
     test_health_lit_module()
+
