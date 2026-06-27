@@ -19,8 +19,8 @@ We use the `RuleBasedAggregator` class to translate clinical criteria into logic
 Swapping targets is done by setting `data/aggregator=preset_name`:
 
 *   `suicide_risk.yaml`: Targets questions related to self-harm and active ideation (suicide ideation and preparation)
-*       `suicide_ideation.yaml`: Targets questions related to suicide ideation.
-*       `suicide_preparation.yaml`: Targets questions related to suicide preparation. 
+*   `suicide_ideation.yaml`: Targets questions related to suicide ideation.
+*   `suicide_preparation.yaml`: Targets questions related to suicide preparation. 
 *   `social_ideation.yaml`: Targets questions regarding interpersonal friction and conflict.
 *   `emotion_regulation.yaml`: Targets coping strategy questions.
 *   `minority_stress.yaml`: Targets questions measuring identity-based discrimination.
