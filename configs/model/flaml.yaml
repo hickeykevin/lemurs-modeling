@@ -4,5 +4,7 @@ automl_config:
   metric: 'f1'
   estimator_list: ['lgbm', 'rf', 'xgboost', 'extra_tree']
   n_jobs: 1
-  verbose: -1
+  log_file_name: ${paths.log_dir}/flaml.log
 task: 'classification'
+# need to add 'use_prev_prediction' to FLAMLHealthModule.__init__
+use_prev_prediction: false

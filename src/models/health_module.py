@@ -310,7 +310,7 @@ class FLAMLHealthModule(LightningModule):
     automated machine learning benchmarks on the same data pipeline.
     """
     
-    def __init__(self, automl_config: Dict[str, Any], task: str = "classification"):
+    def __init__(self, automl_config: Dict[str, Any], task: str = "classification", **kwargs):
         """Initializes the FLAMLHealthModule.
 
         Args:
