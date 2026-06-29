@@ -1,0 +1,25 @@
+#suicide preparation questions:
+#(7) 5-scale (1-5): How intense was your desire to kill yourself?
+#   (8) yes-no: Do you intend to kill yourself right now?
+#(12) yes-no: Attempted suicide
+#   (13) yes-no: Were you severely injured or did you require medical intervention?
+
+
+#labeling strategy:
+# - Any preparation item (questions 7) ≥ 2
+#OR
+# - Answer to question 8, 12, 13 --> YES
+
+
+_target_: src.data.components.label_aggregators.RuleBasedAggregator
+combination_logic: "any"
+rules:
+  rule_1:
+    ids: [7]
+    op: "ge"
+    val: 1.0
+  rule_2:
+    ids: [8, 12, 13]
+    op: "any_gt"
+    val: 0
+
