@@ -1,0 +1,22 @@
+#suicide ideation questions:
+#(2) 5-scale (1-5): I wanted to die
+#(3) 5-scale (1-5): I thought about taking my life
+#(5) yes-no: Considered a specific suicide method or made preparations for your death
+
+#labeling strategy:
+# - Any ideation item (questions 2,3) ≥ 2
+#OR
+# - Answer to question 5 --> YES
+
+_target_: src.data.components.label_aggregators.RuleBasedAggregator
+combination_logic: "any"
+rules:
+  rule_1:
+    ids: [2, 3]
+    op: "ge"
+    val: 1.0
+  rule_2:
+    ids: [5]
+    op: "any_gt"
+    val: 0
+
