@@ -3,7 +3,6 @@ from typing import Any, Dict, Tuple, Optional, List
 import torch
 from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric, MinMetric, MeanSquaredError, MeanAbsoluteError
-from torchmetrics.classification.accuracy import Accuracy
 import numpy as np
 from functools import partial
 
@@ -65,19 +64,10 @@ class HealthLitModule(LightningModule):
         else:
             self.criterion = torch.nn.CrossEntropyLoss()
 
-        # Metrics for health classification (0-4 scores)
-        # We use partial initialization because num_classes is determined at runtime
-        self.train_acc = partial(Accuracy, task="multiclass")
-        self.val_acc = partial(Accuracy, task="multiclass")
-        self.test_acc = partial(Accuracy, task="multiclass")
-
         # Averaging metrics over the entire epoch
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
-
-        # Track the best validation accuracy across epochs
-        self.val_acc_best = MaxMetric()
 
     def forward(self, x: torch.Tensor, user_idx: Optional[torch.Tensor] = None, prev_pred: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Perform a forward pass through the network.
@@ -159,11 +149,9 @@ class HealthLitModule(LightningModule):
 
         # Update metrics
         self.train_loss(loss)
-        self.train_acc(preds, targets)
 
         # Log metrics
         self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("train/acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
 
         # Return loss or backpropagation will fail
         return loss
@@ -179,22 +167,11 @@ class HealthLitModule(LightningModule):
 
         # Update and log metrics
         self.val_loss(loss)
-        self.val_acc(preds, targets)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
 
         return {"loss": loss, "preds": preds, "targets": targets, "logits": logits}
 
-    def on_validation_epoch_end(self) -> None:
-        """Lightning hook called at the end of the validation epoch.
 
-        Used to update the best validation accuracy.
-        """
-        acc = self.val_acc.compute()  # Get accuracy from the current epoch
-        self.val_acc_best(acc)        # Update max metric
-        
-        # Log best accuracy so far
-        self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         """Perform a single test step on a batch of data from the test set.
@@ -207,9 +184,7 @@ class HealthLitModule(LightningModule):
 
         # Update and log metrics
         self.test_loss(loss)
-        self.test_acc(preds, targets)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
 
         return {"loss": loss, "preds": preds, "targets": targets, "logits": logits}
 
@@ -247,21 +222,8 @@ class HealthLitModule(LightningModule):
                     self.net.init_user_embedding(self.num_users)
                     self.net.to(self.device)  # Make sure embedding weights are moved to correct device
 
-        # Instantiate the actual Accuracy metrics with the correct task type
-        if self.num_classes <= 2:
-            # For binary tasks (0 or 1), torchmetrics Accuracy doesn't use num_classes
-            self.train_acc = Accuracy(task="binary")
-            self.val_acc = Accuracy(task="binary")
-            self.test_acc = Accuracy(task="binary")
-        else:
-            self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-            self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-            self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-        
         # Reset metrics to ensure a clean start
         self.val_loss.reset()
-        self.val_acc.reset()
-        self.val_acc_best.reset()
 
     def load_state_dict(self, state_dict: Dict[str, Any], strict: bool = True) -> Any:
         """Dynamically adjust user embedding shapes if present in state_dict before loading."""
@@ -323,10 +285,7 @@ class FLAMLHealthModule(LightningModule):
         self.automl = AutoML()
         self.task = task
         
-        # Metrics for logging
-        self.train_acc = partial(Accuracy, task="multiclass")
-        self.val_acc = partial(Accuracy, task="multiclass")
-        self.test_acc = partial(Accuracy, task="multiclass")
+
         
     def _flatten_batch(self, x: torch.Tensor) -> np.ndarray:
         """Flattens sequential data for tabular ML models.
@@ -358,15 +317,7 @@ class FLAMLHealthModule(LightningModule):
             else:
                 self.num_classes = 2  # Default binary fallback
                 
-            # Instantiate correct accuracy metrics (binary or multiclass)
-            if self.num_classes <= 2:
-                self.train_acc = Accuracy(task="binary")
-                self.val_acc = Accuracy(task="binary")
-                self.test_acc = Accuracy(task="binary")
-            else:
-                self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-                self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-                self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+
 
         if stage == "fit" and not hasattr(self.automl, "best_estimator"):
             self.print("--- FLAML AutoML: Starting Optimization ---")
@@ -387,14 +338,7 @@ class FLAMLHealthModule(LightningModule):
             num_classes_train = int(np.max(y_train)) + 1
             if num_classes_train > self.num_classes:
                 self.num_classes = num_classes_train
-                if self.num_classes <= 2:
-                    self.train_acc = Accuracy(task="binary")
-                    self.val_acc = Accuracy(task="binary")
-                    self.test_acc = Accuracy(task="binary")
-                else:
-                    self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-                    self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-                    self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
+
             
             # Fit FLAML (this may take some time depending on automl_config.time_budget)
             self.automl.fit(
@@ -436,9 +380,7 @@ class FLAMLHealthModule(LightningModule):
             # Fallback if the estimator doesn't support predict_proba
             logits = torch.nn.functional.one_hot(y_pred_tensor, num_classes=self.num_classes).float()
 
-        # Update and log metrics
-        self.val_acc(y_pred_tensor, y)
-        self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+
 
         return {"preds": y_pred_tensor, "targets": y, "logits": logits}
 
@@ -463,9 +405,7 @@ class FLAMLHealthModule(LightningModule):
             # Fallback
             logits = torch.nn.functional.one_hot(y_pred_tensor, num_classes=self.num_classes).float()
         
-        # Log test metrics
-        self.test_acc(y_pred_tensor, y)
-        self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+
         
         return {"preds": y_pred_tensor, "targets": y, "logits": logits}
 
@@ -499,16 +439,12 @@ class BaselineHealthModule(LightningModule):
         self.strategy = strategy
         self.majority_class = None
         
-        # Metrics for logging (mirrors HealthLitModule)
-        self.val_acc = partial(Accuracy, task="multiclass")
-        self.test_acc = partial(Accuracy, task="multiclass")
+
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
         
         if num_classes:
             self.num_classes = num_classes
-            self.val_acc = Accuracy(task="multiclass", num_classes=num_classes)
-            self.test_acc = Accuracy(task="multiclass", num_classes=num_classes)
 
     def setup(self, stage: str, **kwargs) -> None:
         """Determines num_classes and majority class if needed."""
@@ -524,8 +460,6 @@ class BaselineHealthModule(LightningModule):
 
         if not hasattr(self, "num_classes"):
             self.num_classes = int(np.max(y_train)) + 1
-            self.val_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
-            self.test_acc = Accuracy(task="multiclass", num_classes=self.num_classes)
 
         if self.strategy == "most_frequent":
             # Calculate the mode of the training labels
@@ -572,17 +506,13 @@ class BaselineHealthModule(LightningModule):
     def validation_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
         loss, preds, targets, logits = self.model_step(batch)
         self.val_loss(loss)
-        self.val_acc(preds, targets)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
         return {"loss": loss, "preds": preds, "targets": targets, "logits": logits}
 
     def test_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
         loss, preds, targets, logits = self.model_step(batch)
         self.test_loss(loss)
-        self.test_acc(preds, targets)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
         return {"loss": loss, "preds": preds, "targets": targets, "logits": logits}
 
     def configure_optimizers(self) -> Any:

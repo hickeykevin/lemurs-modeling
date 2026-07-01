@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import torch
 from lightning import Callback, LightningModule, Trainer
 from torchmetrics import Metric, MetricCollection, MaxMetric, MinMetric
-from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix, BinaryConfusionMatrix, Precision, Recall, Specificity, SensitivityAtSpecificity
+from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix, BinaryConfusionMatrix, Precision, Recall, Specificity, SensitivityAtSpecificity, Accuracy
 from torchmetrics.wrappers import BootStrapper
 from rich.table import Table
 from rich.console import Console
@@ -310,6 +310,7 @@ class ClassificationMetricsCallback(Callback):
             "average": sensitivity_at_specificity_average,
             "min_specificity": min_specificity
         }
+        self.balanced_accuracy_params = {"task": "multiclass", "average": "macro"}
         self.num_bootstraps = num_bootstraps
         self.sampling_strategy = sampling_strategy
         
@@ -323,6 +324,7 @@ class ClassificationMetricsCallback(Callback):
         self.val_recall_best = MaxMetric()
         self.val_specificity_best = MaxMetric()
         self.val_sensitivity_at_specificity_best = MaxMetric()
+        self.val_balanced_accuracy_best = MaxMetric()
 
     def _init_metrics(self, num_classes: int, device: torch.device, bootstrap: bool = False) -> MetricCollection:
         """Initializes the MetricCollection with F1, AUROC, Precision, Recall, Specificity, and SensitivityAtSpecificity.
@@ -346,6 +348,7 @@ class ClassificationMetricsCallback(Callback):
                 "recall": BootStrapper(Recall(num_classes=num_classes, **self.recall_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
                 "specificity": BootStrapper(Specificity(num_classes=num_classes, **self.specificity_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
                 "sensitivity_at_specificity": BootStrapper(SensitivityAtSpecificityScalar(num_classes=num_classes, **self.sensitivity_at_specificity_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
+                "balanced_accuracy": BootStrapper(Accuracy(num_classes=num_classes, **self.balanced_accuracy_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
             })
         else:
             metrics = MetricCollection({
@@ -355,6 +358,7 @@ class ClassificationMetricsCallback(Callback):
                 "recall": Recall(num_classes=num_classes, **self.recall_params),
                 "specificity": Specificity(num_classes=num_classes, **self.specificity_params),
                 "sensitivity_at_specificity": SensitivityAtSpecificityScalar(num_classes=num_classes, **self.sensitivity_at_specificity_params),
+                "balanced_accuracy": Accuracy(num_classes=num_classes, **self.balanced_accuracy_params),
             })
         return metrics.to(device)
 
@@ -438,6 +442,11 @@ class ClassificationMetricsCallback(Callback):
                         self.val_sensitivity_at_specificity_best = self.val_sensitivity_at_specificity_best.to(pl_module.device)
                     self.val_sensitivity_at_specificity_best(value)
                     pl_module.log("val/sensitivity_at_specificity_best", self.val_sensitivity_at_specificity_best.compute(), sync_dist=True, prog_bar=True)
+                elif name == "balanced_accuracy":
+                    if self.val_balanced_accuracy_best.device != pl_module.device:
+                        self.val_balanced_accuracy_best = self.val_balanced_accuracy_best.to(pl_module.device)
+                    self.val_balanced_accuracy_best(value)
+                    pl_module.log("val/balanced_accuracy_best", self.val_balanced_accuracy_best.compute(), sync_dist=True, prog_bar=True)
                     
             self.val_metrics.reset()
 

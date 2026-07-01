@@ -48,13 +48,11 @@ def test_health_lit_module():
     assert loss is not None
     assert loss.shape == torch.Size([]) # Must be a scalar tensor
     
-    # 6. Test validation / accuracy metrics
+    # 6. Test validation / loss metrics
     module.validation_step(batch, 0)
     val_loss = module.val_loss.compute()
-    val_acc = module.val_acc.compute()
     
     assert val_loss >= 0
-    assert 0 <= val_acc <= 1.0
 
 
 def test_health_lit_module_with_user_embeddings():
