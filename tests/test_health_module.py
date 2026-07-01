@@ -105,7 +105,7 @@ def test_health_lit_module_with_user_embeddings():
     
     # Override network forward to inspect user_idx
     received_user_idx = []
-    def dummy_net_forward(x, uid, prev_pred=None):
+    def dummy_net_forward(x, uid, prev_pred=None, *args, **kwargs):
         received_user_idx.append(uid.clone())
         return torch.zeros(batch_size, num_classes)
         

@@ -52,7 +52,29 @@ def dummy_data():
         answer_list.append({'survey_response_id': sid, 'question_id': 4, 'answer': score})
     answer_df = pd.DataFrame(answer_list)
     
-    return {"step": step_df, "survey_response": survey_df, "answer": answer_df}
+    demo_list = []
+    # users 1, 2, 3, 4
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'age', 'value': '25'},
+        {'app_user_id': 2, 'keyword': 'age', 'value': '30'},
+        {'app_user_id': 3, 'keyword': 'age', 'value': '35'},
+        {'app_user_id': 4, 'keyword': 'age', 'value': '40'},
+    ])
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'gender identity', 'value': 'male'},
+        {'app_user_id': 2, 'keyword': 'gender identity', 'value': 'female'},
+        {'app_user_id': 3, 'keyword': 'gender identity', 'value': 'male'},
+        {'app_user_id': 4, 'keyword': 'gender identity', 'value': 'female'},
+    ])
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'lgbt', 'value': 'no'},
+        {'app_user_id': 2, 'keyword': 'lgbt', 'value': 'yes'},
+        {'app_user_id': 3, 'keyword': 'lgbt', 'value': 'no'},
+        {'app_user_id': 4, 'keyword': 'lgbt', 'value': 'no'},
+    ])
+    demo_df = pd.DataFrame(demo_list)
+    
+    return {"step": step_df, "survey_response": survey_df, "answer": answer_df, "demographic": demo_df}
 
 
 def test_rule_based_aggregator():
@@ -169,7 +191,7 @@ def test_datamodule_normalization(dummy_data):
         
         # Get a sample
         train_ds = dm.data_train
-        seq, target, _ = train_ds[0]
+        seq, target, *rest = train_ds[0]
         
         # If mean was 15 (hypothetically), 20 would become (20-15)/std
         # The key is that the tensor should not be the raw [10, 20] values
@@ -372,7 +394,28 @@ def test_subject_scaler_normalization(mock_db_class):
         {'survey_response_id': 104, 'question_id': 2, 'answer': 1}
     ])
     
-    dummy_data = {"step": step_df, "survey_response": survey_df, "answer": answer_df}
+    demo_list = []
+    # users 1, 2, 3, 4
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'age', 'value': '25'},
+        {'app_user_id': 2, 'keyword': 'age', 'value': '30'},
+        {'app_user_id': 3, 'keyword': 'age', 'value': '35'},
+        {'app_user_id': 4, 'keyword': 'age', 'value': '40'},
+    ])
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'gender identity', 'value': 'male'},
+        {'app_user_id': 2, 'keyword': 'gender identity', 'value': 'female'},
+        {'app_user_id': 3, 'keyword': 'gender identity', 'value': 'male'},
+        {'app_user_id': 4, 'keyword': 'gender identity', 'value': 'female'},
+    ])
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'lgbt', 'value': 'no'},
+        {'app_user_id': 2, 'keyword': 'lgbt', 'value': 'yes'},
+        {'app_user_id': 3, 'keyword': 'lgbt', 'value': 'no'},
+        {'app_user_id': 4, 'keyword': 'lgbt', 'value': 'no'},
+    ])
+    demo_df = pd.DataFrame(demo_list)
+    dummy_data = {"step": step_df, "survey_response": survey_df, "answer": answer_df, "demographic": demo_df}
 
     mock_db = mock_db_class.return_value
     mock_db.connect.return_value = True
@@ -399,7 +442,7 @@ def test_subject_scaler_normalization(mock_db_class):
     
     for ds in all_datasets:
         for i in range(len(ds)):
-            seq, _, _ = ds[i]
+            seq, *rest = ds[i]
             assert torch.allclose(seq, expected_seq, atol=1e-5)
 
 
@@ -464,7 +507,7 @@ def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     
     # 1. Check datamodule targets
     train_ds = dm.data_train
-    seq, target, _ = train_ds[0]
+    seq, target, *rest = train_ds[0]
     assert target.dtype == torch.float32
     
     # 2. Check model steps in regression mode
@@ -568,7 +611,28 @@ def test_cohort_builder_deduplication(mock_db_class):
         {'survey_response_id': 105, 'question_id': 3, 'answer': '0'},
     ])
     
-    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df}
+    demo_list = []
+    # users 1, 2, 3, 4
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'age', 'value': '25'},
+        {'app_user_id': 2, 'keyword': 'age', 'value': '30'},
+        {'app_user_id': 3, 'keyword': 'age', 'value': '35'},
+        {'app_user_id': 4, 'keyword': 'age', 'value': '40'},
+    ])
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'gender identity', 'value': 'male'},
+        {'app_user_id': 2, 'keyword': 'gender identity', 'value': 'female'},
+        {'app_user_id': 3, 'keyword': 'gender identity', 'value': 'male'},
+        {'app_user_id': 4, 'keyword': 'gender identity', 'value': 'female'},
+    ])
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'lgbt', 'value': 'no'},
+        {'app_user_id': 2, 'keyword': 'lgbt', 'value': 'yes'},
+        {'app_user_id': 3, 'keyword': 'lgbt', 'value': 'no'},
+        {'app_user_id': 4, 'keyword': 'lgbt', 'value': 'no'},
+    ])
+    demo_df = pd.DataFrame(demo_list)
+    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df, "demographic": demo_df}
     
     mock_db = mock_db_class.return_value
     mock_db.connect.return_value = True
@@ -585,7 +649,7 @@ def test_cohort_builder_deduplication(mock_db_class):
         os_filter='both'
     )
     
-    _, master_df = builder.build()
+    _, master_df, _ = builder.build()
     
     # Master df should contain:
     # 103 (representative for User 1 after deduplicating 102 and collapsing 101/103)
@@ -632,7 +696,28 @@ def test_cohort_builder_collapsing(mock_db_class):
         {'survey_response_id': 103, 'question_id': 11, 'answer': 'no'},
     ])
     
-    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df}
+    demo_list = []
+    # users 1, 2, 3, 4
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'age', 'value': '25'},
+        {'app_user_id': 2, 'keyword': 'age', 'value': '30'},
+        {'app_user_id': 3, 'keyword': 'age', 'value': '35'},
+        {'app_user_id': 4, 'keyword': 'age', 'value': '40'},
+    ])
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'gender identity', 'value': 'male'},
+        {'app_user_id': 2, 'keyword': 'gender identity', 'value': 'female'},
+        {'app_user_id': 3, 'keyword': 'gender identity', 'value': 'male'},
+        {'app_user_id': 4, 'keyword': 'gender identity', 'value': 'female'},
+    ])
+    demo_list.extend([
+        {'app_user_id': 1, 'keyword': 'lgbt', 'value': 'no'},
+        {'app_user_id': 2, 'keyword': 'lgbt', 'value': 'yes'},
+        {'app_user_id': 3, 'keyword': 'lgbt', 'value': 'no'},
+        {'app_user_id': 4, 'keyword': 'lgbt', 'value': 'no'},
+    ])
+    demo_df = pd.DataFrame(demo_list)
+    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df, "demographic": demo_df}
     
     mock_db = mock_db_class.return_value
     mock_db.connect.return_value = True
@@ -652,7 +737,7 @@ def test_cohort_builder_collapsing(mock_db_class):
         os_filter='both'
     )
     
-    _, master_df = builder.build()
+    _, master_df, _ = builder.build()
     
     # Check that 101 is collapsed and not present in master_df
     # Representative 102 and distinct 103 are present
@@ -898,6 +983,33 @@ def test_cohort_builder_with_sleep_aggregator(mock_db_class):
     assert len(collapsed_ans) == 2
     assert "10:00 PM" in collapsed_ans['answer'].values
     assert "07:00 AM" in collapsed_ans['answer'].values
+
+
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_datamodule_use_demographics_toggle(mock_db_class, dummy_data):
+    """Tests that setting use_demographics=False prevents fetching/appending demographics."""
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
+    
+    # Instantiate with use_demographics=False
+    dm = HealthDataModule(
+        aggregator=MeanAggregator(question_ids=[2]),
+        sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
+        use_demographics=False
+    )
+    
+    dm.setup()
+    
+    # 1. Verify datamodule properties
+    assert dm.demographics_dim == 0
+    assert dm.demographics_map is None
+    assert dm.default_demographics is None
+    
+    # 2. Verify dataset item length is 3 (x, y, user_idx)
+    train_ds = dm.data_train
+    sample = train_ds[0]
+    assert len(sample) == 3
 
 
 

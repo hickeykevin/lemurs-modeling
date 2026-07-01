@@ -19,7 +19,8 @@ class CohortBuilder:
         preprocessors: Optional[Dict[str, Any]],
         aggregator: LabelAggregator,
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
-        collapse_strategy: str = "mean"
+        collapse_strategy: str = "mean",
+        use_demographics: bool = False
     ):
         """Initializes the CohortBuilder.
 
@@ -30,6 +31,7 @@ class CohortBuilder:
             aggregator: Strategy object for binarizing/aggregating daily survey responses.
             os_filter: Operating system filter mode ("ios", "android", or "both").
             collapse_strategy: Aggregation strategy to collapse multiple daily survey responses for non-yes-no questions.
+            use_demographics: Whether to load and merge demographics.
         """
         self.modalities = modalities
         self.modality_cols = modality_cols
@@ -37,27 +39,33 @@ class CohortBuilder:
         self.aggregator = aggregator
         self.os_filter = os_filter
         self.collapse_strategy = collapse_strategy
+        self.use_demographics = use_demographics
 
-    def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
+    def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]:
         """Orchestrates the entire cohort building pipeline.
 
         This method connects to the database, extracts and cleans all requested
-        health metrics, fetches and binarizes survey answers, and then filters
-        the cohort to match OS-demographic criteria.
+        health metrics, fetches and binarizes survey answers, extracts user demographics,
+        and then filters the cohort to match OS-demographic criteria.
 
         Returns:
             A tuple containing:
                 - Dict[str, pd.DataFrame]: Cleaned and preprocessed modality dataframes.
                 - pd.DataFrame: Combined target survey labels (master dataframe).
+                - pd.DataFrame: Cleaned demographics dataframe.
         """
         db = DatabaseService()
         if not db.connect():
             raise Exception("Failed to connect to the database.")
 
         try:
-            # Step 1 & 2: Extract data streams and apply cleanings/aggregations
+            # Step 1 & 2: Extract data streams, apply cleanings/aggregations, and extract demographics
             modality_dfs = self._extract_and_clean_modalities(db)
             master_df = self._extract_and_aggregate_labels(db)
+            if self.use_demographics:
+                demographics_df = self._extract_demographics(db)
+            else:
+                demographics_df = pd.DataFrame(columns=['app_user_id', 'gender', 'age', 'lgbt'])
         finally:
             # Ensure database connection is closed regardless of success/error
             db.disconnect()
@@ -65,7 +73,42 @@ class CohortBuilder:
         # Step 3: Filter cohort demographics by operating system if requested
         master_df = self._apply_os_filtering(master_df, modality_dfs)
         
-        return modality_dfs, master_df
+        return modality_dfs, master_df, demographics_df
+
+    def _extract_demographics(self, db: DatabaseService) -> pd.DataFrame:
+        """Extracts, filters and pivots user demographic information.
+
+        Args:
+            db: Connected DatabaseService instance.
+
+        Returns:
+            pd.DataFrame: Cleaned and pivoted demographics dataframe.
+        """
+        df = db.extract_from_database("demographic")
+        
+        # Remove test and discontinued users
+        drop_users = [1, 2, 3, 10, 21, 22, 43, 44]
+        if 'app_user_id' in df.columns:
+            df = df[~df['app_user_id'].isin(drop_users)]
+            
+        # Pivot EAV structure
+        if not df.empty and 'keyword' in df.columns and 'value' in df.columns:
+            # Pivot, index on app_user_id
+            df_pivot = df.pivot(index='app_user_id', columns='keyword', values='value').reset_index()
+            # Rename columns to standard names
+            df_pivot = df_pivot.rename(columns={
+                'gender identity': 'gender',
+                'gender at birth': 'gender_at_birth'
+            })
+            # Ensure gender is there. Fallback to gender_at_birth if needed
+            if 'gender' not in df_pivot.columns:
+                df_pivot['gender'] = np.nan
+            if 'gender_at_birth' in df_pivot.columns:
+                df_pivot['gender'] = df_pivot['gender'].fillna(df_pivot['gender_at_birth'])
+            
+            return df_pivot
+        else:
+            return pd.DataFrame(columns=['app_user_id', 'gender', 'age', 'lgbt'])
 
     def _extract_and_clean_modalities(self, db: DatabaseService) -> Dict[str, pd.DataFrame]:
         """Extracts, cleans, and applies outlier clipping to sensor modalities.

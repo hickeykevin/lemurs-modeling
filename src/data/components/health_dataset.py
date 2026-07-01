@@ -34,6 +34,8 @@ class HealthDataset(Dataset):
         user_to_idx: Optional[Dict[str, int]] = None,
         is_regression: bool = False,
         use_prev_prediction: bool = False,
+        demographics_map: Optional[Dict[Any, np.ndarray]] = None,
+        default_demographics: Optional[np.ndarray] = None,
     ) -> None:
         """Initializes the HealthDataset.
 
@@ -55,6 +57,8 @@ class HealthDataset(Dataset):
         self.user_to_idx = user_to_idx
         self.is_regression = is_regression
         self.use_prev_prediction = use_prev_prediction
+        self.demographics_map = demographics_map
+        self.default_demographics = default_demographics
         
         if self.use_prev_prediction:
             self.predictions_cache = np.zeros(len(self.data_links), dtype=np.float32)
@@ -154,8 +158,16 @@ class HealthDataset(Dataset):
         if self.use_prev_prediction:
             prev_idx = self.data_links.iloc[idx]["prev_sample_idx"]
             prev_pred = self.predictions_cache[prev_idx] if prev_idx != -1 else 0.0
-            return base_tuple + (
+            ret = base_tuple + (
                 torch.tensor(prev_pred, dtype=torch.float32),
                 torch.tensor(idx, dtype=torch.long),
             )
-        return base_tuple
+        else:
+            ret = base_tuple
+
+        if self.demographics_map is not None:
+            uid = self.data_links.iloc[idx]["app_user_id"]
+            demo = self.demographics_map.get(uid, self.default_demographics)
+            ret = ret + (torch.tensor(demo, dtype=torch.float32),)
+
+        return ret

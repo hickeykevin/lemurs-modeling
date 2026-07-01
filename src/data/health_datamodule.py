@@ -53,6 +53,7 @@ class HealthDataModule(LightningDataModule):
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
         collapse_strategy: str = "mean",
         use_prev_prediction: bool = False,
+        use_demographics: bool = True,
     ) -> None:
 
 
@@ -76,6 +77,7 @@ class HealthDataModule(LightningDataModule):
                 - "longitudinal": Temporal split per user (predict future from past).
             collapse_strategy (str): Aggregation strategy to collapse multiple daily survey responses for non-yes-no questions.
             use_prev_prediction (bool): Whether to use the previous day's prediction as input to the model.
+            use_demographics (bool): Whether to query, process, and pass user demographics as context.
         """
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -117,14 +119,78 @@ class HealthDataModule(LightningDataModule):
                 preprocessors=self.hparams.preprocessors,
                 aggregator=self.hparams.aggregator,
                 os_filter=self.hparams.os_filter,
-                collapse_strategy=self.hparams.collapse_strategy
+                collapse_strategy=self.hparams.collapse_strategy,
+                use_demographics=self.hparams.use_demographics
             )
-            modality_dfs, master_df = builder.build()
+            modality_dfs, master_df, demographics_df = builder.build()
             
             self.master_df = master_df
 
             # Perform splitting based on the selected evaluation strategy
             train_df, val_df, test_df = self._split_data(master_df)
+
+            if self.hparams.use_demographics:
+                # Preprocess demographics
+                demographics_df = demographics_df.copy()
+                for col in ['gender', 'age', 'lgbt']:
+                    if col not in demographics_df.columns:
+                        demographics_df[col] = np.nan
+
+                train_users = train_df["app_user_id"].unique()
+                train_demo = demographics_df[demographics_df["app_user_id"].isin(train_users)]
+
+                # Fit age median and scale parameters
+                age_train = pd.to_numeric(train_demo["age"], errors="coerce").dropna()
+                self.age_median = age_train.median() if not age_train.empty else 30.0
+                self.age_mean = age_train.mean() if not age_train.empty else 30.0
+                self.age_std = age_train.std() if not age_train.empty and age_train.std() > 0 else 10.0
+
+                # Get unique categories from training set
+                self.gender_categories = [str(x).strip().lower() for x in train_demo["gender"].dropna().unique() if str(x).strip() != ""]
+                if not self.gender_categories:
+                    self.gender_categories = ["male", "female"]
+                self.lgbt_categories = [str(x).strip().lower() for x in train_demo["lgbt"].dropna().unique() if str(x).strip() != ""]
+                if not self.lgbt_categories:
+                    self.lgbt_categories = ["no", "yes"]
+
+                # Standardize age
+                demographics_df["age"] = pd.to_numeric(demographics_df["age"], errors="coerce").fillna(self.age_median)
+                demographics_df["age_scaled"] = (demographics_df["age"] - self.age_mean) / self.age_std
+
+                # One-hot encode categoricals manually to ensure consistency
+                for cat in self.gender_categories:
+                    demographics_df[f"gender_{cat}"] = (demographics_df["gender"].astype(str).str.strip().str.lower() == cat).astype(float)
+                demographics_df["gender_unknown"] = (~demographics_df["gender"].astype(str).str.strip().str.lower().isin(self.gender_categories)).astype(float)
+
+                for cat in self.lgbt_categories:
+                    demographics_df[f"lgbt_{cat}"] = (demographics_df["lgbt"].astype(str).str.strip().str.lower() == cat).astype(float)
+                demographics_df["lgbt_unknown"] = (~demographics_df["lgbt"].astype(str).str.strip().str.lower().isin(self.lgbt_categories)).astype(float)
+
+                # Processed feature list
+                demographic_feature_cols = (
+                    ["age_scaled"]
+                    + [f"gender_{cat}" for cat in self.gender_categories]
+                    + ["gender_unknown"]
+                    + [f"lgbt_{cat}" for cat in self.lgbt_categories]
+                    + ["lgbt_unknown"]
+                )
+                self.demographics_dim = len(demographic_feature_cols)
+
+                # Map app_user_id to feature vector
+                self.demographics_map = {}
+                for _, row in demographics_df.iterrows():
+                    uid = row["app_user_id"]
+                    self.demographics_map[uid] = row[demographic_feature_cols].values.astype(np.float32)
+
+                # Default demographic vector for missing/unseen users
+                self.default_demographics = np.zeros(self.demographics_dim, dtype=np.float32)
+                for idx, col in enumerate(demographic_feature_cols):
+                    if col in ["gender_unknown", "lgbt_unknown"]:
+                        self.default_demographics[idx] = 1.0
+            else:
+                self.demographics_map = None
+                self.default_demographics = None
+                self.demographics_dim = 0
 
             # If the sampler needs access to the labels (e.g. LagSampler), provide them now
             if hasattr(self.hparams.sampler, "set_labels"):
@@ -160,19 +226,25 @@ class HealthDataModule(LightningDataModule):
                 train_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
                 is_regression=is_regression,
-                use_prev_prediction=self.hparams.use_prev_prediction
+                use_prev_prediction=self.hparams.use_prev_prediction,
+                demographics_map=self.demographics_map,
+                default_demographics=self.default_demographics
             )
             self.data_val = HealthDataset(
                 val_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
                 is_regression=is_regression,
-                use_prev_prediction=self.hparams.use_prev_prediction
+                use_prev_prediction=self.hparams.use_prev_prediction,
+                demographics_map=self.demographics_map,
+                default_demographics=self.default_demographics
             )
             self.data_test = HealthDataset(
                 test_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
                 is_regression=is_regression,
-                use_prev_prediction=self.hparams.use_prev_prediction
+                use_prev_prediction=self.hparams.use_prev_prediction,
+                demographics_map=self.demographics_map,
+                default_demographics=self.default_demographics
             )
 
     def _fit_scaler(self, train_df: pd.DataFrame, modality_dfs: Dict[str, pd.DataFrame]) -> None:

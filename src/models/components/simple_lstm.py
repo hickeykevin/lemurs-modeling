@@ -12,7 +12,8 @@ class SimpleLSTM(nn.Module):
         user_embedding_dim: int = 16,
         use_user_embedding: bool = True,
         use_sequence_data: bool = True,
-        use_prev_prediction: bool = False
+        use_prev_prediction: bool = False,
+        demographics_dim: int = 0
     ):
         super(SimpleLSTM, self).__init__()
         self.hidden_size = hidden_size
@@ -21,6 +22,7 @@ class SimpleLSTM(nn.Module):
         self.use_user_embedding = use_user_embedding
         self.use_sequence_data = use_sequence_data
         self.use_prev_prediction = use_prev_prediction
+        self.demographics_dim = demographics_dim
         
         # LSTM layer
         if self.use_sequence_data:
@@ -31,6 +33,9 @@ class SimpleLSTM(nn.Module):
             
         if self.use_prev_prediction:
             fc_input_size += 1
+            
+        # Add demographics_dim to fc_input_size
+        fc_input_size += self.demographics_dim
             
         # Fully connected layer to map hidden states to output classes
         self.fc = nn.Linear(max(1, fc_input_size), output_size)
@@ -50,9 +55,18 @@ class SimpleLSTM(nn.Module):
             if self.use_prev_prediction:
                 fc_input_size += 1
                 
-            self.fc = nn.Linear(fc_input_size + self.user_embedding_dim, self.fc.out_features)
+            self.fc = nn.Linear(fc_input_size + self.user_embedding_dim + self.demographics_dim, self.fc.out_features)
 
-    def forward(self, x, user_idx=None, prev_pred=None):
+    def init_demographics(self, demographics_dim: int) -> None:
+        """Adjusts the output linear projection to support static demographics."""
+        if demographics_dim > 0 and self.demographics_dim == 0:
+            self.demographics_dim = demographics_dim
+            # Expand the fully connected layer's input features
+            in_features = self.fc.in_features + demographics_dim
+            out_features = self.fc.out_features
+            self.fc = nn.Linear(in_features, out_features)
+
+    def forward(self, x, user_idx=None, prev_pred=None, demographics=None):
         # x shape: [Batch, Time=24, Features=input_size]
         if self.use_sequence_data:
             # Forward pass through LSTM
@@ -85,8 +99,16 @@ class SimpleLSTM(nn.Module):
                 last_out = torch.cat([last_out, embed], dim=-1)
             else:
                 last_out = embed
-        elif last_out is None:
-            raise ValueError("At least one of use_sequence_data, use_user_embedding, or use_prev_prediction must be enabled.")
+                
+        # Concatenate demographics if present
+        if demographics is not None:
+            if last_out is not None:
+                last_out = torch.cat([last_out, demographics], dim=-1)
+            else:
+                last_out = demographics
+                
+        if last_out is None:
+            raise ValueError("At least one of use_sequence_data, use_user_embedding, use_prev_prediction, or demographics must be enabled.")
         
         # Map to logits
         logits = self.fc(last_out)
