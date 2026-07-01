@@ -2,8 +2,8 @@ from typing import Any, Dict, List, Optional
 
 import torch
 from lightning import Callback, LightningModule, Trainer
-from torchmetrics import MetricCollection, MaxMetric, MinMetric
-from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix, BinaryConfusionMatrix, Precision, Recall
+from torchmetrics import Metric, MetricCollection, MaxMetric, MinMetric
+from torchmetrics.classification import AUROC, F1Score, MulticlassConfusionMatrix, BinaryConfusionMatrix, Precision, Recall, Specificity, SensitivityAtSpecificity
 from torchmetrics.wrappers import BootStrapper
 from rich.table import Table
 from rich.console import Console
@@ -226,6 +226,36 @@ class ConfusionMatrixCallback(Callback):
         self._print_and_log_confusion_matrix(trainer, pl_module, stage="test")
 
 
+class SensitivityAtSpecificityScalar(Metric):
+    """A wrapper for SensitivityAtSpecificity that returns a single scalar tensor.
+
+    This is required because SensitivityAtSpecificity returns a tuple of (sensitivity, threshold),
+    which is not compatible with PyTorch Lightning's logging or torchmetrics' BootStrapper.
+    """
+    def __init__(self, task: str, num_classes: Optional[int] = None, min_specificity: float = 0.9, average: str = "macro", **kwargs) -> None:
+        super().__init__()
+        self.metric = SensitivityAtSpecificity(task=task, num_classes=num_classes, min_specificity=min_specificity, **kwargs)
+        self.average = average
+
+    def update(self, preds: torch.Tensor, target: torch.Tensor) -> None:
+        self.metric.update(preds, target)
+
+    def compute(self) -> torch.Tensor:
+        res = self.metric.compute()
+        if isinstance(res, tuple):
+            sensitivity, thresholds = res
+        else:
+            sensitivity = res
+
+        if self.average == "macro" and sensitivity.ndim > 0:
+            return sensitivity.mean()
+        return sensitivity
+
+    def reset(self) -> None:
+        super().reset()
+        self.metric.reset()
+
+
 class ClassificationMetricsCallback(Callback):
     """A Lightning callback that tracks additional classification metrics (F1, AUROC).
     
@@ -242,6 +272,9 @@ class ClassificationMetricsCallback(Callback):
         auroc_average: str = "macro",
         precision_average: str = "macro",
         recall_average: str = "macro",
+        specificity_average: str = "macro",
+        sensitivity_at_specificity_average: str = "macro",
+        min_specificity: float = 0.9,
         num_bootstraps: int = 200,
         sampling_strategy: str = "poisson",
     ) -> None:
@@ -256,6 +289,11 @@ class ClassificationMetricsCallback(Callback):
                 Defaults to "macro".
             recall_average (str): Averaging strategy for Recall (e.g., 'macro', 'micro', 'weighted').
                 Defaults to "macro".
+            specificity_average (str): Averaging strategy for Specificity (e.g., 'macro', 'micro', 'weighted').
+                Defaults to "macro".
+            sensitivity_at_specificity_average (str): Averaging strategy for SensitivityAtSpecificity.
+                Defaults to "macro".
+            min_specificity (float): Minimum specificity score target. Defaults to 0.9.
             num_bootstraps (int): The number of bootstrap resamples to use in the test stage.
                 Defaults to 200.
             sampling_strategy (str): The sampling strategy to use for BootStrapper ('poisson' or 'multinomial').
@@ -266,6 +304,12 @@ class ClassificationMetricsCallback(Callback):
         self.auroc_params = {"task": "multiclass", "average": auroc_average}
         self.precision_params = {"task": "multiclass", "average": precision_average}
         self.recall_params = {"task": "multiclass", "average": recall_average}
+        self.specificity_params = {"task": "multiclass", "average": specificity_average}
+        self.sensitivity_at_specificity_params = {
+            "task": "multiclass",
+            "average": sensitivity_at_specificity_average,
+            "min_specificity": min_specificity
+        }
         self.num_bootstraps = num_bootstraps
         self.sampling_strategy = sampling_strategy
         
@@ -277,9 +321,11 @@ class ClassificationMetricsCallback(Callback):
         self.val_auroc_best = MaxMetric()
         self.val_precision_best = MaxMetric()
         self.val_recall_best = MaxMetric()
+        self.val_specificity_best = MaxMetric()
+        self.val_sensitivity_at_specificity_best = MaxMetric()
 
     def _init_metrics(self, num_classes: int, device: torch.device, bootstrap: bool = False) -> MetricCollection:
-        """Initializes the MetricCollection with F1, AUROC, Precision, and Recall.
+        """Initializes the MetricCollection with F1, AUROC, Precision, Recall, Specificity, and SensitivityAtSpecificity.
 
         To add new metrics, simply add them to this dictionary.
 
@@ -298,6 +344,8 @@ class ClassificationMetricsCallback(Callback):
                 "auroc": BootStrapper(AUROC(num_classes=num_classes, **self.auroc_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
                 "precision": BootStrapper(Precision(num_classes=num_classes, **self.precision_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
                 "recall": BootStrapper(Recall(num_classes=num_classes, **self.recall_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
+                "specificity": BootStrapper(Specificity(num_classes=num_classes, **self.specificity_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
+                "sensitivity_at_specificity": BootStrapper(SensitivityAtSpecificityScalar(num_classes=num_classes, **self.sensitivity_at_specificity_params), num_bootstraps=self.num_bootstraps, sampling_strategy=self.sampling_strategy),
             })
         else:
             metrics = MetricCollection({
@@ -305,6 +353,8 @@ class ClassificationMetricsCallback(Callback):
                 "auroc": AUROC(num_classes=num_classes, **self.auroc_params),
                 "precision": Precision(num_classes=num_classes, **self.precision_params),
                 "recall": Recall(num_classes=num_classes, **self.recall_params),
+                "specificity": Specificity(num_classes=num_classes, **self.specificity_params),
+                "sensitivity_at_specificity": SensitivityAtSpecificityScalar(num_classes=num_classes, **self.sensitivity_at_specificity_params),
             })
         return metrics.to(device)
 
@@ -378,6 +428,16 @@ class ClassificationMetricsCallback(Callback):
                         self.val_recall_best = self.val_recall_best.to(pl_module.device)
                     self.val_recall_best(value)
                     pl_module.log("val/recall_best", self.val_recall_best.compute(), sync_dist=True, prog_bar=True)
+                elif name == "specificity":
+                    if self.val_specificity_best.device != pl_module.device:
+                        self.val_specificity_best = self.val_specificity_best.to(pl_module.device)
+                    self.val_specificity_best(value)
+                    pl_module.log("val/specificity_best", self.val_specificity_best.compute(), sync_dist=True, prog_bar=True)
+                elif name == "sensitivity_at_specificity":
+                    if self.val_sensitivity_at_specificity_best.device != pl_module.device:
+                        self.val_sensitivity_at_specificity_best = self.val_sensitivity_at_specificity_best.to(pl_module.device)
+                    self.val_sensitivity_at_specificity_best(value)
+                    pl_module.log("val/sensitivity_at_specificity_best", self.val_sensitivity_at_specificity_best.compute(), sync_dist=True, prog_bar=True)
                     
             self.val_metrics.reset()
 

@@ -120,6 +120,10 @@ def test_classification_metrics_callback():
     assert "val/recall_best" in logged_keys
     assert "val/f1" in logged_keys
     assert "val/auroc" in logged_keys
+    assert "val/specificity" in logged_keys
+    assert "val/specificity_best" in logged_keys
+    assert "val/sensitivity_at_specificity" in logged_keys
+    assert "val/sensitivity_at_specificity_best" in logged_keys
 
 
 def test_confusion_matrix_callback_logs_to_file(tmp_path):
@@ -211,6 +215,14 @@ def test_classification_metrics_callback_test_stage():
     assert "test/precision_mean" in logged_keys
     assert "test/precision_std" in logged_keys
     assert "test/precision_var" in logged_keys
+
+    assert "test/specificity_mean" in logged_keys
+    assert "test/specificity_std" in logged_keys
+    assert "test/specificity_var" in logged_keys
+
+    assert "test/sensitivity_at_specificity_mean" in logged_keys
+    assert "test/sensitivity_at_specificity_std" in logged_keys
+    assert "test/sensitivity_at_specificity_var" in logged_keys
 
 
 def test_regression_metrics_callback_test_stage(tmp_path):

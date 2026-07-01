@@ -2,4 +2,7 @@ classification_metrics:
   _target_: src.utils.evaluation_callbacks.ClassificationMetricsCallback
   f1_average: "macro"
   auroc_average: "macro"
+  specificity_average: "macro"
+  sensitivity_at_specificity_average: "macro"
+  min_specificity: 0.9
   num_bootstraps: 200
