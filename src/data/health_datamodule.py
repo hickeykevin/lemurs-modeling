@@ -129,6 +129,32 @@ class HealthDataModule(LightningDataModule):
             # Perform splitting based on the selected evaluation strategy
             train_df, val_df, test_df = self._split_data(master_df)
 
+            # Compute app_source context features for all users
+            # Sources categories: [android, iphone, apple_watch, unknown]
+            user_sources = {}
+            if "step" in modality_dfs:
+                step_df = modality_dfs["step"]
+                if "app_user_id" in step_df.columns and "app_source" in step_df.columns:
+                    for uid, group in step_df.groupby("app_user_id"):
+                        sources = group["app_source"].dropna().unique()
+                        
+                        is_apple_watch = any("Apple Watch" in str(s) for s in sources)
+                        is_iphone = any("Iphone" in str(s) or "iPhone" in str(s) for s in sources)
+                        is_android = any("androidx" in str(s) or "health.connect" in str(s) for s in sources)
+                        
+                        # Set precedence: Apple Watch > iPhone > Android
+                        if is_apple_watch:
+                            user_sources[uid] = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
+                        elif is_iphone:
+                            user_sources[uid] = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+                        elif is_android:
+                            user_sources[uid] = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+                        else:
+                            user_sources[uid] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+            
+            # Fallback source vector for missing/unseen users
+            default_source = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+
             if self.hparams.use_demographics:
                 # Preprocess demographics
                 demographics_df = demographics_df.copy()
@@ -174,23 +200,29 @@ class HealthDataModule(LightningDataModule):
                     + [f"lgbt_{cat}" for cat in self.lgbt_categories]
                     + ["lgbt_unknown"]
                 )
-                self.demographics_dim = len(demographic_feature_cols)
+                self.demographics_dim = len(demographic_feature_cols) + 4
 
                 # Map app_user_id to feature vector
                 self.demographics_map = {}
                 for _, row in demographics_df.iterrows():
                     uid = row["app_user_id"]
-                    self.demographics_map[uid] = row[demographic_feature_cols].values.astype(np.float32)
+                    demo_feats = row[demographic_feature_cols].values.astype(np.float32)
+                    source_feats = user_sources.get(uid, default_source)
+                    self.demographics_map[uid] = np.concatenate([demo_feats, source_feats]).astype(np.float32)
 
                 # Default demographic vector for missing/unseen users
                 self.default_demographics = np.zeros(self.demographics_dim, dtype=np.float32)
                 for idx, col in enumerate(demographic_feature_cols):
                     if col in ["gender_unknown", "lgbt_unknown"]:
                         self.default_demographics[idx] = 1.0
+                self.default_demographics[-4:] = default_source
             else:
-                self.demographics_map = None
-                self.default_demographics = None
-                self.demographics_dim = 0
+                self.demographics_dim = 4
+                self.default_demographics = default_source
+                self.demographics_map = {}
+                unique_users = master_df["app_user_id"].unique()
+                for uid in unique_users:
+                    self.demographics_map[uid] = user_sources.get(uid, default_source)
 
             # If the sampler needs access to the labels (e.g. LagSampler), provide them now
             if hasattr(self.hparams.sampler, "set_labels"):
