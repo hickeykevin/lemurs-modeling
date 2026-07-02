@@ -61,8 +61,16 @@ class SimpleLSTM(nn.Module):
         """Adjusts the output linear projection to support static demographics."""
         if demographics_dim > 0 and self.demographics_dim == 0:
             self.demographics_dim = demographics_dim
-            # Expand the fully connected layer's input features
-            in_features = self.fc.in_features + demographics_dim
+            # Recalculate input features from scratch to avoid dummy size-0 guard mismatches
+            fc_input_size = 0
+            if self.use_sequence_data:
+                fc_input_size += self.hidden_size
+            if self.use_prev_prediction:
+                fc_input_size += 1
+            if self.use_user_embedding and hasattr(self, "user_embedding"):
+                fc_input_size += self.user_embedding_dim
+                
+            in_features = fc_input_size + demographics_dim
             out_features = self.fc.out_features
             self.fc = nn.Linear(in_features, out_features)
 
