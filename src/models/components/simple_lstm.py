@@ -74,9 +74,22 @@ class SimpleLSTM(nn.Module):
             out_features = self.fc.out_features
             self.fc = nn.Linear(in_features, out_features)
 
+    def init_input_size(self, input_size: int) -> None:
+        """Dynamically adjusts the LSTM input size if different from the default."""
+        if self.use_sequence_data and hasattr(self, "lstm") and input_size != self.lstm.input_size:
+            self.lstm = nn.LSTM(
+                input_size=input_size,
+                hidden_size=self.hidden_size,
+                num_layers=self.num_layers,
+                batch_first=True,
+                dropout=self.lstm.dropout
+            )
+
     def forward(self, x, user_idx=None, prev_pred=None, demographics=None):
         # x shape: [Batch, Time=24, Features=input_size]
         if self.use_sequence_data:
+            if x is not None and x.shape[-1] != self.lstm.input_size:
+                self.init_input_size(x.shape[-1], device=x.device)
             # Forward pass through LSTM
             # out: [Batch, Time=24, hidden_size]
             out, (hn, cn) = self.lstm(x)

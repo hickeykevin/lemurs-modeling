@@ -31,6 +31,7 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
 
     with open_dict(cfg_eval):
         cfg_eval.ckpt_path = str(tmp_path / "checkpoints" / "last.ckpt")
+        cfg_eval.seed = cfg_train.seed
 
     HydraConfig().set_config(cfg_eval)
     test_metric_dict, _ = evaluate(cfg_eval)

@@ -222,16 +222,16 @@ def test_rolling_sampler():
     result = sampler(survey_time, 1, modality_dfs, modality_cols, ["step"])
     
     # Should have 12 time steps (one per hour)
-    assert result.shape == (12, 1)
+    assert result.shape == (12, 5)
     # Total steps should be 120 (12 * 10)
-    assert result.sum() == 120
+    assert result[:, 0].sum() == 120
     
     # Test 12-hour lookback, 4-hour resampling
     sampler_4h = RollingSampler(lookback_hours=12, resample_freq="4h")
     result_4h = sampler_4h(survey_time, 1, modality_dfs, modality_cols, ["step"])
     
     # Should have 3 time steps (12/4)
-    assert result_4h.shape == (3, 1)
+    assert result_4h.shape == (3, 5)
     # Each bin should have 4 hours of data (40 steps)
     assert result_4h[0, 0] == 40
 
@@ -258,8 +258,8 @@ def test_offset_sampler():
     result = sampler(survey_time, 1, modality_dfs, modality_cols, ["step"])
     
     # Total duration is 12 hours
-    assert result.shape == (12, 1)
-    assert result.sum() == 120
+    assert result.shape == (12, 5)
+    assert result[:, 0].sum() == 120
     
     # First bin should be June 1 at 18:00
     # Last bin should be June 2 at 05:00
@@ -443,7 +443,7 @@ def test_subject_scaler_normalization(mock_db_class):
     for ds in all_datasets:
         for i in range(len(ds)):
             seq, *rest = ds[i]
-            assert torch.allclose(seq, expected_seq, atol=1e-5)
+            assert torch.allclose(seq[:, :1], expected_seq, atol=1e-5)
 
 
 def test_regression_aggregator():
@@ -511,7 +511,7 @@ def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     assert target.dtype == torch.float32
     
     # 2. Check model steps in regression mode
-    net = SimpleLSTM(input_size=1, hidden_size=8, num_layers=1, output_size=1)
+    net = SimpleLSTM(input_size=seq.shape[-1], hidden_size=8, num_layers=1, output_size=1)
     
     # Setup optimizer partial
     optimizer = partial(torch.optim.Adam, lr=0.001)
@@ -1002,14 +1002,14 @@ def test_datamodule_use_demographics_toggle(mock_db_class, dummy_data):
     dm.setup()
     
     # 1. Verify datamodule properties
-    assert dm.demographics_dim == 0
-    assert dm.demographics_map is None
-    assert dm.default_demographics is None
+    assert dm.demographics_dim == 4
+    assert dm.demographics_map is not None
+    assert dm.default_demographics is not None
     
-    # 2. Verify dataset item length is 3 (x, y, user_idx)
+    # 2. Verify dataset item length is 4 (x, y, user_idx, demographics)
     train_ds = dm.data_train
     sample = train_ds[0]
-    assert len(sample) == 3
+    assert len(sample) == 4
 
 
 

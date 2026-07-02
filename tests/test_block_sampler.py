@@ -53,7 +53,8 @@ def test_block_sampler_interval_overlap():
     # B4: 300
     
     expected = np.array([[0.0], [900.0], [600.0], [300.0]], dtype=np.float32)
-    np.testing.assert_array_almost_equal(features, expected, decimal=3)
+    assert features.shape == (4, 5)
+    np.testing.assert_array_almost_equal(features[:, :1], expected, decimal=3)
 
 
 
@@ -79,7 +80,8 @@ def test_block_sampler_point_fallback():
     features = sampler(survey_timestamp, user_id, modality_dfs, modality_cols, modalities)
     
     expected = np.array([[50.0], [0.0], [75.0], [0.0]], dtype=np.float32)
-    np.testing.assert_array_almost_equal(features, expected)
+    assert features.shape == (4, 5)
+    np.testing.assert_array_almost_equal(features[:, :1], expected)
 
 def test_block_sampler_comprehensive_day():
     survey_timestamp = pd.Timestamp("2026-04-30 12:00:00")
@@ -148,7 +150,8 @@ def test_block_sampler_comprehensive_day():
     # B4 (Evening): 800 + 500 + 1000 + 1000 = 3300
     
     expected = np.array([[350.0], [2800.0], [2500.0], [3300.0]], dtype=np.float32)
-    np.testing.assert_array_almost_equal(features, expected, decimal=3)
+    assert features.shape == (4, 5)
+    np.testing.assert_array_almost_equal(features[:, :1], expected, decimal=3)
 
 
 

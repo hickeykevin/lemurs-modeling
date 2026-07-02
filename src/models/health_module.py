@@ -220,9 +220,16 @@ class HealthLitModule(LightningModule):
                 self.num_classes = int(np.max(y_train)) + 1
             else:
                 raise RuntimeError("Cannot determine num_classes: neither num_classes arg nor trainer is available.")
-        # Dynamically build user embedding and demographics support on the net
+        # Dynamically build input size, user embedding, and demographics support on the net
         if self._trainer is not None and self.trainer.datamodule is not None:
             dm = self.trainer.datamodule
+            if hasattr(dm, "data_train") and dm.data_train is not None:
+                train_ds = dm.data_train
+                if len(train_ds) > 0:
+                    sample = train_ds[0]
+                    input_size = sample[0].shape[-1]
+                    if hasattr(self.net, "init_input_size"):
+                        self.net.init_input_size(input_size)
             if hasattr(dm, "demographics_dim") and dm.demographics_dim is not None:
                 if hasattr(self.net, "init_demographics"):
                     self.net.init_demographics(dm.demographics_dim)
@@ -245,6 +252,12 @@ class HealthLitModule(LightningModule):
                 extra_dim = checkpoint_in_features - current_in_features
                 if hasattr(self.net, "init_demographics"):
                     self.net.init_demographics(extra_dim)
+
+        lstm_weight_key = "net.lstm.weight_ih_l0"
+        if lstm_weight_key in state_dict:
+            checkpoint_input_size = state_dict[lstm_weight_key].shape[1]
+            if hasattr(self.net, "init_input_size"):
+                self.net.init_input_size(checkpoint_input_size)
 
         weight_key = "net.user_embedding.weight"
         if weight_key in state_dict:
@@ -643,9 +656,16 @@ class HealthRegressionLitModule(LightningModule):
         if self.hparams.compile and stage == "fit":
             self.net = torch.compile(self.net)
 
-        # Dynamically build user embedding and demographics support on the net
+        # Dynamically build input size, user embedding, and demographics support on the net
         if self._trainer is not None and self.trainer.datamodule is not None:
             dm = self.trainer.datamodule
+            if hasattr(dm, "data_train") and dm.data_train is not None:
+                train_ds = dm.data_train
+                if len(train_ds) > 0:
+                    sample = train_ds[0]
+                    input_size = sample[0].shape[-1]
+                    if hasattr(self.net, "init_input_size"):
+                        self.net.init_input_size(input_size)
             if hasattr(dm, "demographics_dim") and dm.demographics_dim is not None:
                 if hasattr(self.net, "init_demographics"):
                     self.net.init_demographics(dm.demographics_dim)
@@ -667,6 +687,12 @@ class HealthRegressionLitModule(LightningModule):
                 extra_dim = checkpoint_in_features - current_in_features
                 if hasattr(self.net, "init_demographics"):
                     self.net.init_demographics(extra_dim)
+
+        lstm_weight_key = "net.lstm.weight_ih_l0"
+        if lstm_weight_key in state_dict:
+            checkpoint_input_size = state_dict[lstm_weight_key].shape[1]
+            if hasattr(self.net, "init_input_size"):
+                self.net.init_input_size(checkpoint_input_size)
 
         weight_key = "net.user_embedding.weight"
         if weight_key in state_dict:
