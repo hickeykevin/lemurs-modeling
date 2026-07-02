@@ -69,6 +69,20 @@ class RollingSampler(TimeSampler):
                              .values.astype(np.float32))
             all_modality_features.append(resampled)
             
+        # Append cyclic time features
+        hours = full_range.hour.values
+        sin_hour = np.sin(2 * np.pi * hours / 24.0).astype(np.float32)
+        cos_hour = np.cos(2 * np.pi * hours / 24.0).astype(np.float32)
+        
+        weekdays = full_range.weekday.values
+        sin_weekday = np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32)
+        cos_weekday = np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32)
+        
+        all_modality_features.append(sin_hour)
+        all_modality_features.append(cos_hour)
+        all_modality_features.append(sin_weekday)
+        all_modality_features.append(cos_weekday)
+            
         return np.stack(all_modality_features, axis=-1)
 
 class OffsetSampler(TimeSampler):
@@ -135,6 +149,20 @@ class OffsetSampler(TimeSampler):
                              .reindex(full_range, fill_value=0)
                              .values.astype(np.float32))
             all_modality_features.append(resampled)
+            
+        # Append cyclic time features
+        hours = full_range.hour.values
+        sin_hour = np.sin(2 * np.pi * hours / 24.0).astype(np.float32)
+        cos_hour = np.cos(2 * np.pi * hours / 24.0).astype(np.float32)
+        
+        weekdays = full_range.weekday.values
+        sin_weekday = np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32)
+        cos_weekday = np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32)
+        
+        all_modality_features.append(sin_hour)
+        all_modality_features.append(cos_hour)
+        all_modality_features.append(sin_weekday)
+        all_modality_features.append(cos_weekday)
             
         return np.stack(all_modality_features, axis=-1)
 
@@ -267,6 +295,21 @@ class BlockSampler(TimeSampler):
                         block_values[b_idx] = user_data[overlap_mask][val_col].sum()
                         
             all_modality_features.append(block_values)
+            
+        # Compute cyclic time features for each block in BlockSampler
+        block_centers = [b_start + (b_end - b_start) / 2.0 for b_start, b_end in blocks]
+        hours = np.array([dt.hour for dt in block_centers], dtype=np.float32)
+        sin_hour = np.sin(2 * np.pi * hours / 24.0).astype(np.float32)
+        cos_hour = np.cos(2 * np.pi * hours / 24.0).astype(np.float32)
+        
+        weekdays = np.array([dt.weekday() for dt in block_centers], dtype=np.float32)
+        sin_weekday = np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32)
+        cos_weekday = np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32)
+        
+        all_modality_features.append(sin_hour)
+        all_modality_features.append(cos_hour)
+        all_modality_features.append(sin_weekday)
+        all_modality_features.append(cos_weekday)
             
         # Return sequence vector
         return np.stack(all_modality_features, axis=-1)

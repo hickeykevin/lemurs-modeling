@@ -445,7 +445,7 @@ class BaselineHealthModule(LightningModule):
         - "most_frequent": Always predicts the most frequent class observed in training.
     """
     
-    def __init__(self, strategy: str = "lag", num_classes: Optional[int] = None):
+    def __init__(self, strategy: str = "lag", num_classes: Optional[int] = None, **kwargs):
         """Initializes the BaselineHealthModule.
         
         Args:

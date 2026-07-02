@@ -1,0 +1,6 @@
+_target_: src.data.components.scalers.DualScaler
+base_scaler_global:
+  _target_: sklearn.preprocessing.StandardScaler
+base_scaler_subject:
+  _target_: sklearn.preprocessing.StandardScaler
+scale_dim: 1

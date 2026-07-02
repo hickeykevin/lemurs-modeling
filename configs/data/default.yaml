@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - aggregator: suicide_risk
-  - sampler: block
+  - sampler: offset
   - scaler: subject_standard
   - preprocessors: [step]
 
@@ -13,7 +13,7 @@ train_val_test_split: [0.7, 0.15, 0.15]
 num_workers: 1
 pin_memory: False
 random_state: ${seed}
-split_mode: longitudinal # random, user, longitudinal
+split_mode: user # random, user, longitudinal
 os_filter: both # both, ios, android
 collapse_strategy: mean #mean, max, min, first, last, none
 use_prev_prediction: ${model.use_prev_prediction}

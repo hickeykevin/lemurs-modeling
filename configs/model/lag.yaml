@@ -1,3 +1,4 @@
 _target_: src.models.health_module.BaselineHealthModule
 strategy: lag
 num_classes: null
+use_prev_prediction: false
