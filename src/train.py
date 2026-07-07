@@ -1,3 +1,6 @@
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+
 from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
