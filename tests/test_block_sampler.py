@@ -56,6 +56,12 @@ def test_block_sampler_interval_overlap():
     assert features.shape == (4, 5)
     np.testing.assert_array_almost_equal(features[:, :1], expected, decimal=3)
 
+    # Test with include_time_features=False
+    sampler_no_time = BlockSampler(lookback_days=1, include_time_features=False)
+    features_no_time = sampler_no_time(survey_timestamp, user_id, modality_dfs, modality_cols, modalities)
+    assert features_no_time.shape == (4, 1)
+    np.testing.assert_array_almost_equal(features_no_time, expected, decimal=3)
+
 
 
 def test_block_sampler_point_fallback():

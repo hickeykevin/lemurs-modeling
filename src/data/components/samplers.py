@@ -26,9 +26,10 @@ class TimeSampler(ABC):
 class RollingSampler(TimeSampler):
     """New logic: Samples X hours exactly preceding the survey timestamp."""
     
-    def __init__(self, lookback_hours: float = 24.0, resample_freq: str = "1h", **kwargs):
+    def __init__(self, lookback_hours: float = 24.0, resample_freq: str = "1h", include_time_features: bool = True, **kwargs):
         self.lookback_hours = lookback_hours
         self.resample_freq = resample_freq
+        self.include_time_features = include_time_features
         
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
         end_time = survey_timestamp.floor(self.resample_freq)
@@ -70,18 +71,19 @@ class RollingSampler(TimeSampler):
             all_modality_features.append(resampled)
             
         # Append cyclic time features
-        hours = full_range.hour.values
-        sin_hour = np.sin(2 * np.pi * hours / 24.0).astype(np.float32)
-        cos_hour = np.cos(2 * np.pi * hours / 24.0).astype(np.float32)
-        
-        weekdays = full_range.weekday.values
-        sin_weekday = np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32)
-        cos_weekday = np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32)
-        
-        all_modality_features.append(sin_hour)
-        all_modality_features.append(cos_hour)
-        all_modality_features.append(sin_weekday)
-        all_modality_features.append(cos_weekday)
+        if self.include_time_features:
+            hours = full_range.hour.values
+            sin_hour = np.sin(2 * np.pi * hours / 24.0).astype(np.float32)
+            cos_hour = np.cos(2 * np.pi * hours / 24.0).astype(np.float32)
+            
+            weekdays = full_range.weekday.values
+            sin_weekday = np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32)
+            cos_weekday = np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32)
+            
+            all_modality_features.append(sin_hour)
+            all_modality_features.append(cos_hour)
+            all_modality_features.append(sin_weekday)
+            all_modality_features.append(cos_weekday)
             
         return np.stack(all_modality_features, axis=-1)
 
@@ -108,10 +110,11 @@ class OffsetSampler(TimeSampler):
             end_offset_hours = 9
     """
     
-    def __init__(self, start_offset_hours: float = -24.0, end_offset_hours: float = 0.0, resample_freq: str = "1h", **kwargs):
+    def __init__(self, start_offset_hours: float = -24.0, end_offset_hours: float = 0.0, resample_freq: str = "1h", include_time_features: bool = True, **kwargs):
         self.start_offset_hours = start_offset_hours
         self.end_offset_hours = end_offset_hours
         self.resample_freq = resample_freq
+        self.include_time_features = include_time_features
         
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
         # Anchor to midnight of the survey day
@@ -151,18 +154,19 @@ class OffsetSampler(TimeSampler):
             all_modality_features.append(resampled)
             
         # Append cyclic time features
-        hours = full_range.hour.values
-        sin_hour = np.sin(2 * np.pi * hours / 24.0).astype(np.float32)
-        cos_hour = np.cos(2 * np.pi * hours / 24.0).astype(np.float32)
-        
-        weekdays = full_range.weekday.values
-        sin_weekday = np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32)
-        cos_weekday = np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32)
-        
-        all_modality_features.append(sin_hour)
-        all_modality_features.append(cos_hour)
-        all_modality_features.append(sin_weekday)
-        all_modality_features.append(cos_weekday)
+        if self.include_time_features:
+            hours = full_range.hour.values
+            sin_hour = np.sin(2 * np.pi * hours / 24.0).astype(np.float32)
+            cos_hour = np.cos(2 * np.pi * hours / 24.0).astype(np.float32)
+            
+            weekdays = full_range.weekday.values
+            sin_weekday = np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32)
+            cos_weekday = np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32)
+            
+            all_modality_features.append(sin_hour)
+            all_modality_features.append(cos_hour)
+            all_modality_features.append(sin_weekday)
+            all_modality_features.append(cos_weekday)
             
         return np.stack(all_modality_features, axis=-1)
 
@@ -202,8 +206,9 @@ class BlockSampler(TimeSampler):
     """
 
     
-    def __init__(self, lookback_days: int = 1, **kwargs):
+    def __init__(self, lookback_days: int = 1, include_time_features: bool = True, **kwargs):
         self.lookback_days = lookback_days
+        self.include_time_features = include_time_features
         
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
         # Anchor processing to midnight of the day the survey was taken
@@ -297,19 +302,20 @@ class BlockSampler(TimeSampler):
             all_modality_features.append(block_values)
             
         # Compute cyclic time features for each block in BlockSampler
-        block_centers = [b_start + (b_end - b_start) / 2.0 for b_start, b_end in blocks]
-        hours = np.array([dt.hour for dt in block_centers], dtype=np.float32)
-        sin_hour = np.sin(2 * np.pi * hours / 24.0).astype(np.float32)
-        cos_hour = np.cos(2 * np.pi * hours / 24.0).astype(np.float32)
-        
-        weekdays = np.array([dt.weekday() for dt in block_centers], dtype=np.float32)
-        sin_weekday = np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32)
-        cos_weekday = np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32)
-        
-        all_modality_features.append(sin_hour)
-        all_modality_features.append(cos_hour)
-        all_modality_features.append(sin_weekday)
-        all_modality_features.append(cos_weekday)
+        if self.include_time_features:
+            block_centers = [b_start + (b_end - b_start) / 2.0 for b_start, b_end in blocks]
+            hours = np.array([dt.hour for dt in block_centers], dtype=np.float32)
+            sin_hour = np.sin(2 * np.pi * hours / 24.0).astype(np.float32)
+            cos_hour = np.cos(2 * np.pi * hours / 24.0).astype(np.float32)
+            
+            weekdays = np.array([dt.weekday() for dt in block_centers], dtype=np.float32)
+            sin_weekday = np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32)
+            cos_weekday = np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32)
+            
+            all_modality_features.append(sin_hour)
+            all_modality_features.append(cos_hour)
+            all_modality_features.append(sin_weekday)
+            all_modality_features.append(cos_weekday)
             
         # Return sequence vector
         return np.stack(all_modality_features, axis=-1)

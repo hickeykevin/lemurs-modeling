@@ -235,6 +235,11 @@ def test_rolling_sampler():
     # Each bin should have 4 hours of data (40 steps)
     assert result_4h[0, 0] == 40
 
+    # Test with include_time_features=False
+    sampler_no_time = RollingSampler(lookback_hours=12, resample_freq="1h", include_time_features=False)
+    result_no_time = sampler_no_time(survey_time, 1, modality_dfs, modality_cols, ["step"])
+    assert result_no_time.shape == (12, 1)
+
 def test_offset_sampler():
     """Tests that OffsetSampler correctly handles offsets from midnight."""
     from src.data.components.samplers import OffsetSampler
@@ -260,14 +265,11 @@ def test_offset_sampler():
     # Total duration is 12 hours
     assert result.shape == (12, 5)
     assert result[:, 0].sum() == 120
-    
-    # First bin should be June 1 at 18:00
-    # Last bin should be June 2 at 05:00
-    # Wait, my OffsetSampler implementation uses start_time as the first bin.
-    # start_time is June 1 18:00.
-    # end_time is June 2 06:00.
-    # duration 12h. num_periods 12.
-    # full_range starts at 18:00.
+
+    # Test with include_time_features=False
+    sampler_no_time = OffsetSampler(start_offset_hours=-6, end_offset_hours=6, resample_freq="1h", include_time_features=False)
+    result_no_time = sampler_no_time(survey_time, 1, modality_dfs, modality_cols, ["step"])
+    assert result_no_time.shape == (12, 1)
 
 @patch('src.data.components.cohort_builder.DatabaseService')
 def test_datamodule_user_split(mock_db_class, dummy_data):

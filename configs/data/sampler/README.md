@@ -39,6 +39,7 @@ Calculates a static window relative to **midnight of the survey completion day**
 *   `start_offset_hours` (float): Start time relative to midnight (e.g. `-24.0` for midnight yesterday).
 *   `end_offset_hours` (float): End time relative to midnight (e.g. `0.0` for midnight today).
 *   `resample_freq` (string): Time duration for grouping steps (e.g. `"1h"`, `"30m"`).
+*   `include_time_features` (bool): Whether to append cyclic time-of-day (sine/cosine hour) and day-of-week features. Defaults to `True`.
 
 > [!NOTE]
 > *   **`daily.yaml`** defaults: `start_offset_hours: -24.0`, `end_offset_hours: 0.0`. Slices the preceding calendar day.
@@ -50,12 +51,14 @@ Calculates a static window relative to **midnight of the survey completion day**
 Slices a dynamic lookback window backward from the **exact survey completion timestamp**.
 *   `lookback_hours` (float): Number of hours to look back (e.g., `24.0`).
 *   `resample_freq` (string): Slicing interval (e.g., `"1h"`).
+*   `include_time_features` (bool): Whether to append cyclic time-of-day (sine/cosine hour) and day-of-week features. Defaults to `True`.
 
 ---
 
 ### `BlockSampler` (`block.yaml`)
 Groups steps into behavioral periods.
 *   `lookback_days` (int): Number of historical days to pull. (e.g., `7` returns 28 feature blocks: 4 periods per day for a week).
+*   `include_time_features` (bool): Whether to append cyclic time-of-day (sine/cosine hour) and day-of-week features. Defaults to `True`.
 
 ---
 

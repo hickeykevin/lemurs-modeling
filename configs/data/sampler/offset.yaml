@@ -2,3 +2,5 @@ _target_: src.data.components.samplers.OffsetSampler
 start_offset_hours: -72.0
 end_offset_hours: 0.0
 resample_freq: "6h"
+include_time_features: true
+

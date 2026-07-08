@@ -1,2 +1,4 @@
 _target_: src.data.components.samplers.BlockSampler
 lookback_days: 3
+include_time_features: true
+
