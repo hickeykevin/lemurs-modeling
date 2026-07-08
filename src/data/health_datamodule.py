@@ -10,6 +10,9 @@ from src.data.components.cohort_builder import CohortBuilder
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
+from src.data.components.cohort_splitter import CohortSplitter
+from src.data.components.demographics_processor import DemographicsProcessor
+from src.data.components.prev_prediction_linker import PrevPredictionLinker
 
 class HealthDataModule(LightningDataModule):
     """A DataModule for Multimodal longitudinal health data.
@@ -129,100 +132,15 @@ class HealthDataModule(LightningDataModule):
             # Perform splitting based on the selected evaluation strategy
             train_df, val_df, test_df = self._split_data(master_df)
 
-            # Compute app_source context features for all users
-            # Sources categories: [android, iphone, apple_watch, unknown]
-            user_sources = {}
-            if "step" in modality_dfs:
-                step_df = modality_dfs["step"]
-                if "app_user_id" in step_df.columns and "app_source" in step_df.columns:
-                    for uid, group in step_df.groupby("app_user_id"):
-                        sources = group["app_source"].dropna().unique()
-                        
-                        is_apple_watch = any("Apple Watch" in str(s) for s in sources)
-                        is_iphone = any("Iphone" in str(s) or "iPhone" in str(s) for s in sources)
-                        is_android = any("androidx" in str(s) or "health.connect" in str(s) for s in sources)
-                        
-                        # Set precedence: Apple Watch > iPhone > Android
-                        if is_apple_watch:
-                            user_sources[uid] = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
-                        elif is_iphone:
-                            user_sources[uid] = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
-                        elif is_android:
-                            user_sources[uid] = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-                        else:
-                            user_sources[uid] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-            
-            # Fallback source vector for missing/unseen users
-            default_source = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-
-            if self.hparams.use_demographics:
-                # Preprocess demographics
-                demographics_df = demographics_df.copy()
-                for col in ['gender', 'age', 'lgbt']:
-                    if col not in demographics_df.columns:
-                        demographics_df[col] = np.nan
-
-                train_users = train_df["app_user_id"].unique()
-                train_demo = demographics_df[demographics_df["app_user_id"].isin(train_users)]
-
-                # Fit age median and scale parameters
-                age_train = pd.to_numeric(train_demo["age"], errors="coerce").dropna()
-                self.age_median = age_train.median() if not age_train.empty else 30.0
-                self.age_mean = age_train.mean() if not age_train.empty else 30.0
-                self.age_std = age_train.std() if not age_train.empty and age_train.std() > 0 else 10.0
-
-                # Get unique categories from training set
-                self.gender_categories = [str(x).strip().lower() for x in train_demo["gender"].dropna().unique() if str(x).strip() != ""]
-                if not self.gender_categories:
-                    self.gender_categories = ["male", "female"]
-                self.lgbt_categories = [str(x).strip().lower() for x in train_demo["lgbt"].dropna().unique() if str(x).strip() != ""]
-                if not self.lgbt_categories:
-                    self.lgbt_categories = ["no", "yes"]
-
-                # Standardize age
-                demographics_df["age"] = pd.to_numeric(demographics_df["age"], errors="coerce").fillna(self.age_median)
-                demographics_df["age_scaled"] = (demographics_df["age"] - self.age_mean) / self.age_std
-
-                # One-hot encode categoricals manually to ensure consistency
-                for cat in self.gender_categories:
-                    demographics_df[f"gender_{cat}"] = (demographics_df["gender"].astype(str).str.strip().str.lower() == cat).astype(float)
-                demographics_df["gender_unknown"] = (~demographics_df["gender"].astype(str).str.strip().str.lower().isin(self.gender_categories)).astype(float)
-
-                for cat in self.lgbt_categories:
-                    demographics_df[f"lgbt_{cat}"] = (demographics_df["lgbt"].astype(str).str.strip().str.lower() == cat).astype(float)
-                demographics_df["lgbt_unknown"] = (~demographics_df["lgbt"].astype(str).str.strip().str.lower().isin(self.lgbt_categories)).astype(float)
-
-                # Processed feature list
-                demographic_feature_cols = (
-                    ["age_scaled"]
-                    + [f"gender_{cat}" for cat in self.gender_categories]
-                    + ["gender_unknown"]
-                    + [f"lgbt_{cat}" for cat in self.lgbt_categories]
-                    + ["lgbt_unknown"]
-                )
-                self.demographics_dim = len(demographic_feature_cols) + 4
-
-                # Map app_user_id to feature vector
-                self.demographics_map = {}
-                for _, row in demographics_df.iterrows():
-                    uid = row["app_user_id"]
-                    demo_feats = row[demographic_feature_cols].values.astype(np.float32)
-                    source_feats = user_sources.get(uid, default_source)
-                    self.demographics_map[uid] = np.concatenate([demo_feats, source_feats]).astype(np.float32)
-
-                # Default demographic vector for missing/unseen users
-                self.default_demographics = np.zeros(self.demographics_dim, dtype=np.float32)
-                for idx, col in enumerate(demographic_feature_cols):
-                    if col in ["gender_unknown", "lgbt_unknown"]:
-                        self.default_demographics[idx] = 1.0
-                self.default_demographics[-4:] = default_source
-            else:
-                self.demographics_dim = 4
-                self.default_demographics = default_source
-                self.demographics_map = {}
-                unique_users = master_df["app_user_id"].unique()
-                for uid in unique_users:
-                    self.demographics_map[uid] = user_sources.get(uid, default_source)
+            # Process demographics and device source embeddings
+            demo_processor = DemographicsProcessor(use_demographics=self.hparams.use_demographics)
+            self.demographics_map, self.default_demographics = demo_processor.fit_transform(
+                train_df=train_df,
+                demographics_df=demographics_df,
+                modality_dfs=modality_dfs,
+                master_df=master_df,
+            )
+            self.demographics_dim = demo_processor.demographics_dim
 
             # If the sampler needs access to the labels (e.g. LagSampler), provide them now
             if hasattr(self.hparams.sampler, "set_labels"):
@@ -239,18 +157,7 @@ class HealthDataModule(LightningDataModule):
 
             # Sort chronologically and precompute link mappings if use_prev_prediction is True
             if self.hparams.use_prev_prediction:
-                train_df = train_df.sort_values(['app_user_id', 'record_timestamp']).reset_index(drop=True)
-                val_df = val_df.sort_values(['app_user_id', 'record_timestamp']).reset_index(drop=True)
-                test_df = test_df.sort_values(['app_user_id', 'record_timestamp']).reset_index(drop=True)
-                
-                for df in [train_df, val_df, test_df]:
-                    prev_indices = []
-                    for idx in range(len(df)):
-                        if idx > 0 and df.iloc[idx - 1]['app_user_id'] == df.iloc[idx]['app_user_id']:
-                            prev_indices.append(idx - 1)
-                        else:
-                            prev_indices.append(-1)
-                    df['prev_sample_idx'] = prev_indices
+                train_df, val_df, test_df = PrevPredictionLinker.link(train_df, val_df, test_df)
 
             # Instantiate Dataset objects
             is_regression = getattr(self.hparams.aggregator, "is_regression", False)
@@ -310,88 +217,12 @@ class HealthDataModule(LightningDataModule):
         Returns:
             Tuple of (train_df, val_df, test_df).
         """
-        split_strategies = {
-            "random": self._split_random,
-            "user": self._split_by_user,
-            "longitudinal": self._split_longitudinally,
-        }
-        
-        strategy_fn = split_strategies.get(self.hparams.split_mode)
-        if not strategy_fn:
-            raise ValueError(
-                f"Unknown split_mode: {self.hparams.split_mode}. "
-                f"Available modes: {list(split_strategies.keys())}"
-            )
-            
-        return strategy_fn(df)
-
-    def _split_random(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """Performs a standard row-level random shuffle split."""
-        train_ratio, val_ratio, test_ratio = self.hparams.train_val_test_split
-        
-        train_df, temp_df = train_test_split(
-            df, 
-            test_size=(1 - train_ratio), 
-            random_state=self.hparams.random_state
+        splitter = CohortSplitter(
+            split_mode=self.hparams.split_mode,
+            train_val_test_split=self.hparams.train_val_test_split,
+            random_state=self.hparams.random_state,
         )
-        
-        val_ratio_relative = val_ratio / (val_ratio + test_ratio)
-        val_df, test_df = train_test_split(
-            temp_df, 
-            train_size=val_ratio_relative, 
-            random_state=self.hparams.random_state
-        )
-        return train_df, val_df, test_df
-
-    def _split_by_user(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """Performs a split at the user level to ensure disjoint populations."""
-        train_ratio, val_ratio, test_ratio = self.hparams.train_val_test_split
-        unique_users = df['app_user_id'].unique()
-        
-        train_users, temp_users = train_test_split(
-            unique_users, 
-            test_size=(1 - train_ratio), 
-            random_state=self.hparams.random_state
-        )
-        
-        val_ratio_relative = val_ratio / (val_ratio + test_ratio)
-        val_users, test_users = train_test_split(
-            temp_users, 
-            train_size=val_ratio_relative, 
-            random_state=self.hparams.random_state
-        )
-        
-        train_df = df[df['app_user_id'].isin(train_users)]
-        val_df = df[df['app_user_id'].isin(val_users)]
-        test_df = df[df['app_user_id'].isin(test_users)]
-        return train_df, val_df, test_df
-
-    def _split_longitudinally(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """Performs a temporal split within each individual user's history."""
-        train_ratio, val_ratio, test_ratio = self.hparams.train_val_test_split
-        train_list, val_list, test_list = [], [], []
-        
-        for _, group in df.groupby('app_user_id'):
-            group = group.sort_values('record_timestamp')
-            n = len(group)
-            
-            if n < 3: 
-                # Not enough data to split 3 ways, default to training
-                train_list.append(group)
-                continue
-                
-            train_end = int(n * train_ratio)
-            val_end = int(n * (train_ratio + val_ratio))
-            
-            # Ensure at least one sample in each set where possible
-            train_end = max(1, train_end)
-            val_end = max(train_end + 1, val_end)
-            
-            train_list.append(group.iloc[:train_end])
-            val_list.append(group.iloc[train_end:val_end])
-            test_list.append(group.iloc[val_end:])
-        
-        return pd.concat(train_list), pd.concat(val_list), pd.concat(test_list)
+        return splitter.split(df)
 
     def train_dataloader(self) -> DataLoader:
         """Returns the training data loader with shuffling enabled."""
