@@ -8,17 +8,11 @@ metric:
 
 parameters:
   data/scaler:
-    values: [standard, subject_standard, none]
-  data/sampler:
-    values: [block, offset]
+    values: [standard, subject_standard, dual, none]
   ++data.sampler.resample_freq:
     values: [4h, 6h, 12h]
   data.collapse_strategy:
     values: [mean, max, last]
-  ++data.sampler.lookback_days:
-    distribution: int_uniform
-    min: 3
-    max: 7
   ++data.sampler.start_offset_hours:
     values: [-72, -96, -120, -144, -168]
   model.net.hidden_size:
@@ -29,21 +23,27 @@ parameters:
     distribution: log_uniform_values
     min: 0.0001
     max: 0.01
-  model.user_id_dropout:
-    distribution: uniform
-    min: 0.0
-    max: 0.3
   ++model.net.dropout:
     distribution: uniform
     min: 0.0
     max: 0.5
   data.os_filter:
     values: [ios, both]
+  ++data.sampler.include_time_features:
+    values: [true, false]
+  data.use_demographics:
+    values: [true, false]
+  model.use_prev_prediction:
+    values: [true, false]
+  ++model.class_weights:
+    values: [[1.0, 1.0], [1.0, 2.0], [1.0, 5.0], [1.0, 10.0]]
 
 command:
+  - uv run
   - python
   - src/train.py
   - "data/aggregator=suicide_risk"
+  - data/sampler=offset
   - "model=default"
   - "data.modalities=[step]"
   - "data/preprocessors=[step]"
