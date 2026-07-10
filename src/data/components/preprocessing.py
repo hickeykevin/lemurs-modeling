@@ -80,6 +80,7 @@ class CaloriePreprocessor(ModalityPreprocessor):
 
         #4)
         #Android calorie unit correction
+        #For any android user with calorie recorded above or equal 3000, divide by 1000 (conversion) AND round to nearest integer
        
         if "app_source" in df.columns:
 
