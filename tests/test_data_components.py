@@ -114,3 +114,81 @@ def test_prev_prediction_linker(dummy_splitter_data):
     assert t_df.loc[1, "prev_sample_idx"] == 0
     assert t_df.loc[2, "prev_sample_idx"] == 1
     assert t_df.loc[3, "prev_sample_idx"] == 2
+
+
+def test_step_preprocessor():
+    from src.data.components.preprocessing import StepPreprocessor
+    
+    # Create test data
+    df = pd.DataFrame({
+        "app_user_id": [22, 22, 26, 1],
+        "start_timestamp": [
+            "2026-01-01 10:00:00",
+            "2026-01-01 10:00:00",
+            "2026-01-01 10:00:00",
+            "2026-01-01 10:00:00"
+        ],
+        "end_timestamp": [
+            "2026-01-01 10:00:00", # 0 duration
+            "2026-01-01 10:00:00", # 0 duration but steps = 0 (should keep, but android source drops it)
+            "2026-01-01 10:05:00",
+            "2026-01-01 10:05:00"
+        ],
+        "steps": [10, 0, 10, 10],
+        "app_source": ["health.connect.android", "health.connect.android", "Health", "iPhone"]
+    })
+    
+    preprocessor = StepPreprocessor()
+    processed_df = preprocessor(df)
+    
+    # 1. 0 duration record with steps > 0 (user 22, row 0) should be dropped. 
+    # Row 1 (steps=0) should be kept by duration check but dropped because app_user_id=22 contains android.
+    # 2. iPhone source checks:
+    # app_user_id 26: Health source mapped to Apple Watch.
+    assert len(processed_df) == 2
+    
+    # Check remaining records
+    processed_df = processed_df.reset_index(drop=True)
+    assert processed_df.loc[0, "app_user_id"] == 26
+    assert processed_df.loc[0, "app_source"] == "Apple Watch"
+    assert processed_df.loc[1, "app_user_id"] == 1
+    assert processed_df.loc[1, "app_source"] == "iPhone"
+
+
+def test_calorie_preprocessor():
+    from src.data.components.preprocessing import CaloriePreprocessor
+    
+    df = pd.DataFrame({
+        "app_user_id": [1, 1, 1, 2, 2],
+        "start_timestamp": [
+            "2026-01-01 10:00:00", # study period (keep)
+            "2026-01-01 10:00:00", # identical start/end
+            "2025-08-01 10:00:00", # before study start (drop)
+            "2026-01-01 10:00:00", # android conversion (>=3000 -> divide by 1000)
+            "2026-01-01 10:00:00"  # duplicate of previous android record
+        ],
+        "end_timestamp": [
+            "2026-01-01 10:05:00",
+            "2026-01-01 10:00:00", # identical start/end (drop)
+            "2025-08-01 10:05:00",
+            "2026-01-01 10:05:00",
+            "2026-01-01 10:05:00"
+        ],
+        "calories": [200.0, 100.0, 150.0, 3200.0, 3200.0],
+        "app_source": ["iPhone", "iPhone", "iPhone", "health.connect.android", "health.connect.android"]
+    })
+    
+    preprocessor = CaloriePreprocessor()
+    processed_df = preprocessor(df)
+    
+    # Expected remaining rows:
+    # 1. Row 0 (user 1, keep, calories = 200.0)
+    # 2. Row 3 (user 2 android, keep and convert 3200.0 -> 3)
+    # (Row 1 identical times dropped, Row 2 before study start dropped, Row 4 duplicate dropped)
+    assert len(processed_df) == 2
+    processed_df = processed_df.reset_index(drop=True)
+    assert processed_df.loc[0, "app_user_id"] == 1
+    assert processed_df.loc[0, "calories"] == 200.0
+    assert processed_df.loc[1, "app_user_id"] == 2
+    assert processed_df.loc[1, "calories"] == 3
+

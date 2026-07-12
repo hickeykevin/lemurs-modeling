@@ -3,7 +3,7 @@ defaults:
   - aggregator: suicide_risk
   - sampler: block
   - scaler: standard
-  - preprocessors: [step]
+  - preprocessors: [step, calorie]
 
 _target_: src.data.cv_health_datamodule.CVHealthDataModule
 modalities: ["step", "calorie"]

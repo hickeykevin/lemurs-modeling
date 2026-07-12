@@ -36,3 +36,52 @@ class StepPreprocessor(ModalityPreprocessor):
 
             
         return df
+
+
+class CaloriePreprocessor(ModalityPreprocessor):
+    """Data cleaning pipeline for calorie records."""
+
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
+
+        # Convert start timestamp to datetime
+        start_dt = pd.to_datetime(df["start_timestamp"])
+        
+        # 1. Remove records with identical start/end times if end_timestamp is present
+        if "end_timestamp" in df.columns:
+            end_dt = pd.to_datetime(df["end_timestamp"])
+            same_time = start_dt == end_dt
+            df = df.loc[~same_time].copy()
+            # Update start_dt after filtering
+            start_dt = pd.to_datetime(df["start_timestamp"])
+
+        # 2. Remove records before study start (September 2025)
+        study_start = pd.Timestamp("2025-09-01")
+        df = df.loc[start_dt >= study_start].copy()
+
+        # 3. Remove duplicate records
+        subset_cols = [
+            "app_user_id",
+            "start_timestamp",
+            "end_timestamp",
+            "calories",
+            "app_source",
+        ]
+        subset_cols = [c for c in subset_cols if c in df.columns]
+
+        if subset_cols:
+            df = df.drop_duplicates(subset=subset_cols, keep="first")
+
+        # 4. Android calorie unit correction
+        # For any android user with calorie recorded above or equal to 3000, divide by 1000 and round to nearest integer
+        if "app_source" in df.columns and "calories" in df.columns:
+            android_mask = (
+                df["app_source"].str.contains("android", case=False, na=False)
+                & (df["calories"] >= 3000)
+            )
+            df.loc[android_mask, "calories"] = (
+                df.loc[android_mask, "calories"] / 1000
+            ).round().astype(int)
+
+        return df
