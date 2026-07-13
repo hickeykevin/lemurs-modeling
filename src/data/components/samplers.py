@@ -153,21 +153,21 @@ class OffsetSampler(TimeSampler):
                              .values.astype(np.float32))
             all_modality_features.append(resampled)
             
-        # Append cyclic time features
+        # Append cyclic time features.
+        # NOTE: hour-of-day channels are intentionally omitted here. OffsetSampler
+        # anchors every window to midnight + a fixed offset and steps by a fixed
+        # resample_freq, so the bin hours are identical for every sample. That
+        # makes sin/cos hour constant across samples (a fixed positional encoding)
+        # with no cross-sample discriminative signal. Weekday still varies with
+        # the calendar dates the window spans, so it is retained.
         if self.include_time_features:
-            hours = full_range.hour.values
-            sin_hour = np.sin(2 * np.pi * hours / 24.0).astype(np.float32)
-            cos_hour = np.cos(2 * np.pi * hours / 24.0).astype(np.float32)
-            
             weekdays = full_range.weekday.values
             sin_weekday = np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32)
             cos_weekday = np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32)
-            
-            all_modality_features.append(sin_hour)
-            all_modality_features.append(cos_hour)
+
             all_modality_features.append(sin_weekday)
             all_modality_features.append(cos_weekday)
-            
+
         return np.stack(all_modality_features, axis=-1)
 
 class BlockSampler(TimeSampler):

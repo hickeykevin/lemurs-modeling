@@ -36,6 +36,7 @@ class HealthDataset(Dataset):
         use_prev_prediction: bool = False,
         demographics_map: Optional[Dict[Any, np.ndarray]] = None,
         default_demographics: Optional[np.ndarray] = None,
+        use_sleep: bool = False,
     ) -> None:
         """Initializes the HealthDataset.
 
@@ -59,6 +60,18 @@ class HealthDataset(Dataset):
         self.use_prev_prediction = use_prev_prediction
         self.demographics_map = demographics_map
         self.default_demographics = default_demographics
+        self.use_sleep = use_sleep
+        
+        if self.use_sleep:
+            sleep_cols = ["sleep_hours_scaled", "sleep_class_0", "sleep_class_1", "sleep_class_2", "sleep_unknown"]
+            # Ensure all columns exist, if not fill with default values
+            for col in sleep_cols:
+                if col not in self.data_links.columns:
+                    if col == "sleep_unknown":
+                        self.data_links[col] = 1.0
+                    else:
+                        self.data_links[col] = 0.0
+            self.sleep_features = self.data_links[sleep_cols].values.astype(np.float32)
         
         if self.use_prev_prediction:
             self.predictions_cache = np.zeros(len(self.data_links), dtype=np.float32)
@@ -165,9 +178,14 @@ class HealthDataset(Dataset):
         else:
             ret = base_tuple
 
-        if self.demographics_map is not None:
-            uid = self.data_links.iloc[idx]["app_user_id"]
-            demo = self.demographics_map.get(uid, self.default_demographics)
+        if self.demographics_map is not None or self.use_sleep:
+            if self.demographics_map is not None:
+                uid = self.data_links.iloc[idx]["app_user_id"]
+                demo = self.demographics_map.get(uid, self.default_demographics)
+                if self.use_sleep:
+                    demo = np.concatenate([demo, self.sleep_features[idx]]).astype(np.float32)
+            else:
+                demo = self.sleep_features[idx]
             ret = ret + (torch.tensor(demo, dtype=torch.float32),)
 
         return ret

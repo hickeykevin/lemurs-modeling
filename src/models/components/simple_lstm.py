@@ -13,7 +13,8 @@ class SimpleLSTM(nn.Module):
         use_user_embedding: bool = True,
         use_sequence_data: bool = True,
         use_prev_prediction: bool = False,
-        demographics_dim: int = 0
+        demographics_dim: int = 0,
+        pooling: str = "last",
     ):
         super(SimpleLSTM, self).__init__()
         self.hidden_size = hidden_size
@@ -23,6 +24,13 @@ class SimpleLSTM(nn.Module):
         self.use_sequence_data = use_sequence_data
         self.use_prev_prediction = use_prev_prediction
         self.demographics_dim = demographics_dim
+        # How to collapse the LSTM output sequence into a fixed vector:
+        # "last" (final timestep), "mean", or "max" over time. Mean/max pool
+        # over the whole window, which is more robust than last-step for the
+        # short, sparse activity sequences here.
+        if pooling not in ("last", "mean", "max"):
+            raise ValueError(f"pooling must be one of 'last', 'mean', 'max'; got {pooling!r}")
+        self.pooling = pooling
         
         # LSTM layer
         if self.use_sequence_data:
@@ -89,12 +97,17 @@ class SimpleLSTM(nn.Module):
         # x shape: [Batch, Time=24, Features=input_size]
         if self.use_sequence_data:
             if x is not None and x.shape[-1] != self.lstm.input_size:
-                self.init_input_size(x.shape[-1], device=x.device)
+                self.init_input_size(x.shape[-1])
             # Forward pass through LSTM
-            # out: [Batch, Time=24, hidden_size]
+            # out: [Batch, Time, hidden_size]
             out, (hn, cn) = self.lstm(x)
-            # We take the output from the last time step
-            last_out = out[:, -1, :]
+            # Collapse the time dimension according to the configured pooling strategy
+            if self.pooling == "mean":
+                last_out = out.mean(dim=1)
+            elif self.pooling == "max":
+                last_out = out.max(dim=1).values
+            else:  # "last"
+                last_out = out[:, -1, :]
         else:
             last_out = None
         

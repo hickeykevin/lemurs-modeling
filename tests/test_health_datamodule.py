@@ -262,8 +262,10 @@ def test_offset_sampler():
     sampler = OffsetSampler(start_offset_hours=-6, end_offset_hours=6, resample_freq="1h")
     result = sampler(survey_time, 1, modality_dfs, modality_cols, ["step"])
     
-    # Total duration is 12 hours
-    assert result.shape == (12, 5)
+    # Total duration is 12 hours. Features = [step, sin_weekday, cos_weekday].
+    # OffsetSampler intentionally omits sin/cos hour (constant across samples for
+    # this sampler), so only weekday cyclic features accompany the modality column.
+    assert result.shape == (12, 3)
     assert result[:, 0].sum() == 120
 
     # Test with include_time_features=False

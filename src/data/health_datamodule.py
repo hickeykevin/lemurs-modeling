@@ -57,6 +57,7 @@ class HealthDataModule(LightningDataModule):
         collapse_strategy: str = "mean",
         use_prev_prediction: bool = False,
         use_demographics: bool = True,
+        use_sleep: bool = False,
     ) -> None:
 
 
@@ -123,7 +124,8 @@ class HealthDataModule(LightningDataModule):
                 aggregator=self.hparams.aggregator,
                 os_filter=self.hparams.os_filter,
                 collapse_strategy=self.hparams.collapse_strategy,
-                use_demographics=self.hparams.use_demographics
+                use_demographics=self.hparams.use_demographics,
+                use_sleep=self.hparams.use_sleep
             )
             modality_dfs, master_df, demographics_df = builder.build()
             
@@ -131,6 +133,19 @@ class HealthDataModule(LightningDataModule):
 
             # Perform splitting based on the selected evaluation strategy
             train_df, val_df, test_df = self._split_data(master_df)
+
+            # Fit sleep feature scaling and apply standardizations
+            if self.hparams.use_sleep:
+                sleep_train = pd.to_numeric(train_df["sleep_hours"], errors="coerce").dropna()
+                self.sleep_mean = sleep_train.mean() if not sleep_train.empty else 7.0
+                self.sleep_std = sleep_train.std() if not sleep_train.empty and sleep_train.std() > 0 else 2.0
+
+                for df in [train_df, val_df, test_df]:
+                    df["sleep_hours_scaled"] = (pd.to_numeric(df["sleep_hours"], errors="coerce").fillna(self.sleep_mean) - self.sleep_mean) / self.sleep_std
+                    df["sleep_class_0"] = (df["sleep_category"] == 0).astype(float)
+                    df["sleep_class_1"] = (df["sleep_category"] == 1).astype(float)
+                    df["sleep_class_2"] = (df["sleep_category"] == 2).astype(float)
+                    df["sleep_unknown"] = df["sleep_category"].isna().astype(float)
 
             # Process demographics and device source embeddings
             demo_processor = DemographicsProcessor(use_demographics=self.hparams.use_demographics)
@@ -141,6 +156,8 @@ class HealthDataModule(LightningDataModule):
                 master_df=master_df,
             )
             self.demographics_dim = demo_processor.demographics_dim
+            if self.hparams.use_sleep:
+                self.demographics_dim += 5
 
             # If the sampler needs access to the labels (e.g. LagSampler), provide them now
             if hasattr(self.hparams.sampler, "set_labels"):
@@ -167,7 +184,8 @@ class HealthDataModule(LightningDataModule):
                 is_regression=is_regression,
                 use_prev_prediction=self.hparams.use_prev_prediction,
                 demographics_map=self.demographics_map,
-                default_demographics=self.default_demographics
+                default_demographics=self.default_demographics,
+                use_sleep=self.hparams.use_sleep
             )
             self.data_val = HealthDataset(
                 val_df, modality_dfs, self.hparams.modality_cols,
@@ -175,7 +193,8 @@ class HealthDataModule(LightningDataModule):
                 is_regression=is_regression,
                 use_prev_prediction=self.hparams.use_prev_prediction,
                 demographics_map=self.demographics_map,
-                default_demographics=self.default_demographics
+                default_demographics=self.default_demographics,
+                use_sleep=self.hparams.use_sleep
             )
             self.data_test = HealthDataset(
                 test_df, modality_dfs, self.hparams.modality_cols,
@@ -183,7 +202,8 @@ class HealthDataModule(LightningDataModule):
                 is_regression=is_regression,
                 use_prev_prediction=self.hparams.use_prev_prediction,
                 demographics_map=self.demographics_map,
-                default_demographics=self.default_demographics
+                default_demographics=self.default_demographics,
+                use_sleep=self.hparams.use_sleep
             )
 
     def _fit_scaler(self, train_df: pd.DataFrame, modality_dfs: Dict[str, pd.DataFrame]) -> None:

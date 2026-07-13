@@ -31,6 +31,7 @@ class HealthLitModule(LightningModule):
         scheduler: torch.optim.lr_scheduler = None,
         compile: bool = False,
         class_weights: Optional[List[float]] = None,
+        auto_class_weights: bool = False,
         user_id_dropout: float = 0.0,
         use_prev_prediction: bool = False,
         use_subject_embedding: bool = False,
@@ -101,6 +102,29 @@ class HealthLitModule(LightningModule):
                 indices = idx.detach().cpu().numpy()
                 values = preds.detach().cpu().numpy()
                 dataset.predictions_cache[indices] = values
+
+    def _compute_class_weights(self) -> Optional[torch.Tensor]:
+        """Computes balanced (inverse-frequency) class weights from the training labels.
+
+        Uses the sklearn "balanced" heuristic ``weight_c = n_samples / (n_classes * count_c)``.
+        Runs against the current training split, so under cross-validation the weights
+        are recomputed per-fold. Classes absent from the split are floored to a count of
+        1 to avoid division by zero.
+
+        Returns:
+            A ``[num_classes]`` float tensor on the module device, or ``None`` if the
+            training dataloader is unavailable.
+        """
+        if self._trainer is None or self.trainer.datamodule is None:
+            return None
+        train_loader = self.trainer.datamodule.train_dataloader()
+        counts = np.zeros(self.num_classes, dtype=np.float64)
+        for batch in train_loader:
+            y = batch[1].detach().cpu().numpy().astype(int)
+            counts += np.bincount(y, minlength=self.num_classes)[: self.num_classes]
+        counts = np.maximum(counts, 1.0)
+        weights = counts.sum() / (self.num_classes * counts)
+        return torch.tensor(weights, dtype=torch.float, device=self.device)
 
     def model_step(
         self, batch: Any
@@ -238,6 +262,15 @@ class HealthLitModule(LightningModule):
                 if hasattr(self.net, "init_user_embedding"):
                     self.net.init_user_embedding(self.num_users)
             self.net.to(self.device)  # Make sure weights are moved to correct device
+
+        # Auto-compute inverse-frequency class weights from the training split.
+        # Skipped when explicit class_weights were provided. Recomputed each time
+        # setup() runs (e.g. per fold under cross-validation).
+        if getattr(self.hparams, "auto_class_weights", False) and self.hparams.class_weights is None:
+            weights = self._compute_class_weights()
+            if weights is not None:
+                self.criterion = torch.nn.CrossEntropyLoss(weight=weights).to(self.device)
+                self.print(f"[AutoClassWeights] inverse-frequency weights: {[round(w, 3) for w in weights.tolist()]}")
 
         # Reset metrics to ensure a clean start
         self.val_loss.reset()

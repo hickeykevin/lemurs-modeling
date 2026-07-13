@@ -9,13 +9,13 @@ defaults:
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints
   filename: "epoch_{epoch:03d}"
-  monitor: "val/balanced_accuracy"
+  monitor: "val/auroc"
   mode: "max"
   save_last: True
   auto_insert_metric_name: False
 
 early_stopping:
-  monitor: "val/balanced_accuracy"
+  monitor: "val/auroc"
   patience: 100
   mode: "max"
 

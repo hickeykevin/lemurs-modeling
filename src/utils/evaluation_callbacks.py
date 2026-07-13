@@ -33,6 +33,10 @@ class ConfusionMatrixCallback(Callback):
         self.print_report = print_report
         self.preds: List[torch.Tensor] = []
         self.targets: List[torch.Tensor] = []
+        self.logits: List[torch.Tensor] = []
+        # Positive-class threshold tuned on validation and reused at test time
+        # (binary tasks only). None until the first validation epoch tunes it.
+        self.tuned_threshold: Optional[float] = None
         self.console = Console()
 
     def on_validation_batch_end(
@@ -61,6 +65,57 @@ class ConfusionMatrixCallback(Callback):
         if outputs is not None and "preds" in outputs and "targets" in outputs:
             self.preds.append(outputs["preds"].detach().cpu())
             self.targets.append(outputs["targets"].detach().cpu())
+            if "logits" in outputs:
+                self.logits.append(outputs["logits"].detach().cpu())
+
+    def _tune_binary_threshold(self, stage: str, all_targets: torch.Tensor):
+        """Selects the positive-class probability threshold that maximizes balanced accuracy.
+
+        On the validation stage the threshold is tuned on the collected validation
+        probabilities and cached on ``self.tuned_threshold``. On the test stage the
+        cached validation threshold is reused (proper val->test transfer); if none was
+        cached (e.g. a test run with no preceding validation), it is tuned in-sample.
+
+        Args:
+            stage: Either ``"val"`` or ``"test"``.
+            all_targets: Concatenated integer targets for the epoch (same order as logits).
+
+        Returns:
+            A tuple ``(threshold, balanced_accuracy, confusion_matrix)`` with a ``[2, 2]``
+            int confusion matrix, or ``None`` when tuning is not applicable (missing
+            logits or only one class present).
+        """
+        if not self.logits:
+            return None
+        import numpy as np
+        from sklearn.metrics import balanced_accuracy_score, confusion_matrix
+
+        probs = torch.softmax(torch.cat(self.logits).float(), dim=1)[:, 1].numpy()
+        y = all_targets.numpy().astype(int)
+        if len(np.unique(y)) < 2:
+            return None
+
+        if stage == "val" or self.tuned_threshold is None:
+            uniq = np.unique(probs)
+            candidates = (
+                np.concatenate([[0.0], (uniq[:-1] + uniq[1:]) / 2.0, [1.0]])
+                if len(uniq) > 1 else np.array([0.5])
+            )
+            best_thr, best_ba = 0.5, -1.0
+            for t in candidates:
+                ba = balanced_accuracy_score(y, (probs >= t).astype(int))
+                if ba > best_ba:
+                    best_ba, best_thr = ba, float(t)
+            if stage == "val":
+                self.tuned_threshold = best_thr
+            thr = best_thr
+        else:
+            thr = self.tuned_threshold
+
+        preds_t = (probs >= thr).astype(int)
+        ba = balanced_accuracy_score(y, preds_t)
+        cm_t = confusion_matrix(y, preds_t, labels=[0, 1]).astype(int)
+        return thr, ba, cm_t
 
     def _print_and_log_confusion_matrix(self, trainer: Trainer, pl_module: LightningModule, stage: str) -> None:
         """Computes, prints, and logs the confusion matrix for validation or test stage."""
@@ -141,6 +196,35 @@ class ConfusionMatrixCallback(Callback):
             if self.print_report:
                 self.console.print(report_text)
 
+        # For binary tasks, additionally report the confusion matrix at the tuned
+        # operating point (the argmax@0.5 matrix above can look collapsed even when
+        # the model separates the classes; the tuned threshold reflects usable signal).
+        tuned_table = None
+        tuned = self._tune_binary_threshold(stage, all_targets) if num_classes == 2 else None
+        if tuned is not None:
+            thr, ba, cm_t = tuned
+            origin = "tuned on val, applied here" if stage == "test" else "tuned on this split (optimistic)"
+            tuned_table = Table(
+                title=f"Confusion Matrix @ threshold={thr:.3f} ({stage_title}{epoch_info})  balanced_acc={ba:.3f}  [{origin}]",
+                box=box.ROUNDED, show_header=True, header_style="bold green",
+            )
+            tuned_table.add_column("Actual \\ Predicted", justify="right", style="cyan")
+            for j in range(2):
+                tuned_table.add_column(f"P{j}", justify="center")
+            for i in range(2):
+                tuned_table.add_row(*([f"Class {i}"] + [str(cm_t[i, j]) for j in range(2)]))
+
+            with self.console.capture() as cap:
+                self.console.print(tuned_table)
+            try:
+                from tqdm import tqdm
+                tqdm.write(cap.get())
+            except ImportError:
+                self.console.print(tuned_table)
+
+            pl_module.log(f"{stage}/tuned_threshold", thr, on_step=False, on_epoch=True)
+            pl_module.log(f"{stage}/balanced_accuracy_tuned", ba, on_step=False, on_epoch=True)
+
         # Save confusion matrix to a file in the log directory
         import os
         log_dir = None
@@ -158,10 +242,19 @@ class ConfusionMatrixCallback(Callback):
 
             os.makedirs(log_dir, exist_ok=True)
             log_file_path = os.path.join(log_dir, "confusion_matrix.txt")
+            clean_tuned_text = ""
+            if tuned_table is not None:
+                with clean_console.capture() as capture_tuned:
+                    clean_console.print(tuned_table)
+                clean_tuned_text = capture_tuned.get()
+
             with open(log_file_path, "a", encoding="utf-8") as f:
                 f.write(f"\n=== Confusion Matrix ({stage_title}{epoch_info}) ===\n")
                 f.write(clean_table_text)
                 f.write("\n")
+                if clean_tuned_text:
+                    f.write(clean_tuned_text)
+                    f.write("\n")
                 if self.print_report:
                     f.write(report_text)
 
@@ -200,6 +293,7 @@ class ConfusionMatrixCallback(Callback):
         # Reset collections for the next validation epoch
         self.preds = []
         self.targets = []
+        self.logits = []
 
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Computes and prints the confusion matrix at the end of the validation epoch."""
@@ -220,6 +314,8 @@ class ConfusionMatrixCallback(Callback):
         if outputs is not None and "preds" in outputs and "targets" in outputs:
             self.preds.append(outputs["preds"].detach().cpu())
             self.targets.append(outputs["targets"].detach().cpu())
+            if "logits" in outputs:
+                self.logits.append(outputs["logits"].detach().cpu())
 
     def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Computes and prints the confusion matrix at the end of the test epoch."""

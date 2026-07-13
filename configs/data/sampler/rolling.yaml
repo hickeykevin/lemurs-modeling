@@ -1,0 +1,4 @@
+_target_: src.data.components.samplers.RollingSampler
+lookback_hours: 48.0
+resample_freq: "6h" # 48h / 6h = 8 timesteps
+include_time_features: true # hour channels are informative here (window anchors to survey time)

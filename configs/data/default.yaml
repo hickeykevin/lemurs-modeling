@@ -1,8 +1,8 @@
 defaults:
   - _self_
   - aggregator: suicide_risk
-  - sampler: offset
-  - scaler: subject_standard
+  - sampler: rolling
+  - scaler: robust
   - preprocessors: [step, calorie]
 
 _target_: src.data.health_datamodule.HealthDataModule
@@ -15,7 +15,8 @@ pin_memory: False
 random_state: ${seed}
 split_mode: user # random, user, longitudinal
 os_filter: both # both, ios, android
-collapse_strategy: mean #mean, max, min, first, last, none
+collapse_strategy: max #mean, max, min, first, last, none — max preserves the worst (most elevated) state of the day for rare-positive risk detection
 use_prev_prediction: ${model.use_prev_prediction}
 use_demographics: true
+use_sleep: true
 

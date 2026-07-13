@@ -3,4 +3,4 @@ base_scaler_global:
   _target_: sklearn.preprocessing.StandardScaler
 base_scaler_subject:
   _target_: sklearn.preprocessing.StandardScaler
-scale_dim: 1
+scale_dim: ${len:${data.modalities}}

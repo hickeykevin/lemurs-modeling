@@ -20,7 +20,8 @@ class CohortBuilder:
         aggregator: LabelAggregator,
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
         collapse_strategy: str = "mean",
-        use_demographics: bool = False
+        use_demographics: bool = False,
+        use_sleep: bool = False
     ):
         """Initializes the CohortBuilder.
 
@@ -32,6 +33,7 @@ class CohortBuilder:
             os_filter: Operating system filter mode ("ios", "android", or "both").
             collapse_strategy: Aggregation strategy to collapse multiple daily survey responses for non-yes-no questions.
             use_demographics: Whether to load and merge demographics.
+            use_sleep: Whether to load and compute sleep features.
         """
         self.modalities = modalities
         self.modality_cols = modality_cols
@@ -40,6 +42,7 @@ class CohortBuilder:
         self.os_filter = os_filter
         self.collapse_strategy = collapse_strategy
         self.use_demographics = use_demographics
+        self.use_sleep = use_sleep
 
     def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]:
         """Orchestrates the entire cohort building pipeline.
@@ -153,6 +156,81 @@ class CohortBuilder:
 
         return modality_dfs
 
+    def _compute_sleep_features(self, answer_df: pd.DataFrame) -> pd.DataFrame:
+        """Computes sleep features (sleep hours and category) for each survey response.
+
+        Args:
+            answer_df: Dataframe of collapsed answers (contains 'survey_response_id', 'question_id', 'answer').
+
+        Returns:
+            pd.DataFrame: Dataframe with 'survey_response_id', 'sleep_hours', and 'sleep_category'.
+        """
+        asleep_id = 54
+        awake_id = 55
+
+        # Filter for sleep answers
+        target_answers = answer_df[answer_df['question_id'].isin([asleep_id, awake_id])]
+        if target_answers.empty:
+            return pd.DataFrame(columns=['survey_response_id', 'sleep_hours', 'sleep_category'])
+
+        # Pivot to long format
+        pivoted = target_answers.pivot(index='survey_response_id', columns='question_id', values='answer')
+
+        # Ensure both question columns exist in the pivoted dataframe
+        for qid in [asleep_id, awake_id]:
+            if qid not in pivoted.columns:
+                pivoted[qid] = None
+
+        def calc_hours(row) -> Optional[float]:
+            asleep = row[asleep_id]
+            awake = row[awake_id]
+
+            if pd.isna(asleep) or pd.isna(awake):
+                return None
+
+            try:
+                def to_hours(t_str) -> Optional[float]:
+                    if isinstance(t_str, (int, float)):
+                        return float(t_str)
+                    if not isinstance(t_str, str):
+                        return None
+                    t_str = t_str.strip().upper()
+                    dt = pd.to_datetime(t_str, format="%I:%M %p")
+                    return dt.hour + dt.minute / 60.0
+
+                asleep_h = to_hours(asleep)
+                awake_h = to_hours(awake)
+
+                if asleep_h is None or awake_h is None:
+                    return None
+
+                if awake_h >= asleep_h:
+                    return awake_h - asleep_h
+                else:
+                    return (awake_h - asleep_h) + 24.0
+            except Exception:
+                return None
+
+        sleep_hours = pivoted.apply(calc_hours, axis=1)
+
+        def categorize(hours) -> Optional[int]:
+            if pd.isna(hours) or hours is None:
+                return None
+            if hours < 5.0:
+                return 0
+            elif hours <= 10.0:
+                return 1
+            else:
+                return 2
+
+        labels = sleep_hours.apply(categorize)
+
+        res = pd.DataFrame({
+            'sleep_hours': sleep_hours,
+            'sleep_category': labels
+        }).reset_index()
+        return res
+
     def _extract_and_aggregate_labels(self, db: DatabaseService) -> pd.DataFrame:
         """Fetches survey answers and aggregates them into daily clinical labels.
 
@@ -199,7 +277,12 @@ class CohortBuilder:
             right_on='id',
             suffixes=('', '_survey')
         ).rename(columns={'timestamp': 'record_timestamp'})
-        
+
+        # If use_sleep is enabled, compute and merge sleep features
+        if getattr(self, 'use_sleep', False):
+            sleep_df = self._compute_sleep_features(answer_df)
+            master_df = pd.merge(master_df, sleep_df, on='survey_response_id', how='left')
+
         return master_df
 
     def _collapse_daily_responses(
@@ -244,6 +327,8 @@ class CohortBuilder:
         string_qids = set()
         if getattr(self.aggregator, 'requires_strings', False):
             string_qids = set(self.aggregator.get_question_ids())
+        if getattr(self, 'use_sleep', False):
+            string_qids.update({54, 55})
 
         # Split into string-based and numeric-based answers
         is_str_q = ans['question_id'].isin(string_qids)

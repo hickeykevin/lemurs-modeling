@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from unittest.mock import patch
 from src.data.components.cohort_splitter import CohortSplitter
 from src.data.components.demographics_processor import DemographicsProcessor
 from src.data.components.prev_prediction_linker import PrevPredictionLinker
@@ -191,4 +192,154 @@ def test_calorie_preprocessor():
     assert processed_df.loc[0, "calories"] == 200.0
     assert processed_df.loc[1, "app_user_id"] == 2
     assert processed_df.loc[1, "calories"] == 3
+
+
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_cohort_builder_with_sleep_features(mock_db_class):
+    """Tests CohortBuilder extracting sleep questions 54 and 55 as string and calculating features."""
+    from src.data.components.cohort_builder import CohortBuilder
+    from src.data.components.label_aggregators import MeanAggregator
+
+    survey_df = pd.DataFrame({
+        'id': [101, 102],
+        'app_user_id': [10, 10],
+        'timestamp': pd.to_datetime(['2025-10-01 08:00:00', '2025-10-01 09:00:00'])
+    })
+
+    answer_df = pd.DataFrame([
+        # response 101 has asleep time
+        {'survey_response_id': 101, 'question_id': 54, 'answer': "10:00 PM"},
+        # response 102 has awake time
+        {'survey_response_id': 102, 'question_id': 55, 'answer': "07:00 AM"},
+        # and answer for question 2 (the aggregator target)
+        {'survey_response_id': 101, 'question_id': 2, 'answer': "1"},
+        {'survey_response_id': 102, 'question_id': 2, 'answer': "1"},
+    ])
+
+    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df}
+
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table].copy()
+
+    agg = MeanAggregator(question_ids=[2])
+
+    builder = CohortBuilder(
+        modalities=[],
+        modality_cols={},
+        preprocessors=None,
+        aggregator=agg,
+        os_filter='both',
+        use_sleep=True
+    )
+
+    _, master_df, _ = builder.build()
+
+    # master_df should have 'sleep_hours' and 'sleep_category' columns merged
+    assert 'sleep_hours' in master_df.columns
+    assert 'sleep_category' in master_df.columns
+    assert len(master_df) == 1
+    assert master_df.loc[0, 'sleep_hours'] == 9.0
+    assert master_df.loc[0, 'sleep_category'] == 1
+
+
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_datamodule_with_sleep_features(mock_db_class):
+    """Tests HealthDataModule setup and HealthDataset context dimension with use_sleep=True."""
+    from src.data.health_datamodule import HealthDataModule
+    from src.data.components.label_aggregators import MeanAggregator
+    from src.data.components.samplers import OffsetSampler
+
+    # Define 4 users to support train/val/test splits without empty categories
+    step_df = pd.DataFrame({
+        'app_user_id': [10, 11, 12, 13],
+        'start_timestamp': pd.to_datetime([
+            '2025-10-01 02:00:00', '2025-10-01 02:00:00',
+            '2025-10-01 02:00:00', '2025-10-01 02:00:00'
+        ]),
+        'steps': [100, 150, 200, 250]
+    })
+
+    survey_df = pd.DataFrame({
+        'id': [101, 102, 103, 104],
+        'app_user_id': [10, 11, 12, 13],
+        'timestamp': pd.to_datetime([
+            '2025-10-01 08:00:00', '2025-10-01 08:00:00',
+            '2025-10-01 08:00:00', '2025-10-01 08:00:00'
+        ])
+    })
+
+    answer_df = pd.DataFrame([
+        # user 10: 9 hours sleep -> class 1
+        {'survey_response_id': 101, 'question_id': 54, 'answer': "10:00 PM"},
+        {'survey_response_id': 101, 'question_id': 55, 'answer': "07:00 AM"},
+        {'survey_response_id': 101, 'question_id': 2, 'answer': "1"},
+
+        # user 11: 4 hours sleep -> class 0
+        {'survey_response_id': 102, 'question_id': 54, 'answer': "12:00 AM"},
+        {'survey_response_id': 102, 'question_id': 55, 'answer': "04:00 AM"},
+        {'survey_response_id': 102, 'question_id': 2, 'answer': "1"},
+
+        # user 12: missing sleep data -> unknown sleep class
+        {'survey_response_id': 103, 'question_id': 2, 'answer': "1"},
+
+        # user 13: 11 hours sleep -> class 2
+        {'survey_response_id': 104, 'question_id': 54, 'answer': "09:00 PM"},
+        {'survey_response_id': 104, 'question_id': 55, 'answer': "08:00 AM"},
+        {'survey_response_id': 104, 'question_id': 2, 'answer': "1"},
+    ])
+
+    demo_df = pd.DataFrame([
+        {'app_user_id': 10, 'keyword': 'age', 'value': '25'},
+        {'app_user_id': 11, 'keyword': 'age', 'value': '30'},
+        {'app_user_id': 12, 'keyword': 'age', 'value': '35'},
+        {'app_user_id': 13, 'keyword': 'age', 'value': '40'},
+
+        {'app_user_id': 10, 'keyword': 'gender identity', 'value': 'male'},
+        {'app_user_id': 11, 'keyword': 'gender identity', 'value': 'female'},
+        {'app_user_id': 12, 'keyword': 'gender identity', 'value': 'male'},
+        {'app_user_id': 13, 'keyword': 'gender identity', 'value': 'female'},
+
+        {'app_user_id': 10, 'keyword': 'lgbt', 'value': 'no'},
+        {'app_user_id': 11, 'keyword': 'lgbt', 'value': 'yes'},
+        {'app_user_id': 12, 'keyword': 'lgbt', 'value': 'no'},
+        {'app_user_id': 13, 'keyword': 'lgbt', 'value': 'no'},
+    ])
+
+    dummy_data = {"step": step_df, "survey_response": survey_df, "answer": answer_df, "demographic": demo_df}
+
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
+
+    dm = HealthDataModule(
+        aggregator=MeanAggregator(question_ids=[2]),
+        sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
+        train_val_test_split=(0.5, 0.25, 0.25),
+        use_demographics=True,
+        use_sleep=True,
+        modalities=["step"]
+    )
+
+    dm.setup()
+
+    # We should have increased demographics_dim by 5 (base_demographics_dim=9 or 11 + 5 = 14 or 16)
+    assert dm.demographics_dim in [14, 16]
+
+    # Get the dataset item
+    train_ds = dm.data_train
+    assert len(train_ds) > 0
+    sample = train_ds[0]
+
+    # sample tuple elements:
+    # 0: seq features
+    # 1: target
+    # 2: user_idx
+    # 3: context vector (demographics + sleep features)
+    assert len(sample) == 4
+    context_vector = sample[3]
+
+    # Context vector length should match dm.demographics_dim
+    assert len(context_vector) == dm.demographics_dim
+
 
