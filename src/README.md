@@ -7,6 +7,7 @@ This directory contains the core entry scripts for training, validating, and eva
 - **[app.py](app.py)**: A Streamlit-based GUI wrapper for visually managing and executing training and evaluation scripts.
 - **[train.py](train.py)**: Main entry point for standard PyTorch Lightning training and testing using Hydra.
 - **[cv_train.py](cv_train.py)**: Script for K-fold or Leave-One-User-Out Cross-Validation training and metric aggregation.
+- **[compare_cv_runs.py](compare_cv_runs.py)**: Compares two CV sweeps fold by fold, reporting a paired delta with its interval after verifying the two runs split the same cohort identically.
 - **[eval.py](eval.py)**: Evaluation script to test a trained model checkpoint (`.ckpt`) on a dataset.
 
 ---
@@ -94,7 +95,26 @@ uv run src/train.py model=default data=default trainer=default
 uv run src/cv_train.py model=default data=default data.num_folds=5
 ```
 
-### 3. Evaluation (`eval.py`)
+Each run logs one row per (repeat, fold) — the fold's metrics under `fold/*`, plus a fingerprint of the cohort and of the users held out (`cv/cohort_hash`, `cv/test_user_hash`) — followed by the aggregate `*_mean` / `*_ci_low` / `*_ci_high` summary.
+
+### 3. Comparing two sweeps (`compare_cv_runs.py`)
+The partition for a given (repeat, fold) depends only on the seed and the cohort, never on the model. So two sweeps with the same `seed`, `data.num_folds`, `data.num_repeats` and `data.*` settings score the identical users in every cell, and can be differenced fold by fold:
+
+```bash
+uv run src/cv_train.py model=A seed=7 data.num_folds=5 data.num_repeats=20 logger=csv
+uv run src/cv_train.py model=B seed=7 data.num_folds=5 data.num_repeats=20 logger=csv
+
+uv run src/compare_cv_runs.py \
+  logs/cv_train/runs/<run_A>/csv/version_0/metrics.csv \
+  logs/cv_train/runs/<run_B>/csv/version_0/metrics.csv \
+  --metric test/auroc --label-a "model A" --label-b "model B"
+```
+
+Pairing cancels fold difficulty, which at this cohort size is the largest source of spread — so it detects gaps that comparing two independent CV intervals cannot. The script verifies the cohorts and the per-fold held-out users match before differencing, and refuses rather than reporting if they don't.
+
+That refusal matters most for **data-setting** comparisons: changing anything that affects sensor-coverage filtering (sampler window, modality set, `collapse_strategy`) drops different responses, so the same fold index holds different people. Either set `require_sensor_data=False` for both runs, pass the intersected user set as `exclude_user_ids` to both, or compare them unpaired.
+
+### 4. Evaluation (`eval.py`)
 ```bash
 uv run src/eval.py model=default data=default ckpt_path=/path/to/checkpoint.ckpt
 ```
