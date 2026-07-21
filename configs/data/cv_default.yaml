@@ -1,22 +1,40 @@
 defaults:
   - _self_
   - aggregator: suicide_risk
-  - sampler: block
+  - sampler: interval_aware
   - scaler: standard
   - preprocessors: [step, calorie]
 
 _target_: src.data.cv_health_datamodule.CVHealthDataModule
 modalities: ["step", "calorie"]
 
+# Folds are grouped on app_user_id and stratified on whether a user is ever
+# positive, so no participant spans train and test and no fold ends up with
+# zero positive test users.
 num_folds: 5
 current_fold: 0
+
+# The whole K-fold procedure is repeated with different shuffles. With ~31
+# users, which users land together drives the result more than most modelling
+# choices; repeats convert that into a reported interval instead of hidden
+# noise. 20 repeats x 5 folds = 100 runs — drop to 3-5 while iterating.
+num_repeats: 20
+current_repeat: 0
 
 batch_size: 16
 train_val_test_split: [0.7, 0.15, 0.15]
 num_workers: 1
 pin_memory: False
 random_state: ${seed}
-os_filter: ios # both, ios, android
-collapse_strategy: mean
-use_prev_prediction: ${model.use_prev_prediction}
+os_filter: both # both, ios, android
 
+# One sample per survey response; see configs/data/default.yaml
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+
+use_prev_prediction: ${model.use_prev_prediction}
+use_demographics: true
+use_sleep: false
+
+exclude_user_ids: null

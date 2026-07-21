@@ -13,7 +13,11 @@ train_val_test_split: [0.7, 0.15, 0.15]
 num_workers: 1
 pin_memory: False
 random_state: ${seed}
-split_mode: user # random, user, longitudinal
+# user = disjoint participants (matches deployment: new users have no labels).
+# longitudinal = temporal split within each user; diagnostic only.
+# Row-level random splitting was removed: it leaks users across the split and
+# measures user identification rather than risk. See CohortSplitter.
+split_mode: user # user, longitudinal
 os_filter: both # both, ios, android
 # none = one sample per survey response. The morning and afternoon surveys ask
 # about different periods ("since your last prompt"), so collapsing them to a

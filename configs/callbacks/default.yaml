@@ -4,6 +4,7 @@ defaults:
   - model_summary
   - tqdm_progress_bar
   - classification_metrics
+  - within_person_auroc
   - _self_
 
 model_checkpoint:

@@ -17,45 +17,50 @@ from src.data.components.samplers import (
 from src.data.health_datamodule import HealthDataModule
 
 
+USERS = [5, 6, 7, 8, 9, 10]
+
+
 @pytest.fixture
 def two_survey_data():
-    """Two users, morning+afternoon responses, step data on some days only."""
-    survey_df = pd.DataFrame({
-        "id": [1, 2, 3, 4, 5, 6, 7, 8],
-        "app_user_id": [5, 5, 5, 5, 6, 6, 6, 6],
-        "survey_id": [0, 1, 0, 1, 0, 1, 0, 1],
-        "timestamp": pd.to_datetime([
-            "2026-03-02 09:00:00", "2026-03-02 17:00:00",
-            "2026-03-03 09:00:00", "2026-03-03 17:00:00",
-            "2026-03-02 09:00:00", "2026-03-02 17:00:00",
-            "2026-03-03 09:00:00", "2026-03-03 17:00:00",
-        ]),
-    })
-    # Morning and afternoon disagree on 03-02 for user 5: collapsing would
-    # assign one label to both halves.
-    answers = []
-    for sid in survey_df["id"]:
-        answers.append({"survey_response_id": sid, "question_id": 2,
-                        "answer": 3 if sid == 1 else 0})
-    answer_df = pd.DataFrame(answers)
+    """Morning+afternoon responses over two days, with matching step data.
 
-    step_df = pd.DataFrame({
-        "app_user_id": [5] * 4 + [6] * 4,
-        "start_timestamp": pd.to_datetime([
-            "2026-03-01 12:00:00", "2026-03-02 08:00:00",
-            "2026-03-02 12:00:00", "2026-03-03 08:00:00",
-            "2026-03-01 12:00:00", "2026-03-02 08:00:00",
-            "2026-03-02 12:00:00", "2026-03-03 08:00:00",
-        ]),
-        "end_timestamp": pd.to_datetime([
-            "2026-03-01 13:00:00", "2026-03-02 09:00:00",
-            "2026-03-02 13:00:00", "2026-03-03 09:00:00",
-            "2026-03-01 13:00:00", "2026-03-02 09:00:00",
-            "2026-03-02 13:00:00", "2026-03-03 09:00:00",
-        ]),
-        "steps": [500] * 8,
-    })
-    return {"step": step_df, "survey_response": survey_df, "answer": answer_df}
+    Six users, because user-level splitting needs enough participants to fill
+    train, val and test without any of them coming out empty.
+    """
+    survey_rows, answer_rows, step_rows = [], [], []
+    sid = 1
+    for u in USERS:
+        for day in ("2026-03-02", "2026-03-03"):
+            for survey_id, hour in ((0, "09:00:00"), (1, "17:00:00")):
+                survey_rows.append({
+                    "id": sid, "app_user_id": u, "survey_id": survey_id,
+                    "timestamp": pd.Timestamp(f"{day} {hour}"),
+                })
+                # Only user 5's first morning is positive, so that user has a
+                # day whose two halves disagree.
+                answer_rows.append({
+                    "survey_response_id": sid, "question_id": 2,
+                    "answer": 3 if sid == 1 else 0,
+                })
+                sid += 1
+        for start, end in (
+            ("2026-03-01 12:00:00", "2026-03-01 13:00:00"),
+            ("2026-03-02 08:00:00", "2026-03-02 09:00:00"),
+            ("2026-03-02 12:00:00", "2026-03-02 13:00:00"),
+            ("2026-03-03 08:00:00", "2026-03-03 09:00:00"),
+        ):
+            step_rows.append({
+                "app_user_id": u,
+                "start_timestamp": pd.Timestamp(start),
+                "end_timestamp": pd.Timestamp(end),
+                "steps": 500,
+            })
+
+    return {
+        "step": pd.DataFrame(step_rows),
+        "survey_response": pd.DataFrame(survey_rows),
+        "answer": pd.DataFrame(answer_rows),
+    }
 
 
 def _build(data, **kw):
@@ -81,14 +86,14 @@ def _build(data, **kw):
 def test_collapse_none_keeps_every_response(two_survey_data):
     """Each survey response becomes its own sample."""
     _, master, _ = _build(two_survey_data, collapse_strategy="none")
-    assert len(master) == 8
+    assert len(master) == 4 * len(USERS)
     assert set(master["survey_id"]) == {0, 1}
 
 
 def test_collapse_daily_halves_the_cohort(two_survey_data):
     """The previous behaviour merges the two daily responses into one."""
     _, master, _ = _build(two_survey_data, collapse_strategy="max")
-    assert len(master) == 4  # 2 users x 2 days
+    assert len(master) == 2 * len(USERS)  # 2 days per user
 
 
 def test_discordant_halves_survive_response_level(two_survey_data):
@@ -181,7 +186,8 @@ def test_uncovered_samples_dropped(two_survey_data):
     """Responses whose window holds no records are removed before splitting."""
     data = {k: v.copy() for k, v in two_survey_data.items()}
     # Strip user 6's step data entirely; their responses lose all coverage.
-    data["step"] = data["step"][data["step"]["app_user_id"] == 5]
+    kept = USERS[:3]
+    data["step"] = data["step"][data["step"]["app_user_id"].isin(kept)]
 
     with patch("src.data.components.cohort_builder.DatabaseService") as M:
         db = M.return_value
@@ -198,12 +204,13 @@ def test_uncovered_samples_dropped(two_survey_data):
         )
         dm.setup()
 
-    assert set(dm.master_df["app_user_id"]) == {5}
+    assert set(dm.master_df["app_user_id"]) == set(kept)
 
 
 def test_coverage_gate_disabled_keeps_everything(two_survey_data):
     data = {k: v.copy() for k, v in two_survey_data.items()}
-    data["step"] = data["step"][data["step"]["app_user_id"] == 5]
+    kept = USERS[:3]
+    data["step"] = data["step"][data["step"]["app_user_id"].isin(kept)]
 
     with patch("src.data.components.cohort_builder.DatabaseService") as M:
         db = M.return_value
@@ -220,7 +227,7 @@ def test_coverage_gate_disabled_keeps_everything(two_survey_data):
         )
         dm.setup()
 
-    assert set(dm.master_df["app_user_id"]) == {5, 6}
+    assert set(dm.master_df["app_user_id"]) == set(USERS)
 
 
 # ---------------------------------------------------------------------------

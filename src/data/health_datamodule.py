@@ -52,7 +52,7 @@ class HealthDataModule(LightningDataModule):
         pin_memory: bool = False,
         train_val_test_split: Tuple[float, float, float] = (0.7, 0.15, 0.15),
         random_state: int = 42,
-        split_mode: Literal["random", "user", "longitudinal"] = "random",
+        split_mode: Literal["user", "longitudinal"] = "user",
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
         collapse_strategy: str = "mean",
         use_prev_prediction: bool = False,
@@ -80,10 +80,11 @@ class HealthDataModule(LightningDataModule):
             pin_memory (bool): If True, the data loader will copy Tensors into CUDA pinned memory.
             train_val_test_split (Tuple[float, float, float]): Fraction of data for train, validation, and test sets.
             random_state (int): Seed for reproducibility.
-            split_mode (Literal["random", "user", "longitudinal"]): The strategy for splitting the data.
-                - "random": Standard row-level random shuffle.
-                - "user": Split by user ID (ensures disjoint populations).
+            split_mode (Literal["user", "longitudinal"]): The strategy for splitting the data.
+                - "user": Split by user ID (ensures disjoint populations). Matches
+                  deployment, where a new user of the app has no labels at all.
                 - "longitudinal": Temporal split per user (predict future from past).
+                Row-level random splitting was removed; see CohortSplitter for why.
             collapse_strategy (str): Aggregation strategy to collapse multiple daily survey responses for non-yes-no questions.
             use_prev_prediction (bool): Whether to use the previous day's prediction as input to the model.
             use_demographics (bool): Whether to query, process, and pass user demographics as context.

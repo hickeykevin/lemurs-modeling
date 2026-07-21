@@ -27,12 +27,13 @@ def dummy_splitter_data():
     })
 
 
-def test_cohort_splitter_random(dummy_splitter_data):
+def test_cohort_splitter_random_removed(dummy_splitter_data):
+    """Row-level random splitting leaks users across the split; see CohortSplitter."""
+    import pytest
+
     splitter = CohortSplitter(split_mode="random", train_val_test_split=(0.6, 0.2, 0.2), random_state=42)
-    train_df, val_df, test_df = splitter.split(dummy_splitter_data)
-    assert len(train_df) == 6
-    assert len(val_df) == 2
-    assert len(test_df) == 2
+    with pytest.raises(ValueError, match="no longer supported"):
+        splitter.split(dummy_splitter_data)
 
 
 def test_cohort_splitter_user(dummy_splitter_data):

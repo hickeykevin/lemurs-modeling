@@ -28,6 +28,7 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 # more info: https://github.com/ashleve/rootutils
 # ------------------------------------------------------------------------------------ #
 
+from src.utils.checkpoint_compat import allow_full_checkpoint_loading
 from src.utils import (
     RankedLogger,
     extras,
@@ -40,6 +41,10 @@ from src.utils import (
 
 log = RankedLogger(__name__, rank_zero_only=True)
 register_resolvers()
+
+# Checkpoints here embed Hydra-instantiated hparams, which torch>=2.6 will not
+# unpickle under its weights_only default. Safe: we wrote these files ourselves.
+allow_full_checkpoint_loading()
 
 
 

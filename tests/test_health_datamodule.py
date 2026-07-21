@@ -375,37 +375,27 @@ def test_subject_scaler_normalization(mock_db_class):
     from src.data.components.scalers import SubjectScaler
     from src.data.components.samplers import OffsetSampler
 
-    # Define dummy data for two users with different scales of steps
-    # User 5 steps: always 10 and 20
-    # User 6 steps: always 100 and 200
-    step_df = pd.DataFrame({
-        'app_user_id': [5, 5, 5, 5, 6, 6, 6, 6],
-        'start_timestamp': pd.to_datetime([
-            '2026-01-01 10:00:00', '2026-01-01 11:00:00',
-            '2026-01-02 10:00:00', '2026-01-02 11:00:00',
-            '2026-01-01 10:00:00', '2026-01-01 11:00:00',
-            '2026-01-02 10:00:00', '2026-01-02 11:00:00',
-        ]),
-        'steps': [10, 20, 10, 20, 100, 200, 100, 200]
-    })
-    
-    # 2. Survey Responses - 2 per user
-    survey_df = pd.DataFrame({
-        'id': [101, 102, 103, 104],
-        'app_user_id': [5, 5, 6, 6],
-        'timestamp': pd.to_datetime([
-            '2026-01-01 12:00:00', '2026-01-02 12:00:00',
-            '2026-01-01 12:00:00', '2026-01-02 12:00:00'
-        ])
-    })
-    
-    # 3. Answers
-    answer_df = pd.DataFrame([
-        {'survey_response_id': 101, 'question_id': 2, 'answer': 1},
-        {'survey_response_id': 102, 'question_id': 2, 'answer': 1},
-        {'survey_response_id': 103, 'question_id': 2, 'answer': 1},
-        {'survey_response_id': 104, 'question_id': 2, 'answer': 1}
-    ])
+    # Four users on deliberately different step scales, so per-subject z-scoring
+    # has something to normalise away. Four rather than two because splitting is
+    # now user-level, and three splits cannot be filled from two participants.
+    user_scales = {5: (10, 20), 6: (100, 200), 7: (30, 60), 8: (300, 600)}
+
+    step_rows, survey_rows, answer_rows = [], [], []
+    sid = 101
+    for uid, (low, high) in user_scales.items():
+        for day in ('2026-01-01', '2026-01-02'):
+            step_rows.append({'app_user_id': uid,
+                              'start_timestamp': pd.Timestamp(f'{day} 10:00:00'), 'steps': low})
+            step_rows.append({'app_user_id': uid,
+                              'start_timestamp': pd.Timestamp(f'{day} 11:00:00'), 'steps': high})
+            survey_rows.append({'id': sid, 'app_user_id': uid,
+                                'timestamp': pd.Timestamp(f'{day} 12:00:00')})
+            answer_rows.append({'survey_response_id': sid, 'question_id': 2, 'answer': 1})
+            sid += 1
+
+    step_df = pd.DataFrame(step_rows)
+    survey_df = pd.DataFrame(survey_rows)
+    answer_df = pd.DataFrame(answer_rows)
     
     demo_list = []
     # users 1, 2, 3, 4
@@ -445,7 +435,7 @@ def test_subject_scaler_normalization(mock_db_class):
         sampler=OffsetSampler(start_offset_hours=10, end_offset_hours=12, resample_freq="1h"),
         scaler=scaler,
         train_val_test_split=(0.5, 0.25, 0.25),
-        split_mode="random"
+        split_mode="user",
     )
 
     dm.setup()

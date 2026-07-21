@@ -1,0 +1,5 @@
+within_person_auroc:
+  _target_: src.utils.evaluation_callbacks.WithinPersonAUROCCallback
+  # Participants with fewer responses than this in a split are skipped: a
+  # within-person AUROC over 2-3 points is noise, not signal.
+  min_samples_per_user: 4

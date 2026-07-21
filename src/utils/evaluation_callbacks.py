@@ -1006,3 +1006,160 @@ class TargetDistributionCallback(Callback):
 
 
 
+
+
+class WithinPersonAUROCCallback(Callback):
+    """Reports AUROC computed *within* each participant, then averaged.
+
+    Pooled AUROC over all responses conflates two different questions. Because
+    the label in this study is largely a person-level trait — most participants
+    are never positive, a few are positive nearly always — a model can score
+    well pooled purely by separating high-risk people from low-risk people,
+    while being unable to tell any individual's bad day from their ordinary
+    one. Only the second ability is clinically interesting for a monitoring
+    app, and it is invisible in the pooled number.
+
+    This callback computes AUROC separately over each participant's own
+    responses, restricted to those who have both classes present in the split
+    (a user who is always negative admits no ranking), and reports the
+    unweighted mean. ``n_users`` is logged alongside it: with only a handful of
+    eligible participants the average is fragile, and the count is the context
+    needed to read it honestly.
+
+    Predictions are matched to participants by position, which is valid because
+    the validation and test dataloaders are constructed with ``shuffle=False``.
+    """
+
+    def __init__(self, min_samples_per_user: int = 4) -> None:
+        """Initializes the WithinPersonAUROCCallback.
+
+        Args:
+            min_samples_per_user (int): Participants with fewer responses than
+                this in the split are skipped. A within-person AUROC over two or
+                three points is essentially a coin flip and only adds noise to
+                the average.
+        """
+        super().__init__()
+        self.min_samples_per_user = min_samples_per_user
+        self.val_probs: List[torch.Tensor] = []
+        self.val_targets: List[torch.Tensor] = []
+        self.test_probs: List[torch.Tensor] = []
+        self.test_targets: List[torch.Tensor] = []
+
+    # ------------------------------------------------------------------
+    # Collection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _positive_probs(logits: torch.Tensor) -> Optional[torch.Tensor]:
+        """Extracts P(positive) from logits; returns None if not binary."""
+        if logits.ndim == 1:
+            return torch.sigmoid(logits)
+        if logits.ndim == 2 and logits.shape[-1] == 2:
+            return torch.softmax(logits, dim=-1)[:, 1]
+        if logits.ndim == 2 and logits.shape[-1] == 1:
+            return torch.sigmoid(logits.squeeze(-1))
+        return None
+
+    def _collect(self, outputs, probs_buf: List, targets_buf: List) -> None:
+        if outputs is None or "targets" not in outputs:
+            return
+        logits = outputs.get("logits")
+        if logits is None:
+            return
+        probs = self._positive_probs(logits.detach().cpu().float())
+        if probs is None:
+            return
+        probs_buf.append(probs)
+        targets_buf.append(outputs["targets"].detach().cpu())
+
+    def on_validation_batch_end(
+        self, trainer: Trainer, pl_module: LightningModule, outputs: Optional[Dict[str, torch.Tensor]],
+        batch: Any, batch_idx: int, dataloader_idx: int = 0
+    ) -> None:
+        self._collect(outputs, self.val_probs, self.val_targets)
+
+    def on_test_batch_end(
+        self, trainer: Trainer, pl_module: LightningModule, outputs: Optional[Dict[str, torch.Tensor]],
+        batch: Any, batch_idx: int, dataloader_idx: int = 0
+    ) -> None:
+        self._collect(outputs, self.test_probs, self.test_targets)
+
+    def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self.val_probs, self.val_targets = [], []
+
+    def on_test_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self.test_probs, self.test_targets = [], []
+
+    # ------------------------------------------------------------------
+    # Computation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _auc(scores, labels) -> Optional[float]:
+        """Rank-based AUROC for one participant. None if only one class present."""
+        import numpy as np
+
+        labels = np.asarray(labels)
+        pos, neg = labels == 1, labels == 0
+        if not pos.any() or not neg.any():
+            return None
+
+        # Mann-Whitney U via average ranks, which handles ties correctly.
+        scores = np.asarray(scores, dtype=float)
+        order = scores.argsort()
+        ranks = np.empty_like(order, dtype=float)
+        ranks[order] = np.arange(1, len(scores) + 1)
+
+        unique, inverse, counts = np.unique(scores, return_inverse=True, return_counts=True)
+        if (counts > 1).any():
+            sums = np.zeros(len(unique))
+            np.add.at(sums, inverse, ranks)
+            ranks = (sums / counts)[inverse]
+
+        n_pos, n_neg = int(pos.sum()), int(neg.sum())
+        return float((ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+
+    def _user_ids_for(self, trainer: Trainer, stage: str) -> Optional[List[Any]]:
+        dm = getattr(trainer, "datamodule", None)
+        dataset = getattr(dm, f"data_{stage}", None) if dm is not None else None
+        links = getattr(dataset, "data_links", None)
+        if links is None or "app_user_id" not in links.columns:
+            return None
+        return list(links["app_user_id"].values)
+
+    def _report(self, trainer: Trainer, pl_module: LightningModule, stage: str,
+                probs_buf: List, targets_buf: List) -> None:
+        import numpy as np
+
+        if not probs_buf:
+            return
+        probs = torch.cat(probs_buf).numpy()
+        targets = torch.cat(targets_buf).numpy()
+        user_ids = self._user_ids_for(trainer, stage)
+
+        if user_ids is None or len(user_ids) != len(probs):
+            # Cannot align predictions to participants; skip rather than
+            # report a number that silently means something else.
+            return
+
+        user_ids = np.asarray(user_ids)
+        aucs = []
+        for uid in np.unique(user_ids):
+            mask = user_ids == uid
+            if int(mask.sum()) < self.min_samples_per_user:
+                continue
+            auc = self._auc(probs[mask], targets[mask])
+            if auc is not None:
+                aucs.append(auc)
+
+        n_users = len(aucs)
+        value = float(np.mean(aucs)) if n_users else float("nan")
+        pl_module.log(f"{stage}/within_person_auroc", value, prog_bar=False, sync_dist=True)
+        pl_module.log(f"{stage}/within_person_auroc_n_users", float(n_users), prog_bar=False, sync_dist=True)
+
+    def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self._report(trainer, pl_module, "val", self.val_probs, self.val_targets)
+
+    def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self._report(trainer, pl_module, "test", self.test_probs, self.test_targets)
