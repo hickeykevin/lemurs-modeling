@@ -6,6 +6,48 @@ from torchmetrics import MaxMetric, MeanMetric, MinMetric, MeanSquaredError, Mea
 import numpy as np
 from functools import partial
 
+
+def _resolve_num_classes(trainer: Any, explicit: Optional[int], scan_fallback_labels) -> int:
+    """Determines the classification head width for the current fold.
+
+    Priority order:
+      1. An explicit ``num_classes`` (passed to ``setup()``, or set at construction).
+      2. The aggregator's declared ``num_classes`` — the same source that already
+         sizes the network's output layer via ``net.output_size`` in config, so
+         this is the only choice that cannot drift out of sync with the model.
+      3. Scanning a dataloader's realized labels, as a last resort.
+
+    (3) is unsafe under repeated grouped CV. The outer test fold is stratified on
+    whether a user is ever positive, but the inner validation carve-out is
+    re-stratified from an already-shrunken training pool and can fall back to
+    unstratified grouping if the minority stratum runs too small (see
+    ``CVHealthDataModule._grouped_split``). That means a fold's validation split
+    can end up single-class purely by chance. Inferring ``num_classes`` from that
+    split would produce a class-weight tensor sized for one class while the
+    network's actual output layer — sized from the aggregator — has two,
+    breaking ``CrossEntropyLoss`` for that fold only. Preferring the aggregator's
+    declared count avoids ever taking that path in practice.
+    """
+    if explicit is not None:
+        return int(explicit)
+
+    dm = getattr(trainer, "datamodule", None) if trainer is not None else None
+    hparams = getattr(dm, "hparams", None) if dm is not None else None
+    aggregator = getattr(hparams, "aggregator", None) if hparams is not None else None
+    declared = getattr(aggregator, "num_classes", None)
+    if declared is not None:
+        return int(declared)
+
+    import logging
+    logging.getLogger(__name__).warning(
+        "aggregator.num_classes unavailable; falling back to scanning a dataloader "
+        "for the label range. Under repeated CV a fold's split can be single-class "
+        "purely by chance, which would under-count classes here — set num_classes "
+        "on the aggregator config if this warning appears routinely."
+    )
+    return scan_fallback_labels()
+
+
 class HealthLitModule(LightningModule):
     """A LightningModule for Health (LSTM) classification tasks.
 
@@ -229,21 +271,16 @@ class HealthLitModule(LightningModule):
             self.net = torch.compile(self.net)
 
         if not hasattr(self, "num_classes"):
-            num_classes = kwargs.get("num_classes")
-            if num_classes is not None:
-                self.num_classes = num_classes
-            elif self._trainer is not None and self.trainer.datamodule is not None:
-                # We look at the validation set to find the range of labels
-                val_dataloader = self.trainer.datamodule.val_dataloader()
-                y_list = []
-                for batch in val_dataloader:
-                    _, y = batch[:2]
-                    y_list.append(y.cpu().numpy())
-                
-                y_train = np.concatenate(y_list, axis=0)
-                self.num_classes = int(np.max(y_train)) + 1
-            else:
+            explicit = kwargs.get("num_classes")
+            if explicit is None and (self._trainer is None or self.trainer.datamodule is None):
                 raise RuntimeError("Cannot determine num_classes: neither num_classes arg nor trainer is available.")
+
+            def _scan_val_labels() -> int:
+                val_dataloader = self.trainer.datamodule.val_dataloader()
+                y_list = [batch[1].cpu().numpy() for batch in val_dataloader]
+                return int(np.max(np.concatenate(y_list, axis=0))) + 1
+
+            self.num_classes = _resolve_num_classes(self._trainer, explicit, _scan_val_labels)
         # Dynamically build input size, user embedding, and demographics support on the net
         if self._trainer is not None and self.trainer.datamodule is not None:
             dm = self.trainer.datamodule
@@ -367,20 +404,18 @@ class FLAMLHealthModule(LightningModule):
     def setup(self, stage: str, **kwargs) -> None:
         """Collects the entire training set and fits the AutoML model."""
         if not hasattr(self, "num_classes"):
-            num_classes = kwargs.get("num_classes")
-            if num_classes is not None:
-                self.num_classes = num_classes
-            elif hasattr(self, "trainer") and self.trainer is not None:
-                # Determine classes by looking at validation labels
-                val_dataloader = self.trainer.datamodule.val_dataloader()
-                y_list = []
-                for batch in val_dataloader:
-                    _, y = batch[:2]
-                    y_list.append(y.cpu().numpy())
-                y_val = np.concatenate(y_list, axis=0)
-                self.num_classes = int(np.max(y_val)) + 1
-            else:
+            explicit = kwargs.get("num_classes")
+            if explicit is None and not (hasattr(self, "trainer") and self.trainer is not None):
                 self.num_classes = 2  # Default binary fallback
+            else:
+                def _scan_val_labels() -> int:
+                    val_dataloader = self.trainer.datamodule.val_dataloader()
+                    y_list = [batch[1].cpu().numpy() for batch in val_dataloader]
+                    return int(np.max(np.concatenate(y_list, axis=0))) + 1
+
+                self.num_classes = _resolve_num_classes(
+                    getattr(self, "trainer", None), explicit, _scan_val_labels
+                )
                 
 
 
@@ -524,7 +559,9 @@ class BaselineHealthModule(LightningModule):
         y_train = np.concatenate(y_list, axis=0)
 
         if not hasattr(self, "num_classes"):
-            self.num_classes = int(np.max(y_train)) + 1
+            self.num_classes = _resolve_num_classes(
+                self._trainer, None, lambda: int(np.max(y_train)) + 1
+            )
 
         if self.strategy == "most_frequent":
             # Calculate the mode of the training labels
