@@ -1,0 +1,18 @@
+_target_: src.data.components.samplers.IntervalAwareSampler
+
+# Hours before the survey timestamp. Fine near the anchor (where the label's
+# "since last prompt" referent lies), coarse further back (personal baseline).
+# 6 bins vs 18 for a uniform 6h grid over the same 3 days.
+bin_edges_hours: [0, 3, 6, 12, 24, 48, 72]
+
+# Distinguishes "0 steps, sedentary" from "0 steps, no data". Missingness here is
+# block-structured by user, so this is a real signal rather than a nuisance flag.
+emit_mask: true
+
+# Bins have different widths but share a feature column, so raw sums are not
+# comparable across timesteps. Emit per-hour rates instead.
+normalize_by_duration: true
+
+# Bins anchor to the survey timestamp rather than midnight, so bin-centre hours
+# vary across samples and carry signal (unlike under OffsetSampler).
+include_time_features: true

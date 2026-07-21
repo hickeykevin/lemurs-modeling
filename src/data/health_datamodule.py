@@ -58,6 +58,8 @@ class HealthDataModule(LightningDataModule):
         use_prev_prediction: bool = False,
         use_demographics: bool = True,
         use_sleep: bool = False,
+        enrollment_lead_days: float = 7.0,
+        enrollment_trail_days: float = 1.0,
     ) -> None:
 
 
@@ -82,6 +84,11 @@ class HealthDataModule(LightningDataModule):
             collapse_strategy (str): Aggregation strategy to collapse multiple daily survey responses for non-yes-no questions.
             use_prev_prediction (bool): Whether to use the previous day's prediction as input to the model.
             use_demographics (bool): Whether to query, process, and pass user demographics as context.
+            enrollment_lead_days (float): Days of sensor data retained before each user's
+                first survey. Must exceed the sampler's lookback so early surveys still
+                see a full window.
+            enrollment_trail_days (float): Days of sensor data retained after each user's
+                last survey.
         """
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -125,7 +132,9 @@ class HealthDataModule(LightningDataModule):
                 os_filter=self.hparams.os_filter,
                 collapse_strategy=self.hparams.collapse_strategy,
                 use_demographics=self.hparams.use_demographics,
-                use_sleep=self.hparams.use_sleep
+                use_sleep=self.hparams.use_sleep,
+                enrollment_lead_days=self.hparams.enrollment_lead_days,
+                enrollment_trail_days=self.hparams.enrollment_trail_days,
             )
             modality_dfs, master_df, demographics_df = builder.build()
             

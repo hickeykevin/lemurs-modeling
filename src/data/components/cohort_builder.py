@@ -21,7 +21,9 @@ class CohortBuilder:
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
         collapse_strategy: str = "mean",
         use_demographics: bool = False,
-        use_sleep: bool = False
+        use_sleep: bool = False,
+        enrollment_lead_days: float = 7.0,
+        enrollment_trail_days: float = 1.0,
     ):
         """Initializes the CohortBuilder.
 
@@ -34,6 +36,11 @@ class CohortBuilder:
             collapse_strategy: Aggregation strategy to collapse multiple daily survey responses for non-yes-no questions.
             use_demographics: Whether to load and merge demographics.
             use_sleep: Whether to load and compute sleep features.
+            enrollment_lead_days: Days of sensor data to retain *before* a user's
+                first survey. Must exceed the sampler's lookback so that early
+                surveys still see a full window.
+            enrollment_trail_days: Days of sensor data to retain after a user's
+                last survey.
         """
         self.modalities = modalities
         self.modality_cols = modality_cols
@@ -43,6 +50,8 @@ class CohortBuilder:
         self.collapse_strategy = collapse_strategy
         self.use_demographics = use_demographics
         self.use_sleep = use_sleep
+        self.enrollment_lead_days = enrollment_lead_days
+        self.enrollment_trail_days = enrollment_trail_days
 
     def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]:
         """Orchestrates the entire cohort building pipeline.
@@ -63,7 +72,8 @@ class CohortBuilder:
 
         try:
             # Step 1 & 2: Extract data streams, apply cleanings/aggregations, and extract demographics
-            modality_dfs = self._extract_and_clean_modalities(db)
+            enrollment_windows = self._get_enrollment_windows(db)
+            modality_dfs = self._extract_and_clean_modalities(db, enrollment_windows)
             master_df = self._extract_and_aggregate_labels(db)
             if self.use_demographics:
                 demographics_df = self._extract_demographics(db)
@@ -113,11 +123,65 @@ class CohortBuilder:
         else:
             return pd.DataFrame(columns=['app_user_id', 'gender', 'age', 'lgbt'])
 
-    def _extract_and_clean_modalities(self, db: DatabaseService) -> Dict[str, pd.DataFrame]:
+    def _get_enrollment_windows(self, db: DatabaseService) -> pd.DataFrame:
+        """Derives each user's active study window from their survey activity.
+
+        Users enrolled on staggered dates spanning many months, so no single
+        global cutoff separates study data from noise. Health apps also backfill
+        historical data on first sync — some users carry records from years before
+        enrollment, and occasional records land after their last survey. Both are
+        outside the period the labels describe.
+
+        Returns:
+            pd.DataFrame: Columns ``app_user_id``, ``window_start``, ``window_end``.
+        """
+        sr = db.extract_from_database("survey_response")
+        if sr.empty or "timestamp" not in sr.columns:
+            return pd.DataFrame(columns=["app_user_id", "window_start", "window_end"])
+
+        sr = sr.copy()
+        sr["timestamp"] = pd.to_datetime(sr["timestamp"]).astype("datetime64[ns]")
+
+        # Only the daily surveys (0=morning, 1=afternoon) bound the observation
+        # period; the PHQ-9 (survey 2) is administered outside the daily cadence.
+        if "survey_id" in sr.columns:
+            daily = sr[sr["survey_id"].isin([0, 1])]
+            if not daily.empty:
+                sr = daily
+
+        windows = sr.groupby("app_user_id")["timestamp"].agg(["min", "max"]).reset_index()
+        windows["window_start"] = windows["min"] - pd.Timedelta(days=self.enrollment_lead_days)
+        windows["window_end"] = windows["max"] + pd.Timedelta(days=self.enrollment_trail_days)
+        return windows[["app_user_id", "window_start", "window_end"]]
+
+    def _apply_enrollment_window(
+        self, df: pd.DataFrame, enrollment_windows: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Restricts sensor records to each user's own study window.
+
+        Users with no survey activity have no window and are dropped entirely —
+        they carry no labels, so their sensor data cannot contribute.
+        """
+        if df.empty or enrollment_windows.empty or "app_user_id" not in df.columns:
+            return df
+
+        merged = df.merge(enrollment_windows, on="app_user_id", how="left")
+        in_window = (
+            merged["window_start"].notna()
+            & (merged["start_timestamp"] >= merged["window_start"])
+            & (merged["start_timestamp"] <= merged["window_end"])
+        )
+        return merged.loc[in_window.values].drop(columns=["window_start", "window_end"])
+
+    def _extract_and_clean_modalities(
+        self, db: DatabaseService, enrollment_windows: Optional[pd.DataFrame] = None
+    ) -> Dict[str, pd.DataFrame]:
         """Extracts, cleans, and applies outlier clipping to sensor modalities.
 
         Args:
             db: Connected DatabaseService instance.
+            enrollment_windows: Per-user study windows used to drop backfilled and
+                post-study sensor records. Falls back to a global cutoff if omitted.
 
         Returns:
             Dict[str, pd.DataFrame]: Map of cleaned modality dataframes.
@@ -142,9 +206,15 @@ class CohortBuilder:
             if 'app_user_id' in df.columns:
                 df = df[~df['app_user_id'].isin(drop_users)]
                 
-            # Time filter: drop all sensor data before 2025-09-01
-            df = df[df['start_timestamp'] >= pd.Timestamp('2025-09-01')]
-            
+            # 3. Time filter: restrict each user's records to their own study
+            # window. A global cutoff cannot do this correctly — enrollment is
+            # staggered across months, so the same date is mid-study for one user
+            # and years of backfill for another.
+            if enrollment_windows is not None and not enrollment_windows.empty:
+                df = self._apply_enrollment_window(df, enrollment_windows)
+            else:
+                df = df[df['start_timestamp'] >= pd.Timestamp('2025-09-01')]
+
             modality_dfs[mod] = df
 
         # 3. Outlier Clipping: Clip extreme values at the 99th percentile globally
