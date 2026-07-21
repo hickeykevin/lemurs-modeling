@@ -313,12 +313,19 @@ def test_datamodule_with_sleep_features(mock_db_class):
     mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
 
     dm = HealthDataModule(
+
+        exclude_user_ids=[],
         aggregator=MeanAggregator(question_ids=[2]),
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
         train_val_test_split=(0.5, 0.25, 0.25),
         use_demographics=True,
         use_sleep=True,
-        modalities=["step"]
+        modalities=["step"],
+        # This fixture supplies no step records at all; the sleep features under
+        # test come from the survey side, so sensor coverage is not required.
+        require_sensor_data=False,
+        # Isolate the sleep feature dimensions from per-response context features
+        use_survey_context=False,
     )
 
     dm.setup()

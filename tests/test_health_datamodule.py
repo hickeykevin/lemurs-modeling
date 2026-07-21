@@ -10,17 +10,21 @@ from src.data.components.samplers import OffsetSampler
 def dummy_data():
     """Creates dummy dataframes mimicking the database structure."""
     # 1. Health metrics (steps) - 4 users
+    # Users 1 and 2 answer surveys on 01-02..01-05, so with a previous-day
+    # sampling window they need step data on 01-01..01-04. Samples whose window
+    # holds no records are dropped by require_sensor_data, so gaps here would
+    # silently shrink the cohort rather than exercise the split logic.
     step_df = pd.DataFrame({
-        'app_user_id': [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 4, 4],
+        'app_user_id': [1] * 5 + [2] * 5 + [3, 3, 4, 4],
         'start_timestamp': pd.to_datetime([
             '2023-01-01 10:00:00', '2023-01-01 11:00:00',
-            '2023-01-02 10:00:00', '2023-01-02 11:00:00',
+            '2023-01-02 10:00:00', '2023-01-03 10:00:00', '2023-01-04 10:00:00',
             '2023-01-01 10:00:00', '2023-01-01 11:00:00',
-            '2023-01-02 10:00:00', '2023-01-02 11:00:00',
+            '2023-01-02 10:00:00', '2023-01-03 10:00:00', '2023-01-04 10:00:00',
             '2023-01-01 10:00:00', '2023-01-02 10:00:00',
             '2023-01-01 10:00:00', '2023-01-02 10:00:00'
         ]),
-        'steps': [100] * 12
+        'steps': [100] * 14
     })
     
     # 2. Survey Responses - Multiple per user to test longitudinal split
@@ -179,6 +183,7 @@ def test_datamodule_normalization(dummy_data):
         # If we use StandardScaler, it should shift them
         scaler = StandardScaler()
         dm = HealthDataModule(
+            exclude_user_ids=[],
             aggregator=MeanAggregator(question_ids=[2]),
             sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
             scaler=scaler,
@@ -283,6 +288,7 @@ def test_datamodule_user_split(mock_db_class, dummy_data):
     # Set up DM with user split (50/50 for simplicity in test)
     sampler = OffsetSampler(start_offset_hours=-24, end_offset_hours=0)
     dm = HealthDataModule(
+        exclude_user_ids=[],
         aggregator=MeanAggregator(question_ids=[2, 4], threshold=1.0),
         sampler=sampler,
 
@@ -311,6 +317,8 @@ def test_datamodule_longitudinal_split(mock_db_class, dummy_data):
     mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
     
     dm = HealthDataModule(
+    
+        exclude_user_ids=[],
         aggregator=MeanAggregator(threshold=None),
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
         train_val_test_split=(0.5, 0.25, 0.25),
@@ -342,6 +350,7 @@ def test_datamodule_multi_question_aggregation(mock_db_class, dummy_data):
     
     # Mean of [2, 2] = 2.0. Threshold 1.5 -> Label 1
     dm = HealthDataModule(
+        exclude_user_ids=[],
         aggregator=MeanAggregator(question_ids=[2, 4], threshold=1.5),
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
     )
@@ -430,6 +439,8 @@ def test_subject_scaler_normalization(mock_db_class):
     scaler = SubjectScaler(base_scaler=base_scaler)
     
     dm = HealthDataModule(
+    
+        exclude_user_ids=[],
         aggregator=MeanAggregator(question_ids=[2]),
         sampler=OffsetSampler(start_offset_hours=10, end_offset_hours=12, resample_freq="1h"),
         scaler=scaler,
@@ -503,6 +514,7 @@ def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     # Answers in dummy_data for q2 and q4 are all 1 or 2 (which shift to 0 or 1).
     aggregator = RegressionAggregator(likert_ids=[2, 4])
     dm = HealthDataModule(
+        exclude_user_ids=[],
         aggregator=aggregator,
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
         modalities=["step"]
@@ -998,9 +1010,12 @@ def test_datamodule_use_demographics_toggle(mock_db_class, dummy_data):
     
     # Instantiate with use_demographics=False
     dm = HealthDataModule(
+        exclude_user_ids=[],
         aggregator=MeanAggregator(question_ids=[2]),
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
-        use_demographics=False
+        use_demographics=False,
+        # Isolate the demographics toggle from per-response context features
+        use_survey_context=False,
     )
     
     dm.setup()

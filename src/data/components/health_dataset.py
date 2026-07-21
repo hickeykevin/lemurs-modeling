@@ -37,6 +37,7 @@ class HealthDataset(Dataset):
         demographics_map: Optional[Dict[Any, np.ndarray]] = None,
         default_demographics: Optional[np.ndarray] = None,
         use_sleep: bool = False,
+        use_survey_context: bool = False,
     ) -> None:
         """Initializes the HealthDataset.
 
@@ -50,6 +51,9 @@ class HealthDataset(Dataset):
             scaler (Optional[Any]): A pre-fitted scaler (e.g. ``StandardScaler``).
             user_to_idx (Optional[Dict[str, int]]): Mapping from app_user_id to user embedding index.
             is_regression (bool): Whether this dataset yields targets for a regression task.
+            use_survey_context (bool): Append per-response context (``is_morning``,
+                ``referent_hours_scaled``, ``referent_missing``) to the demographics
+                vector. Meaningful only when responses are not collapsed to daily.
         """
         self.data_links = linked_data.reset_index(drop=True)
         self.sampler = sampler
@@ -61,7 +65,17 @@ class HealthDataset(Dataset):
         self.demographics_map = demographics_map
         self.default_demographics = default_demographics
         self.use_sleep = use_sleep
-        
+        self.use_survey_context = use_survey_context
+
+        if self.use_survey_context:
+            # Which of the two daily surveys this is, and how long the period it
+            # asks about ran. Properties of the response, not of the person.
+            context_cols = ["is_morning", "referent_hours_scaled", "referent_missing"]
+            for col in context_cols:
+                if col not in self.data_links.columns:
+                    self.data_links[col] = 1.0 if col == "referent_missing" else 0.0
+            self.context_features = self.data_links[context_cols].values.astype(np.float32)
+
         if self.use_sleep:
             sleep_cols = ["sleep_hours_scaled", "sleep_class_0", "sleep_class_1", "sleep_class_2", "sleep_unknown"]
             # Ensure all columns exist, if not fill with default values
@@ -178,14 +192,16 @@ class HealthDataset(Dataset):
         else:
             ret = base_tuple
 
-        if self.demographics_map is not None or self.use_sleep:
+        if self.demographics_map is not None or self.use_sleep or self.use_survey_context:
+            parts = []
             if self.demographics_map is not None:
                 uid = self.data_links.iloc[idx]["app_user_id"]
-                demo = self.demographics_map.get(uid, self.default_demographics)
-                if self.use_sleep:
-                    demo = np.concatenate([demo, self.sleep_features[idx]]).astype(np.float32)
-            else:
-                demo = self.sleep_features[idx]
+                parts.append(self.demographics_map.get(uid, self.default_demographics))
+            if self.use_sleep:
+                parts.append(self.sleep_features[idx])
+            if self.use_survey_context:
+                parts.append(self.context_features[idx])
+            demo = np.concatenate(parts).astype(np.float32)
             ret = ret + (torch.tensor(demo, dtype=torch.float32),)
 
         return ret

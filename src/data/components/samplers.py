@@ -2,26 +2,37 @@ import pandas as pd
 import numpy as np
 from abc import ABC, abstractmethod
 from datetime import timedelta
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 class TimeSampler(ABC):
     """Base class for sampling health metrics relative to a survey timestamp."""
     
     @abstractmethod
     def __call__(
-        self, 
-        survey_timestamp: pd.Timestamp, 
-        app_user_id: int, 
+        self,
+        survey_timestamp: pd.Timestamp,
+        app_user_id: int,
         modality_dfs: Dict[str, pd.DataFrame],
         modality_cols: Dict[str, str],
         modalities: List[str]
     ) -> np.ndarray:
         """Slices and resamples data into a feature matrix.
-        
+
         Returns:
             np.ndarray: Matrix of shape [Time, Features]
         """
         pass
+
+    def window_bounds(
+        self, survey_timestamp: pd.Timestamp
+    ) -> Optional[Tuple[pd.Timestamp, pd.Timestamp]]:
+        """Returns the ``[start, end)`` span this sampler reads for a survey.
+
+        Used to determine whether a sample has any sensor coverage at all,
+        without running the full sampling path. Samplers that do not read
+        sensor data (e.g. ``LagSampler``) return ``None``.
+        """
+        return None
 
 class RollingSampler(TimeSampler):
     """New logic: Samples X hours exactly preceding the survey timestamp."""
@@ -30,7 +41,11 @@ class RollingSampler(TimeSampler):
         self.lookback_hours = lookback_hours
         self.resample_freq = resample_freq
         self.include_time_features = include_time_features
-        
+
+    def window_bounds(self, survey_timestamp):
+        end_time = pd.Timestamp(survey_timestamp).floor(self.resample_freq)
+        return end_time - timedelta(hours=self.lookback_hours), end_time
+
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
         end_time = survey_timestamp.floor(self.resample_freq)
         start_time = end_time - timedelta(hours=self.lookback_hours)
@@ -115,7 +130,14 @@ class OffsetSampler(TimeSampler):
         self.end_offset_hours = end_offset_hours
         self.resample_freq = resample_freq
         self.include_time_features = include_time_features
-        
+
+    def window_bounds(self, survey_timestamp):
+        day_start = pd.Timestamp(pd.Timestamp(survey_timestamp).date())
+        return (
+            day_start + timedelta(hours=self.start_offset_hours),
+            day_start + timedelta(hours=self.end_offset_hours),
+        )
+
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
         # Anchor to midnight of the survey day
         day_start = pd.Timestamp(survey_timestamp.date())
@@ -209,7 +231,12 @@ class BlockSampler(TimeSampler):
     def __init__(self, lookback_days: int = 1, include_time_features: bool = True, **kwargs):
         self.lookback_days = lookback_days
         self.include_time_features = include_time_features
-        
+
+    def window_bounds(self, survey_timestamp):
+        day_start = pd.Timestamp(pd.Timestamp(survey_timestamp).date())
+        return day_start - timedelta(days=self.lookback_days), day_start
+
+
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
         # Anchor processing to midnight of the day the survey was taken
         day_start = pd.Timestamp(survey_timestamp.date())
@@ -411,6 +438,13 @@ class IntervalAwareSampler(TimeSampler):
         ][::-1]
         self._durations_h = np.array(
             [start - end for start, end in self._offsets], dtype=np.float64
+        )
+
+    def window_bounds(self, survey_timestamp):
+        anchor = pd.Timestamp(survey_timestamp)
+        return (
+            anchor - timedelta(hours=self.bin_edges_hours[-1]),
+            anchor - timedelta(hours=self.bin_edges_hours[0]),
         )
 
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):

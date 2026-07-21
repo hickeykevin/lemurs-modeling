@@ -15,8 +15,23 @@ pin_memory: False
 random_state: ${seed}
 split_mode: user # random, user, longitudinal
 os_filter: both # both, ios, android
-collapse_strategy: max #mean, max, min, first, last, none — max preserves the worst (most elevated) state of the day for rare-positive risk detection
+# none = one sample per survey response. The morning and afternoon surveys ask
+# about different periods ("since your last prompt"), so collapsing them to a
+# daily label mislabels one half of a discordant day: 41% of days with any
+# positive have only one positive half. Options: mean, max, min, first, last, none
+collapse_strategy: none
+
+# Drop responses whose sampling window has no sensor records rather than feeding
+# the model all-zero sequences it cannot distinguish from genuine inactivity
+require_sensor_data: true
+
+# Carry which daily survey a response is, and how long its referent period ran
+use_survey_context: true
 use_prev_prediction: ${model.use_prev_prediction}
 use_demographics: true
 use_sleep: true
 
+
+# Test accounts and discontinued participants, dropped from every stream.
+# null uses CohortBuilder.DEFAULT_EXCLUDED_USER_IDS.
+exclude_user_ids: null

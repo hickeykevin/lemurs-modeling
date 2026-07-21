@@ -12,6 +12,11 @@ class CohortBuilder:
     aggregates target daily clinical labels, and filters by device operating system (OS).
     """
 
+    #: Test accounts and discontinued/anomalous participants excluded from every
+    #: stream. Overridable via ``exclude_user_ids`` so that fixtures and future
+    #: cohorts are not bound to these specific IDs.
+    DEFAULT_EXCLUDED_USER_IDS = [1, 2, 3, 10, 21, 22, 43, 44]
+
     def __init__(
         self,
         modalities: List[str],
@@ -24,6 +29,8 @@ class CohortBuilder:
         use_sleep: bool = False,
         enrollment_lead_days: float = 7.0,
         enrollment_trail_days: float = 1.0,
+        daily_survey_ids: Optional[List[int]] = None,
+        exclude_user_ids: Optional[List[int]] = None,
     ):
         """Initializes the CohortBuilder.
 
@@ -41,6 +48,10 @@ class CohortBuilder:
                 surveys still see a full window.
             enrollment_trail_days: Days of sensor data to retain after a user's
                 last survey.
+            daily_survey_ids: Survey IDs treated as the daily EMA cadence.
+                Defaults to ``[0, 1]`` (morning, afternoon).
+            exclude_user_ids: Users dropped from every stream. Defaults to
+                ``DEFAULT_EXCLUDED_USER_IDS``; pass ``[]`` to keep all users.
         """
         self.modalities = modalities
         self.modality_cols = modality_cols
@@ -52,6 +63,10 @@ class CohortBuilder:
         self.use_sleep = use_sleep
         self.enrollment_lead_days = enrollment_lead_days
         self.enrollment_trail_days = enrollment_trail_days
+        self.daily_survey_ids = [0, 1] if daily_survey_ids is None else list(daily_survey_ids)
+        self.exclude_user_ids = (
+            self.DEFAULT_EXCLUDED_USER_IDS if exclude_user_ids is None else list(exclude_user_ids)
+        )
 
     def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]:
         """Orchestrates the entire cohort building pipeline.
@@ -100,9 +115,8 @@ class CohortBuilder:
         df = db.extract_from_database("demographic")
         
         # Remove test and discontinued users
-        drop_users = [1, 2, 3, 10, 21, 22, 43, 44]
         if 'app_user_id' in df.columns:
-            df = df[~df['app_user_id'].isin(drop_users)]
+            df = df[~df['app_user_id'].isin(self.exclude_user_ids)]
             
         # Pivot EAV structure
         if not df.empty and 'keyword' in df.columns and 'value' in df.columns:
@@ -145,7 +159,7 @@ class CohortBuilder:
         # Only the daily surveys (0=morning, 1=afternoon) bound the observation
         # period; the PHQ-9 (survey 2) is administered outside the daily cadence.
         if "survey_id" in sr.columns:
-            daily = sr[sr["survey_id"].isin([0, 1])]
+            daily = sr[sr["survey_id"].isin(self.daily_survey_ids)]
             if not daily.empty:
                 sr = daily
 
@@ -200,11 +214,8 @@ class CohortBuilder:
                 df["end_timestamp"] = pd.to_datetime(df["end_timestamp"]).astype("datetime64[ns]")
             
             # 2. Global Filters: Remove test and discontinued users
-            # Test users: [1, 2, 3, 10, 43]
-            # Discontinued/Anomalous users: [21, 22]
-            drop_users = [1, 2, 3, 10, 21, 22, 43, 44]
             if 'app_user_id' in df.columns:
-                df = df[~df['app_user_id'].isin(drop_users)]
+                df = df[~df['app_user_id'].isin(self.exclude_user_ids)]
                 
             # 3. Time filter: restrict each user's records to their own study
             # window. A global cutoff cannot do this correctly — enrollment is
@@ -315,6 +326,18 @@ class CohortBuilder:
         survey_response_df = db.extract_from_database("survey_response")
         survey_response_df['timestamp'] = pd.to_datetime(survey_response_df["timestamp"]).astype("datetime64[ns]")
 
+        # Keep only the daily EMA surveys (0=morning, 1=afternoon). The PHQ-9
+        # (survey 2) runs on a separate cadence and asks about the preceding two
+        # weeks, so it neither shares the daily "since last prompt" referent nor
+        # belongs in the inter-survey gap calculation below.
+        if 'survey_id' in survey_response_df.columns:
+            survey_response_df = survey_response_df[
+                survey_response_df['survey_id'].isin(self.daily_survey_ids)
+            ]
+            answer_df = answer_df[
+                answer_df['survey_response_id'].isin(survey_response_df['id'])
+            ]
+
         # Filter out duplicate responses submitted in quick succession
         survey_response_df, answer_df = self._filter_duplicate_responses(survey_response_df, answer_df)
 
@@ -340,13 +363,19 @@ class CohortBuilder:
         aggregated_answers = self.aggregator(target_answers)
 
         # Merge with survey responses to retrieve app_user_id and target timestamp
+        merge_cols = ['id', 'app_user_id', 'timestamp']
+        if 'survey_id' in survey_response_df.columns:
+            merge_cols.append('survey_id')
         master_df = pd.merge(
             aggregated_answers,
-            survey_response_df[['id', 'app_user_id', 'timestamp']],
+            survey_response_df[merge_cols],
             left_on='survey_response_id',
             right_on='id',
             suffixes=('', '_survey')
         ).rename(columns={'timestamp': 'record_timestamp'})
+
+        # Attach the referent window each response describes
+        master_df = self._add_referent_window(master_df)
 
         # If use_sleep is enabled, compute and merge sleep features
         if getattr(self, 'use_sleep', False):
@@ -354,6 +383,40 @@ class CohortBuilder:
             master_df = pd.merge(master_df, sleep_df, on='survey_response_id', how='left')
 
         return master_df
+
+    def _add_referent_window(self, master_df: pd.DataFrame) -> pd.DataFrame:
+        """Annotates each response with the period its answers actually describe.
+
+        Both daily surveys ask about the time "since your last prompt", so a
+        response's referent is the gap back to that user's previous response —
+        typically overnight for a morning survey and a short daytime span for an
+        afternoon one. The gap varies widely in practice (missed surveys stretch
+        it to a full day or more), and the sensor window that should predict a
+        response is only as informative as its overlap with that referent, so the
+        gap is carried as a feature rather than assumed constant.
+
+        Adds:
+            prev_record_timestamp: The user's previous response time, or NaT.
+            referent_hours: Hours since that response. NaN for a user's first.
+            is_morning: 1.0 for the morning survey, 0.0 for the afternoon.
+        """
+        if master_df.empty:
+            for col in ['prev_record_timestamp', 'referent_hours', 'is_morning']:
+                master_df[col] = pd.Series(dtype='float64')
+            return master_df
+
+        df = master_df.sort_values(['app_user_id', 'record_timestamp']).copy()
+        df['prev_record_timestamp'] = df.groupby('app_user_id')['record_timestamp'].shift(1)
+        df['referent_hours'] = (
+            df['record_timestamp'] - df['prev_record_timestamp']
+        ).dt.total_seconds() / 3600.0
+
+        if 'survey_id' in df.columns:
+            df['is_morning'] = (df['survey_id'] == 0).astype(float)
+        else:
+            df['is_morning'] = 0.0
+
+        return df.reset_index(drop=True)
 
     def _collapse_daily_responses(
         self, survey_response_df: pd.DataFrame, answer_df: pd.DataFrame, db: DatabaseService
