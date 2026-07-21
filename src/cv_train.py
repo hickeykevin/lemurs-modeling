@@ -130,6 +130,7 @@ def cv_train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         f"Repeated grouped CV: {num_repeats} repeat(s) x {num_folds} fold(s) = {total_runs} runs"
     )
 
+    shared_cohort = None
     run = 0
     for repeat in range(num_repeats):
         for fold in range(num_folds):
@@ -143,7 +144,13 @@ def cv_train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
                 cfg.data.current_fold = fold
                 cfg.data.current_repeat = repeat
 
-            datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
+            datamodule: LightningDataModule = hydra.utils.instantiate(
+                cfg.data, prebuilt_cohort=shared_cohort
+            )
+            if shared_cohort is None and hasattr(datamodule, "get_prebuilt_cohort"):
+                if not hasattr(datamodule, "master_df"):
+                    datamodule.setup("fit")
+                shared_cohort = datamodule.get_prebuilt_cohort()
             model: LightningModule = hydra.utils.instantiate(cfg.model)
             callbacks: List[Callback] = instantiate_callbacks(cfg.get("callbacks"))
             trainer: Trainer = hydra.utils.instantiate(

@@ -63,6 +63,7 @@ class HealthDataModule(LightningDataModule):
         require_sensor_data: bool = True,
         use_survey_context: bool = True,
         exclude_user_ids: Optional[List[int]] = None,
+        prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
     ) -> None:
 
 
@@ -106,6 +107,7 @@ class HealthDataModule(LightningDataModule):
         """
         super().__init__()
         self.save_hyperparameters(logger=False)
+        self.prebuilt_cohort = prebuilt_cohort
 
         # Build the modality_cols mapping for the requested modalities
         self.hparams.modality_cols = {
@@ -125,11 +127,15 @@ class HealthDataModule(LightningDataModule):
             47, 48, 49, 50, 51, 52
         ]
 
+    def get_prebuilt_cohort(self) -> Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]]:
+        """Returns shallow copies of the extracted, coverage-filtered cohort dataframes."""
+        return getattr(self, "raw_cohort", None)
+
     def setup(self, stage: Optional[str] = None) -> None:
         """Load and prepare data for all stages.
 
         This method performs the following steps:
-            1. Orchestrates cohort extraction via CohortBuilder.
+            1. Orchestrates cohort extraction via CohortBuilder (or uses prebuilt_cohort).
             2. Splits the cohort into training, validation, and test datasets.
             3. Fits the feature scaler on the training data.
             4. Instantiates the final HealthDataset objects.
@@ -138,25 +144,37 @@ class HealthDataModule(LightningDataModule):
             stage: The stage for which to setup data (fit, validate, test, predict).
         """
         if not self.data_train and not self.data_val and not self.data_test:
-            builder = CohortBuilder(
-                modalities=self.hparams.modalities,
-                modality_cols=self.hparams.modality_cols,
-                preprocessors=self.hparams.preprocessors,
-                aggregator=self.hparams.aggregator,
-                os_filter=self.hparams.os_filter,
-                collapse_strategy=self.hparams.collapse_strategy,
-                use_demographics=self.hparams.use_demographics,
-                use_sleep=self.hparams.use_sleep,
-                enrollment_lead_days=self.hparams.enrollment_lead_days,
-                enrollment_trail_days=self.hparams.enrollment_trail_days,
-                exclude_user_ids=self.hparams.exclude_user_ids,
-            )
-            modality_dfs, master_df, demographics_df = builder.build()
+            if self.prebuilt_cohort is not None:
+                m_dfs_raw, master_raw, demo_raw = self.prebuilt_cohort
+                modality_dfs = {k: df.copy() for k, df in m_dfs_raw.items()}
+                master_df = master_raw.copy()
+                demographics_df = demo_raw.copy()
+            else:
+                builder = CohortBuilder(
+                    modalities=self.hparams.modalities,
+                    modality_cols=self.hparams.modality_cols,
+                    preprocessors=self.hparams.preprocessors,
+                    aggregator=self.hparams.aggregator,
+                    os_filter=self.hparams.os_filter,
+                    collapse_strategy=self.hparams.collapse_strategy,
+                    use_demographics=self.hparams.use_demographics,
+                    use_sleep=self.hparams.use_sleep,
+                    enrollment_lead_days=self.hparams.enrollment_lead_days,
+                    enrollment_trail_days=self.hparams.enrollment_trail_days,
+                    exclude_user_ids=self.hparams.exclude_user_ids,
+                )
+                modality_dfs, master_df, demographics_df = builder.build()
 
-            # Drop samples with no sensor coverage before splitting, so that every
-            # split reflects the cohort the model is actually trained and scored on
-            if self.hparams.require_sensor_data:
-                master_df = self._filter_to_covered_samples(master_df, modality_dfs)
+                # Drop samples with no sensor coverage before splitting, so that every
+                # split reflects the cohort the model is actually trained and scored on
+                if self.hparams.require_sensor_data:
+                    master_df = self._filter_to_covered_samples(master_df, modality_dfs)
+
+                self.raw_cohort = (
+                    {k: df.copy() for k, df in modality_dfs.items()},
+                    master_df.copy(),
+                    demographics_df.copy(),
+                )
 
             self.master_df = master_df
 
@@ -265,7 +283,21 @@ class HealthDataModule(LightningDataModule):
         if probe is None:
             return master_df
 
-        # Per-user interval arrays, so each row costs one vectorised overlap test
+        # Precompute window bounds for all survey responses
+        timestamps = master_df["record_timestamp"].values
+        bounds_list = [sampler.window_bounds(ts) for ts in timestamps]
+
+        w_starts = np.array(
+            [np.datetime64(pd.Timestamp(b[0])) if b is not None else np.datetime64("NaT") for b in bounds_list]
+        )
+        w_ends = np.array(
+            [np.datetime64(pd.Timestamp(b[1])) if b is not None else np.datetime64("NaT") for b in bounds_list]
+        )
+
+        valid_mask = ~np.isnat(w_starts)
+        keep = ~valid_mask  # Retain responses where sampler window_bounds returned None
+
+        # Group modality interval arrays by user for 2D vectorized broadcasting
         user_intervals: Dict[Any, List[Tuple[np.ndarray, np.ndarray]]] = {}
         for df in modality_dfs.values():
             if df.empty or "app_user_id" not in df.columns:
@@ -277,18 +309,25 @@ class HealthDataModule(LightningDataModule):
                 e = ends_col.loc[idx].values.astype("datetime64[ns]")
                 user_intervals.setdefault(uid, []).append((s, e))
 
-        keep = np.zeros(len(master_df), dtype=bool)
-        for i, (_, row) in enumerate(master_df.iterrows()):
-            bounds = sampler.window_bounds(row["record_timestamp"])
-            if bounds is None:
-                keep[i] = True
+        user_ids = master_df["app_user_id"].values
+        for uid, intervals in user_intervals.items():
+            user_indices = np.where((user_ids == uid) & valid_mask)[0]
+            if len(user_indices) == 0:
                 continue
-            w_start = np.datetime64(pd.Timestamp(bounds[0]))
-            w_end = np.datetime64(pd.Timestamp(bounds[1]))
-            for starts, ends in user_intervals.get(row["app_user_id"], []):
-                if np.any((ends > w_start) & (starts < w_end)):
-                    keep[i] = True
-                    break
+
+            u_starts = w_starts[user_indices, None]  # Shape: [N_responses, 1]
+            u_ends = w_ends[user_indices, None]      # Shape: [N_responses, 1]
+
+            u_keep = np.zeros(len(user_indices), dtype=bool)
+            for s, e in intervals:
+                # Broadcasting: (sensor_ends > window_starts) & (sensor_starts < window_ends)
+                # s, e shape: [1, M_sensor_records]
+                s_mat = s[None, :]
+                e_mat = e[None, :]
+                overlap = (e_mat > u_starts) & (s_mat < u_ends)
+                u_keep |= overlap.any(axis=1)
+
+            keep[user_indices] = u_keep
 
         n_dropped = int((~keep).sum())
         if n_dropped:

@@ -60,17 +60,9 @@ class CVHealthDataModule(HealthDataModule):
         require_sensor_data: bool = True,
         use_survey_context: bool = True,
         exclude_user_ids: Optional[List[int]] = None,
+        prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
     ) -> None:
-        """Initializes the CVHealthDataModule.
-
-        Args:
-            num_folds: Folds per repeat.
-            current_fold: Index of the fold to expose as the test split.
-            num_repeats: How many times the whole K-fold procedure is repeated
-                with a different shuffle.
-            current_repeat: Index of the repeat to expose.
-            random_state: Base seed. Each repeat derives its own shuffle from it.
-        """
+        """Initializes the CVHealthDataModule."""
         super().__init__(
             aggregator=aggregator,
             sampler=sampler,
@@ -93,6 +85,7 @@ class CVHealthDataModule(HealthDataModule):
             require_sensor_data=require_sensor_data,
             use_survey_context=use_survey_context,
             exclude_user_ids=exclude_user_ids,
+            prebuilt_cohort=prebuilt_cohort,
         )
         # Re-save hyperparameters to capture the CV-specific fields
         self.save_hyperparameters(logger=False)

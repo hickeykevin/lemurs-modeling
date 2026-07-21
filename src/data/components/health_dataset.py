@@ -115,23 +115,25 @@ class HealthDataset(Dataset):
         targets: List[float] = []
         user_indices: List[int] = []
 
-        for idx in range(len(self.data_links)):
-            row = self.data_links.iloc[idx]
+        timestamps = list(self.data_links["record_timestamp"])
+        user_ids = self.data_links["app_user_id"].values
+        answers = self.data_links["answer"].values
+
+        for ts, uid, ans in zip(timestamps, user_ids, answers):
             seq = self.sampler(
-                survey_timestamp=row["record_timestamp"],
-                app_user_id=row["app_user_id"],
+                survey_timestamp=ts,
+                app_user_id=uid,
                 modality_dfs=modality_dfs,
                 modality_cols=modality_cols,
                 modalities=self.modalities,
             )
             sequences.append(seq)
             if self.is_regression:
-                targets.append(float(row["answer"]))
+                targets.append(float(ans))
             else:
-                targets.append(int(row["answer"]))
+                targets.append(int(ans))
 
             # Map user ID to integer index
-            uid = row["app_user_id"]
             if self.user_to_idx is not None and uid in self.user_to_idx:
                 user_indices.append(self.user_to_idx[uid])
             else:
