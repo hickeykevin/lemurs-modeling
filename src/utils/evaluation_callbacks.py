@@ -412,7 +412,19 @@ class ClassificationMetricsCallback(Callback):
         
         self.val_metrics: Optional[MetricCollection] = None
         self.test_metrics: Optional[MetricCollection] = None
-        
+
+        # Raw targets for the epoch, kept alongside the torchmetrics state so a
+        # single-class epoch can be detected before logging. torchmetrics'
+        # multiclass AUROC (and the rest of this collection, under "macro"
+        # averaging) does not raise or return NaN when a class is entirely
+        # absent -- it emits a UserWarning and substitutes a degenerate but
+        # finite value (0.0, 0.25, ...) for that class. Left unguarded, that
+        # finite value is indistinguishable from a real result: it is logged
+        # as val/auroc, watched by early_stopping and model_checkpoint, and
+        # later averaged into a repeated-CV summary as if it meant something.
+        self.val_targets: List[torch.Tensor] = []
+        self.test_targets: List[torch.Tensor] = []
+
         # Track the best metrics over validation epochs
         self.val_f1_best = MaxMetric()
         self.val_auroc_best = MaxMetric()
@@ -458,6 +470,17 @@ class ClassificationMetricsCallback(Callback):
             })
         return metrics.to(device)
 
+    @staticmethod
+    def _is_degenerate(targets: List[torch.Tensor]) -> bool:
+        """Whether the collected targets span fewer than two classes.
+
+        An empty list is not treated as degenerate: it means no batches were
+        collected (e.g. an empty dataloader), a different and separately
+        visible failure mode, not the single-class case this guards against.
+        """
+        if not targets:
+            return False
+        return len(torch.unique(torch.cat(targets))) < 2
 
     def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Resets metrics at the beginning of the validation epoch.
@@ -488,9 +511,10 @@ class ClassificationMetricsCallback(Callback):
             return
         if self.val_metrics is None:
             self.val_metrics = self._init_metrics(pl_module.num_classes, pl_module.device)
-            
+
         if outputs is not None and "logits" in outputs and "targets" in outputs:
             self.val_metrics.update(outputs["logits"], outputs["targets"])
+            self.val_targets.append(outputs["targets"].detach().cpu())
 
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Computes and logs validation metrics at the end of the epoch.
@@ -503,10 +527,29 @@ class ClassificationMetricsCallback(Callback):
             return
         if self.val_metrics is not None:
             output = self.val_metrics.compute()
+            degenerate = self._is_degenerate(self.val_targets)
+            if degenerate:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "This validation split contains only one class; logging val/* "
+                    "classification metrics as NaN instead of the degenerate-but-"
+                    "finite values torchmetrics would otherwise report, so a "
+                    "repeated-CV aggregate excludes this fold rather than averaging "
+                    "in a meaningless number."
+                )
+
             # Log all metrics in the collection
             for name, value in output.items():
-                pl_module.log(f"val/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
-                
+                logged_value = torch.full_like(value, float("nan")) if degenerate else value
+                pl_module.log(f"val/{name}", logged_value, on_step=False, on_epoch=True, prog_bar=True)
+
+                if degenerate:
+                    # Don't feed a NaN into the running "_best" MaxMetric trackers:
+                    # they carry it forward permanently (max(x, NaN) == NaN for
+                    # every future epoch of this fold), corrupting val/*_best for
+                    # the rest of the fold rather than just this one epoch.
+                    continue
+
                 # Track the best metrics over validation epochs
                 if name == "f1":
                     if self.val_f1_best.device != pl_module.device:
@@ -543,8 +586,9 @@ class ClassificationMetricsCallback(Callback):
                         self.val_balanced_accuracy_best = self.val_balanced_accuracy_best.to(pl_module.device)
                     self.val_balanced_accuracy_best(value)
                     pl_module.log("val/balanced_accuracy_best", self.val_balanced_accuracy_best.compute(), sync_dist=True, prog_bar=True)
-                    
+
             self.val_metrics.reset()
+            self.val_targets = []
 
     def on_test_batch_end(
         self, 
@@ -567,9 +611,10 @@ class ClassificationMetricsCallback(Callback):
         """
         if self.test_metrics is None:
             self.test_metrics = self._init_metrics(pl_module.num_classes, pl_module.device, bootstrap=True)
-            
+
         if outputs is not None and "logits" in outputs and "targets" in outputs:
             self.test_metrics.update(outputs["logits"], outputs["targets"])
+            self.test_targets.append(outputs["targets"].detach().cpu())
 
     def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Computes and logs test metrics at the end of the epoch.
@@ -580,14 +625,27 @@ class ClassificationMetricsCallback(Callback):
         """
         if self.test_metrics is not None:
             output = self.test_metrics.compute()
+            degenerate = self._is_degenerate(self.test_targets)
+            if degenerate:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "This test split contains only one class; logging test/* "
+                    "classification metrics as NaN instead of the degenerate-but-"
+                    "finite values torchmetrics would otherwise report, so a "
+                    "repeated-CV aggregate excludes this fold rather than averaging "
+                    "in a meaningless number."
+                )
+
             # Log all metrics in the collection
             for name, value in output.items():
-                pl_module.log(f"test/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
+                logged_value = torch.full_like(value, float("nan")) if degenerate else value
+                pl_module.log(f"test/{name}", logged_value, on_step=False, on_epoch=True, prog_bar=True)
                 if name.endswith("_std"):
                     var_name = name[:-4] + "_var"
-                    var_value = value ** 2
+                    var_value = logged_value ** 2  # NaN ** 2 == NaN; still correct when degenerate
                     pl_module.log(f"test/{var_name}", var_value, on_step=False, on_epoch=True, prog_bar=True)
             self.test_metrics.reset()
+            self.test_targets = []
 
 
 class RegressionMetricsCallback(Callback):
