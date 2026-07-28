@@ -197,3 +197,14 @@ def test_within_person_differs_from_pooled():
 
     assert within == 0.0
     assert pooled > within
+
+
+def test_high_risk_user_ids_strata():
+    """Explicit high_risk_user_ids stratify users based on set membership."""
+    df = pd.DataFrame({
+        "app_user_id": [10006, 10006, 20001, 20001],
+        "answer": [0, 0, 1, 1],
+    })
+    strata = CVHealthDataModule._user_level_strata(df, high_risk_user_ids=[10006])
+    assert list(strata) == [1, 1, 0, 0]
+

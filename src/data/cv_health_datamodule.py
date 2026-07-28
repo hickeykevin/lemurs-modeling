@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
@@ -7,6 +8,22 @@ from sklearn.model_selection import StratifiedGroupKFold
 from src.data.components.label_aggregators import LabelAggregator
 from src.data.components.samplers import TimeSampler
 from src.data.health_datamodule import HealthDataModule
+
+
+def _get_default_high_risk_user_ids() -> List[int]:
+    """Loads default high-risk participant IDs from HIGH_RISK_USER_IDS in .env."""
+    env_val = os.getenv("HIGH_RISK_USER_IDS", "")
+    if not env_val:
+        return []
+    ids = []
+    for item in env_val.split(","):
+        item_str = item.strip()
+        if item_str:
+            try:
+                ids.append(int(item_str))
+            except ValueError:
+                ids.append(item_str)
+    return ids
 
 
 class CVHealthDataModule(HealthDataModule):
@@ -60,6 +77,7 @@ class CVHealthDataModule(HealthDataModule):
         require_sensor_data: bool = True,
         use_survey_context: bool = True,
         exclude_user_ids: Optional[List[int]] = None,
+        high_risk_user_ids: Optional[List[int]] = None,
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
     ) -> None:
         """Initializes the CVHealthDataModule."""
@@ -87,6 +105,9 @@ class CVHealthDataModule(HealthDataModule):
             exclude_user_ids=exclude_user_ids,
             prebuilt_cohort=prebuilt_cohort,
         )
+        if high_risk_user_ids is None:
+            high_risk_user_ids = _get_default_high_risk_user_ids()
+        self.hparams.high_risk_user_ids = high_risk_user_ids
         # Re-save hyperparameters to capture the CV-specific fields
         self.save_hyperparameters(logger=False)
 
@@ -102,15 +123,38 @@ class CVHealthDataModule(HealthDataModule):
         base = 0 if base is None else int(base)
         return base + 9973 * int(self.hparams.current_repeat)
 
-    @staticmethod
-    def _user_level_strata(df: pd.DataFrame) -> pd.Series:
-        """Labels each row by whether its user is ever positive.
+    @classmethod
+    def _user_level_strata(
+        cls, df: pd.DataFrame, high_risk_user_ids: Optional[List[int]] = None
+    ) -> pd.Series:
+        """Labels each row by whether its user is in the high-risk set.
 
-        Stratifying on the raw per-response label would ask the splitter to
-        balance something it cannot control, since a user's responses move
-        together. Whether a participant is ever positive is the property that
-        actually needs to be spread across folds.
+        Stratifying on whether a participant is in the high-risk set balances
+        the risk label distribution across folds while keeping users intact.
+        Falls back to dynamic 'ever positive' survey response logic if
+        high_risk_user_ids is explicitly set to an empty list or if no users
+        in df match the high-risk ID set (e.g. synthetic test cohorts).
         """
+        if high_risk_user_ids is None:
+            high_risk_user_ids = _get_default_high_risk_user_ids()
+
+        if high_risk_user_ids:
+            high_risk_set = set()
+            for u in high_risk_user_ids:
+                high_risk_set.add(u)
+                high_risk_set.add(str(u))
+                try:
+                    val = int(u)
+                    high_risk_set.add(val)
+                    if val > 10000:
+                        high_risk_set.add(val % 10000)
+                except (ValueError, TypeError):
+                    pass
+
+            strata = df["app_user_id"].apply(lambda u: u in high_risk_set or str(u) in high_risk_set).astype(int)
+            if strata.sum() > 0:
+                return strata
+
         ever_positive = df.groupby("app_user_id")["answer"].transform(
             lambda s: float(pd.to_numeric(s, errors="coerce").fillna(0).max() > 0)
         )
@@ -121,7 +165,8 @@ class CVHealthDataModule(HealthDataModule):
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Returns (train_users, held_out_users) for one stratified grouped fold."""
         groups = df["app_user_id"].values
-        strata = self._user_level_strata(df).values
+        high_risk = getattr(self.hparams, "high_risk_user_ids", None)
+        strata = self._user_level_strata(df, high_risk_user_ids=high_risk).values
 
         n_users = len(np.unique(groups))
         n_splits = max(2, min(n_splits, n_users))
