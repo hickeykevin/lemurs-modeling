@@ -4,6 +4,7 @@ import torch
 from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric, MinMetric, MeanSquaredError, MeanAbsoluteError
 import numpy as np
+import pickle
 from functools import partial
 
 
@@ -381,6 +382,13 @@ class FLAMLHealthModule(LightningModule):
             automl_config (Dict[str, Any]): Configuration dictionary for FLAML's fit method.
             task (str): Type of AutoML task (e.g., 'classification', 'regression').
         """
+        try:
+            from omegaconf import OmegaConf, DictConfig
+            if isinstance(automl_config, DictConfig):
+                automl_config = OmegaConf.to_container(automl_config, resolve=True)
+        except ImportError:
+            pass
+
         super().__init__()
         self.save_hyperparameters()
         
@@ -515,6 +523,21 @@ class FLAMLHealthModule(LightningModule):
         Tabular AutoML models are not trained via backpropagation.
         """
         return torch.optim.SGD([torch.tensor(0.0, requires_grad=True)], lr=0.0)
+
+    def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """Saves the fitted FLAML AutoML object and metadata into the checkpoint."""
+        if hasattr(self.automl, "best_estimator") and self.automl.best_estimator is not None:
+            checkpoint["flaml_automl"] = pickle.dumps(self.automl)
+        if hasattr(self, "num_classes"):
+            checkpoint["num_classes"] = self.num_classes
+
+    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """Restores the fitted FLAML AutoML object and metadata from the checkpoint."""
+        if "flaml_automl" in checkpoint:
+            self.automl = pickle.loads(checkpoint["flaml_automl"])
+        if "num_classes" in checkpoint:
+            self.num_classes = checkpoint["num_classes"]
+
 
 
 class BaselineHealthModule(LightningModule):

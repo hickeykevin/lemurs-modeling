@@ -291,7 +291,7 @@ def _aggregate_cv_metrics(
             f"95% CI [{ci_low:.4f}, {ci_high:.4f}]  n={n}{skipped}"
         )
 
-    # Print a Rich terminal table summary
+    # Print a Rich terminal table summary and log to file
     try:
         from rich.table import Table
         from rich.console import Console
@@ -309,8 +309,11 @@ def _aggregate_cv_metrics(
         for row in table_rows:
             rich_table.add_row(*row)
 
-        console = Console()
+        console = Console(record=True)
         console.print(rich_table)
+
+        table_text = console.export_text()
+        log.info(f"\n{table_text}")
     except Exception:
         pass
 
