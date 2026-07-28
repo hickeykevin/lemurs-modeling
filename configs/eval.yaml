@@ -11,7 +11,7 @@ defaults:
   - hydra: default
   - callbacks: [classification_metrics]
 
-task_name: "eval"
+task_name: "test"
 
 tags: ["dev"]
 
