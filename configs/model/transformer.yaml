@@ -1,0 +1,10 @@
+defaults:
+  - net: transformer
+  - optimizer: adam
+  - scheduler: null
+
+_target_: src.models.health_module.HealthLitModule
+compile: false
+auto_class_weights: true # compute inverse-frequency CE weights from the training split (per-fold under CV)
+class_weights: null
+use_sequence_data: true

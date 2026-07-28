@@ -1,0 +1,10 @@
+_target_: src.models.components.simple_transformer.SimpleTransformer
+input_size: ${len:${data.modalities}}
+hidden_size: 64
+nhead: 4
+num_layers: 2
+dim_feedforward: 128
+dropout: 0.1
+use_sequence_data: ${model.use_sequence_data}
+output_size: ${oc.select:data.aggregator.num_classes,2}
+pooling: mean # last, mean, or max pooling over the Transformer output sequence
