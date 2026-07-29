@@ -61,6 +61,7 @@ class HealthDataModule(LightningDataModule):
         enrollment_trail_days: float = 1.0,
         require_sensor_data: bool = True,
         use_survey_context: bool = True,
+        include_time_features: Optional[bool] = None,
         exclude_user_ids: Optional[List[int]] = None,
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
     ) -> None:
@@ -100,10 +101,15 @@ class HealthDataModule(LightningDataModule):
             use_survey_context (bool): Append per-response context (which daily survey
                 this is, and how long its "since last prompt" referent ran) to the
                 demographics vector.
+            include_time_features (Optional[bool]): Optional override for inclusion of
+                cyclical time features in the sequence sampler.
             exclude_user_ids (Optional[List[int]]): Users dropped from every stream.
                 Defaults to CohortBuilder's test/discontinued accounts.
         """
         super().__init__()
+        if include_time_features is not None and hasattr(sampler, "include_time_features"):
+            sampler.include_time_features = include_time_features
+
         self.save_hyperparameters(logger=False)
         self.prebuilt_cohort = prebuilt_cohort
 

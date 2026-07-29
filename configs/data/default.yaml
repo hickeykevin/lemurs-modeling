@@ -31,6 +31,7 @@ require_sensor_data: false
 
 # Carry which daily survey a response is, and how long its referent period ran
 use_survey_context: false
+include_time_features: true
 use_demographics: true
 use_sleep: false
 

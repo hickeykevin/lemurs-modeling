@@ -32,6 +32,7 @@ os_filter: both # both, ios, android
 collapse_strategy: none
 require_sensor_data: true
 use_survey_context: true
+include_time_features: true
 
 use_demographics: true
 use_sleep: false
