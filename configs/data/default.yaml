@@ -17,7 +17,7 @@ random_state: ${seed}
 # longitudinal = temporal split within each user; diagnostic only.
 # Row-level random splitting was removed: it leaks users across the split and
 # measures user identification rather than risk. See CohortSplitter.
-split_mode: user # user, longitudinal
+split_mode: longitudinal # user, longitudinal
 os_filter: both # both, ios, android
 # none = one sample per survey response. The morning and afternoon surveys ask
 # about different periods ("since your last prompt"), so collapsing them to a
@@ -27,12 +27,12 @@ collapse_strategy: none
 
 # Drop responses whose sampling window has no sensor records rather than feeding
 # the model all-zero sequences it cannot distinguish from genuine inactivity
-require_sensor_data: true
+require_sensor_data: false
 
 # Carry which daily survey a response is, and how long its referent period ran
-use_survey_context: true
+use_survey_context: false
 use_demographics: true
-use_sleep: true
+use_sleep: false
 
 
 # Test accounts and discontinued participants, dropped from every stream.
