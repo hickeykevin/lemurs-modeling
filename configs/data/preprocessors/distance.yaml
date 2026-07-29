@@ -1,0 +1,2 @@
+distance:
+  _target_: src.data.components.preprocessing.DistancePreprocessor
