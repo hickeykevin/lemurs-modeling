@@ -3,8 +3,8 @@ input_size: ${len:${data.modalities}}
 hidden_size: 64
 num_layers: 2
 dropout: 0.1
-use_user_embedding: ${model.use_subject_embedding}
+use_user_embedding: false
 use_sequence_data: ${model.use_sequence_data}
-use_prev_prediction: ${model.use_prev_prediction}
+use_prev_prediction: false
 output_size: ${oc.select:data.aggregator.num_classes,2}
 pooling: mean # last, mean, or max pooling over the LSTM output sequence
