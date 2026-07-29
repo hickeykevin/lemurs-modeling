@@ -45,5 +45,6 @@ test: False
 # simply provide checkpoint path to resume training
 ckpt_path: null
 
-# seed for random number generators in pytorch, numpy and python.random
-seed: null
+# seed for random number generators in pytorch, numpy and python.random.
+# Also the base for each CV repeat's shuffle, so repeats are reproducible.
+seed: 7

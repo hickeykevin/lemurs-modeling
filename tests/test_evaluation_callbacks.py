@@ -381,3 +381,140 @@ def test_confusion_matrix_callback_test_stage_logs_to_file(tmp_path):
 
 
 
+
+
+def test_classification_metrics_callback_degenerate_val_epoch_logs_nan():
+    """A validation epoch spanning only one class must log NaN, not a
+    degenerate-but-finite value.
+
+    Confirmed empirically: torchmetrics' multiclass AUROC (and the rest of this
+    collection, under "macro" averaging) does not raise or produce NaN when a
+    class is entirely absent from an epoch -- it substitutes 0.0 or another
+    finite placeholder with a warning. Left unguarded, that value is
+    indistinguishable from a real result once logged: early_stopping and
+    model_checkpoint act on it, and a repeated-CV aggregate averages it in as
+    if it meant something, silently biasing the reported mean/std.
+    """
+    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+
+    callback = ClassificationMetricsCallback()
+
+    trainer = MagicMock(spec=Trainer)
+    trainer.sanity_checking = False
+
+    pl_module = MagicMock(spec=LightningModule)
+    pl_module.num_classes = 2
+    pl_module.device = torch.device("cpu")
+
+    callback.on_validation_epoch_start(trainer, pl_module)
+
+    # Every target in this epoch is class 0 -- no class 1 ever appears.
+    outputs = {
+        "logits": torch.tensor([[2.0, 0.1], [1.5, 0.2], [1.8, 0.3]]),
+        "targets": torch.tensor([0, 0, 0]),
+    }
+    callback.on_validation_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    logged = {call[0][0]: call[0][1] for call in pl_module.log.call_args_list}
+
+    assert "val/auroc" in logged
+    assert torch.isnan(logged["val/auroc"])
+    assert torch.isnan(logged["val/f1"])
+    assert torch.isnan(logged["val/precision"])
+    assert torch.isnan(logged["val/recall"])
+    assert torch.isnan(logged["val/specificity"])
+    assert torch.isnan(logged["val/balanced_accuracy"])
+
+    # A NaN must never reach the running "_best" trackers -- MaxMetric carries
+    # a NaN input forward permanently (max(x, NaN) == NaN), which would corrupt
+    # val/auroc_best for every subsequent epoch of this fold, not just this one.
+    assert "val/auroc_best" not in logged
+    assert torch.isinf(callback.val_auroc_best.compute()) and callback.val_auroc_best.compute() < 0
+
+
+def test_classification_metrics_callback_normal_val_epoch_unaffected():
+    """A two-class epoch must be logged and tracked exactly as before."""
+    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+
+    callback = ClassificationMetricsCallback()
+
+    trainer = MagicMock(spec=Trainer)
+    trainer.sanity_checking = False
+
+    pl_module = MagicMock(spec=LightningModule)
+    pl_module.num_classes = 2
+    pl_module.device = torch.device("cpu")
+
+    callback.on_validation_epoch_start(trainer, pl_module)
+    outputs = {
+        "logits": torch.tensor([[2.0, 0.1], [0.2, 2.5]]),
+        "targets": torch.tensor([0, 1]),
+    }
+    callback.on_validation_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    logged = {call[0][0]: call[0][1] for call in pl_module.log.call_args_list}
+    assert not torch.isnan(logged["val/auroc"])
+    assert "val/auroc_best" in logged
+    assert not torch.isnan(callback.val_auroc_best.compute())
+
+
+def test_classification_metrics_callback_degenerate_test_epoch_logs_nan():
+    """The test-stage bootstrap path must apply the same single-class guard."""
+    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+
+    callback = ClassificationMetricsCallback(num_bootstraps=5, sampling_strategy="multinomial")
+
+    trainer = MagicMock(spec=Trainer)
+
+    pl_module = MagicMock(spec=LightningModule)
+    pl_module.num_classes = 2
+    pl_module.device = torch.device("cpu")
+
+    outputs = {
+        "logits": torch.tensor([[2.0, 0.1], [1.5, 0.2], [1.8, 0.3]]),
+        "targets": torch.tensor([0, 0, 0]),
+    }
+    callback.on_test_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
+    callback.on_test_epoch_end(trainer, pl_module)
+
+    logged = {call[0][0]: call[0][1] for call in pl_module.log.call_args_list}
+
+    assert torch.isnan(logged["test/auroc_mean"])
+    assert torch.isnan(logged["test/auroc_std"])
+    assert torch.isnan(logged["test/auroc_var"])
+
+
+def test_classification_metrics_callback_degenerate_epoch_warns():
+    """The degenerate case must be visible in logs, not just silently NaN."""
+    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+
+    callback = ClassificationMetricsCallback()
+
+    trainer = MagicMock(spec=Trainer)
+    trainer.sanity_checking = False
+
+    pl_module = MagicMock(spec=LightningModule)
+    pl_module.num_classes = 2
+    pl_module.device = torch.device("cpu")
+
+    callback.on_validation_epoch_start(trainer, pl_module)
+    outputs = {
+        "logits": torch.tensor([[2.0, 0.1], [1.5, 0.2]]),
+        "targets": torch.tensor([0, 0]),
+    }
+    callback.on_validation_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
+
+    import logging
+    logger = logging.getLogger("src.utils.evaluation_callbacks")
+    records = []
+    handler = logging.Handler()
+    handler.emit = lambda record: records.append(record)
+    logger.addHandler(handler)
+    try:
+        callback.on_validation_epoch_end(trainer, pl_module)
+    finally:
+        logger.removeHandler(handler)
+
+    assert any("only one class" in r.getMessage() for r in records)

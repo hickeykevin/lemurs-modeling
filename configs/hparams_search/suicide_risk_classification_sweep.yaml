@@ -33,8 +33,6 @@ parameters:
     values: [true, false]
   data.use_demographics:
     values: [true, false]
-  model.use_prev_prediction:
-    values: [true, false]
   ++model.class_weights:
     values: [[1.0, 1.0], [1.0, 2.0], [1.0, 5.0], [1.0, 10.0]]
 

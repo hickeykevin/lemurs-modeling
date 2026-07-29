@@ -2,26 +2,37 @@ import pandas as pd
 import numpy as np
 from abc import ABC, abstractmethod
 from datetime import timedelta
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 class TimeSampler(ABC):
     """Base class for sampling health metrics relative to a survey timestamp."""
     
     @abstractmethod
     def __call__(
-        self, 
-        survey_timestamp: pd.Timestamp, 
-        app_user_id: int, 
+        self,
+        survey_timestamp: pd.Timestamp,
+        app_user_id: int,
         modality_dfs: Dict[str, pd.DataFrame],
         modality_cols: Dict[str, str],
         modalities: List[str]
     ) -> np.ndarray:
         """Slices and resamples data into a feature matrix.
-        
+
         Returns:
             np.ndarray: Matrix of shape [Time, Features]
         """
         pass
+
+    def window_bounds(
+        self, survey_timestamp: pd.Timestamp
+    ) -> Optional[Tuple[pd.Timestamp, pd.Timestamp]]:
+        """Returns the ``[start, end)`` span this sampler reads for a survey.
+
+        Used to determine whether a sample has any sensor coverage at all,
+        without running the full sampling path. Samplers that do not read
+        sensor data (e.g. ``LagSampler``) return ``None``.
+        """
+        return None
 
 class RollingSampler(TimeSampler):
     """New logic: Samples X hours exactly preceding the survey timestamp."""
@@ -30,7 +41,11 @@ class RollingSampler(TimeSampler):
         self.lookback_hours = lookback_hours
         self.resample_freq = resample_freq
         self.include_time_features = include_time_features
-        
+
+    def window_bounds(self, survey_timestamp):
+        end_time = pd.Timestamp(survey_timestamp).floor(self.resample_freq)
+        return end_time - timedelta(hours=self.lookback_hours), end_time
+
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
         end_time = survey_timestamp.floor(self.resample_freq)
         start_time = end_time - timedelta(hours=self.lookback_hours)
@@ -115,7 +130,14 @@ class OffsetSampler(TimeSampler):
         self.end_offset_hours = end_offset_hours
         self.resample_freq = resample_freq
         self.include_time_features = include_time_features
-        
+
+    def window_bounds(self, survey_timestamp):
+        day_start = pd.Timestamp(pd.Timestamp(survey_timestamp).date())
+        return (
+            day_start + timedelta(hours=self.start_offset_hours),
+            day_start + timedelta(hours=self.end_offset_hours),
+        )
+
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
         # Anchor to midnight of the survey day
         day_start = pd.Timestamp(survey_timestamp.date())
@@ -209,7 +231,12 @@ class BlockSampler(TimeSampler):
     def __init__(self, lookback_days: int = 1, include_time_features: bool = True, **kwargs):
         self.lookback_days = lookback_days
         self.include_time_features = include_time_features
-        
+
+    def window_bounds(self, survey_timestamp):
+        day_start = pd.Timestamp(pd.Timestamp(survey_timestamp).date())
+        return day_start - timedelta(days=self.lookback_days), day_start
+
+
     def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
         # Anchor processing to midnight of the day the survey was taken
         day_start = pd.Timestamp(survey_timestamp.date())
@@ -318,6 +345,203 @@ class BlockSampler(TimeSampler):
             all_modality_features.append(cos_weekday)
             
         # Return sequence vector
+        return np.stack(all_modality_features, axis=-1)
+
+class IntervalAwareSampler(TimeSampler):
+    """Samples health metrics into survey-anchored, non-uniform, interval-aware bins.
+
+    This sampler differs from ``RollingSampler``/``OffsetSampler`` in three ways,
+    each addressing a specific property of the underlying HealthKit/Health Connect data.
+
+    1. **Interval-aware allocation.** Health records are intervals, not points.
+       iPhone step records in this dataset run ~273 minutes on average, so a single
+       record routinely straddles several bins. Assigning a record's whole value to
+       the bin containing its ``start_timestamp`` (what the floor-and-groupby
+       samplers do) manufactures activity spikes at record-start times and
+       artificial troughs after them — temporal structure that is an artifact of
+       when the OS chose to close a record, not of behaviour. Here each record's
+       value is split across bins in proportion to its temporal overlap with them.
+
+       A record of 1,200 steps spanning 08:00-14:00, against bins [06:00-12:00) and
+       [12:00-18:00), contributes 800 and 400 respectively rather than 1,200 and 0.
+
+       Allocation is proportional to the fraction of the *record's own* duration
+       falling in each bin, so any portion of a record extending outside the
+       lookback window is dropped rather than redistributed inward.
+
+    2. **Non-uniform bins.** ``bin_edges_hours`` are hours *before* the survey
+       anchor. The default ``[0, 3, 6, 12, 24, 48, 72]`` yields six bins that are
+       fine near the survey — where the label's "since last prompt" referent lies —
+       and coarse further back, where the data serves as personal baseline context.
+       This puts resolution where the label is while keeping input dimensionality
+       low (6 steps vs. 18 for a uniform 6-hour grid over 3 days).
+
+    3. **Mask channels.** Missingness in this dataset is block-structured by user:
+       people who sync health data have it densely, people who do not have none for
+       days at a stretch. Zero-filling an unobserved bin makes it indistinguishable
+       from a genuinely sedentary one, which are opposite signals. When
+       ``emit_mask`` is set, each modality gains a companion channel that is 1.0
+       where at least one record overlapped the bin and 0.0 where none did.
+
+    Because the bins have different widths, values are emitted as **rates**
+    (value per hour) by default. Every bin shares a feature column in the returned
+    ``[Time, Features]`` matrix, so a downstream scaler standardises a 3-hour bin
+    and a 24-hour bin together; without rate normalisation that comparison is
+    meaningless. Set ``normalize_by_duration=False`` to emit raw sums instead.
+
+    Channel order is ``[mod_0_value, mod_0_mask, mod_1_value, mod_1_mask, ...]``
+    followed by optional cyclic time features. Bins are returned chronologically
+    (oldest first), so the final timestep is the interval ending at the survey.
+
+    Args:
+        bin_edges_hours: Ascending bin boundaries in hours before the survey
+            timestamp. ``[0, 3, 6]`` means bins ``[t-3h, t)`` and ``[t-6h, t-3h)``.
+        emit_mask: Whether to append a per-modality observed/missing channel.
+        normalize_by_duration: Emit per-hour rates rather than raw bin sums.
+        include_time_features: Append cyclic hour-of-day and weekday channels.
+            Unlike ``OffsetSampler``, bins here are anchored to the survey
+            timestamp rather than midnight, so bin-centre hours genuinely vary
+            across samples and carry signal.
+
+    Example:
+        >>> sampler = IntervalAwareSampler(bin_edges_hours=[0, 3, 6, 12, 24, 48, 72])
+        >>> features = sampler(survey_ts, user_id, dfs, cols, ['step', 'calorie'])
+        >>> features.shape
+        (6, 8)
+    """
+
+    def __init__(
+        self,
+        bin_edges_hours: List[float] = [0, 3, 6, 12, 24, 48, 72],
+        emit_mask: bool = True,
+        normalize_by_duration: bool = True,
+        include_time_features: bool = True,
+        **kwargs,
+    ):
+        edges = list(bin_edges_hours)
+        if len(edges) < 2:
+            raise ValueError(f"bin_edges_hours needs at least 2 edges; got {edges!r}")
+        if any(b <= a for a, b in zip(edges, edges[1:])):
+            raise ValueError(f"bin_edges_hours must be strictly ascending; got {edges!r}")
+        if edges[0] < 0:
+            raise ValueError(f"bin_edges_hours must be non-negative; got {edges!r}")
+
+        self.bin_edges_hours = edges
+        self.emit_mask = emit_mask
+        self.normalize_by_duration = normalize_by_duration
+        self.include_time_features = include_time_features
+
+        # Bin i spans [anchor - edges[i+1], anchor - edges[i]), built oldest-first
+        # so index 0 is the furthest back and the last index ends at the survey.
+        self._offsets = [
+            (edges[i + 1], edges[i]) for i in range(len(edges) - 1)
+        ][::-1]
+        self._durations_h = np.array(
+            [start - end for start, end in self._offsets], dtype=np.float64
+        )
+
+    def window_bounds(self, survey_timestamp):
+        anchor = pd.Timestamp(survey_timestamp)
+        return (
+            anchor - timedelta(hours=self.bin_edges_hours[-1]),
+            anchor - timedelta(hours=self.bin_edges_hours[0]),
+        )
+
+    def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
+        anchor = pd.Timestamp(survey_timestamp)
+        bin_starts = [anchor - timedelta(hours=s) for s, _ in self._offsets]
+        bin_ends = [anchor - timedelta(hours=e) for _, e in self._offsets]
+
+        n_bins = len(self._offsets)
+        window_start = bin_starts[0]
+        window_end = bin_ends[-1]
+
+        bin_starts_ns = np.array([b.value for b in bin_starts], dtype=np.int64)
+        bin_ends_ns = np.array([b.value for b in bin_ends], dtype=np.int64)
+
+        all_modality_features = []
+        for mod in modalities:
+            df = modality_dfs[mod]
+            val_col = modality_cols[mod]
+
+            values = np.zeros(n_bins, dtype=np.float32)
+            observed = np.zeros(n_bins, dtype=np.float32)
+
+            # Any record overlapping the window: ends after it starts and starts
+            # before it ends. Point records (no end_timestamp) fall back to start.
+            has_end = "end_timestamp" in df.columns
+            end_series = df["end_timestamp"] if has_end else df["start_timestamp"]
+            mask = (
+                (df["app_user_id"] == app_user_id)
+                & (end_series > window_start)
+                & (df["start_timestamp"] < window_end)
+            )
+            user_data = df[mask]
+
+            if not user_data.empty:
+                rec_starts = user_data["start_timestamp"].values.astype("datetime64[ns]").astype(np.int64)
+                if has_end:
+                    rec_ends = user_data["end_timestamp"].values.astype("datetime64[ns]").astype(np.int64)
+                else:
+                    rec_ends = rec_starts
+                rec_values = user_data[val_col].values.astype(np.float64)
+
+                # Guard against corrupt rows where the interval runs backwards.
+                valid = rec_ends >= rec_starts
+                rec_starts, rec_ends, rec_values = rec_starts[valid], rec_ends[valid], rec_values[valid]
+
+                if rec_starts.size:
+                    # Overlap of every (record, bin) pair, in nanoseconds.
+                    overlap_s = np.maximum(rec_starts[:, None], bin_starts_ns[None, :])
+                    overlap_e = np.minimum(rec_ends[:, None], bin_ends_ns[None, :])
+                    overlap = np.maximum(0, overlap_e - overlap_s).astype(np.float64)  # [R, B]
+
+                    rec_durations = (rec_ends - rec_starts).astype(np.float64)  # [R]
+
+                    # Instantaneous records carry no duration to split, so they are
+                    # assigned wholly to the bin containing their timestamp.
+                    is_point = rec_durations <= 0
+                    proportions = np.zeros_like(overlap)
+
+                    if (~is_point).any():
+                        proportions[~is_point] = (
+                            overlap[~is_point] / rec_durations[~is_point, None]
+                        )
+                    if is_point.any():
+                        pt_starts = rec_starts[is_point]
+                        in_bin = (
+                            (pt_starts[:, None] >= bin_starts_ns[None, :])
+                            & (pt_starts[:, None] < bin_ends_ns[None, :])
+                        )
+                        proportions[is_point] = in_bin.astype(np.float64)
+
+                    values = (rec_values[:, None] * proportions).sum(axis=0).astype(np.float32)
+
+                    # A bin counts as observed if any record covered part of it,
+                    # regardless of whether the value it contributed was zero.
+                    covered = (overlap > 0)
+                    covered[is_point] = proportions[is_point] > 0
+                    observed = covered.any(axis=0).astype(np.float32)
+
+            if self.normalize_by_duration:
+                values = (values / self._durations_h).astype(np.float32)
+
+            all_modality_features.append(values)
+            if self.emit_mask:
+                all_modality_features.append(observed)
+
+        if self.include_time_features:
+            centers = [
+                s + (e - s) / 2 for s, e in zip(bin_starts, bin_ends)
+            ]
+            hours = np.array([c.hour + c.minute / 60.0 for c in centers], dtype=np.float32)
+            weekdays = np.array([c.weekday() for c in centers], dtype=np.float32)
+
+            all_modality_features.append(np.sin(2 * np.pi * hours / 24.0).astype(np.float32))
+            all_modality_features.append(np.cos(2 * np.pi * hours / 24.0).astype(np.float32))
+            all_modality_features.append(np.sin(2 * np.pi * weekdays / 7.0).astype(np.float32))
+            all_modality_features.append(np.cos(2 * np.pi * weekdays / 7.0).astype(np.float32))
+
         return np.stack(all_modality_features, axis=-1)
 
 class LagSampler(TimeSampler):

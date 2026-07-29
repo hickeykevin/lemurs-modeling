@@ -10,17 +10,21 @@ from src.data.components.samplers import OffsetSampler
 def dummy_data():
     """Creates dummy dataframes mimicking the database structure."""
     # 1. Health metrics (steps) - 4 users
+    # Users 1 and 2 answer surveys on 01-02..01-05, so with a previous-day
+    # sampling window they need step data on 01-01..01-04. Samples whose window
+    # holds no records are dropped by require_sensor_data, so gaps here would
+    # silently shrink the cohort rather than exercise the split logic.
     step_df = pd.DataFrame({
-        'app_user_id': [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 4, 4],
+        'app_user_id': [1] * 5 + [2] * 5 + [3, 3, 4, 4],
         'start_timestamp': pd.to_datetime([
             '2023-01-01 10:00:00', '2023-01-01 11:00:00',
-            '2023-01-02 10:00:00', '2023-01-02 11:00:00',
+            '2023-01-02 10:00:00', '2023-01-03 10:00:00', '2023-01-04 10:00:00',
             '2023-01-01 10:00:00', '2023-01-01 11:00:00',
-            '2023-01-02 10:00:00', '2023-01-02 11:00:00',
+            '2023-01-02 10:00:00', '2023-01-03 10:00:00', '2023-01-04 10:00:00',
             '2023-01-01 10:00:00', '2023-01-02 10:00:00',
             '2023-01-01 10:00:00', '2023-01-02 10:00:00'
         ]),
-        'steps': [100] * 12
+        'steps': [100] * 14
     })
     
     # 2. Survey Responses - Multiple per user to test longitudinal split
@@ -179,6 +183,7 @@ def test_datamodule_normalization(dummy_data):
         # If we use StandardScaler, it should shift them
         scaler = StandardScaler()
         dm = HealthDataModule(
+            exclude_user_ids=[],
             aggregator=MeanAggregator(question_ids=[2]),
             sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
             scaler=scaler,
@@ -283,6 +288,7 @@ def test_datamodule_user_split(mock_db_class, dummy_data):
     # Set up DM with user split (50/50 for simplicity in test)
     sampler = OffsetSampler(start_offset_hours=-24, end_offset_hours=0)
     dm = HealthDataModule(
+        exclude_user_ids=[],
         aggregator=MeanAggregator(question_ids=[2, 4], threshold=1.0),
         sampler=sampler,
 
@@ -311,6 +317,8 @@ def test_datamodule_longitudinal_split(mock_db_class, dummy_data):
     mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
     
     dm = HealthDataModule(
+    
+        exclude_user_ids=[],
         aggregator=MeanAggregator(threshold=None),
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
         train_val_test_split=(0.5, 0.25, 0.25),
@@ -342,6 +350,7 @@ def test_datamodule_multi_question_aggregation(mock_db_class, dummy_data):
     
     # Mean of [2, 2] = 2.0. Threshold 1.5 -> Label 1
     dm = HealthDataModule(
+        exclude_user_ids=[],
         aggregator=MeanAggregator(question_ids=[2, 4], threshold=1.5),
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
     )
@@ -366,37 +375,27 @@ def test_subject_scaler_normalization(mock_db_class):
     from src.data.components.scalers import SubjectScaler
     from src.data.components.samplers import OffsetSampler
 
-    # Define dummy data for two users with different scales of steps
-    # User 5 steps: always 10 and 20
-    # User 6 steps: always 100 and 200
-    step_df = pd.DataFrame({
-        'app_user_id': [5, 5, 5, 5, 6, 6, 6, 6],
-        'start_timestamp': pd.to_datetime([
-            '2026-01-01 10:00:00', '2026-01-01 11:00:00',
-            '2026-01-02 10:00:00', '2026-01-02 11:00:00',
-            '2026-01-01 10:00:00', '2026-01-01 11:00:00',
-            '2026-01-02 10:00:00', '2026-01-02 11:00:00',
-        ]),
-        'steps': [10, 20, 10, 20, 100, 200, 100, 200]
-    })
-    
-    # 2. Survey Responses - 2 per user
-    survey_df = pd.DataFrame({
-        'id': [101, 102, 103, 104],
-        'app_user_id': [5, 5, 6, 6],
-        'timestamp': pd.to_datetime([
-            '2026-01-01 12:00:00', '2026-01-02 12:00:00',
-            '2026-01-01 12:00:00', '2026-01-02 12:00:00'
-        ])
-    })
-    
-    # 3. Answers
-    answer_df = pd.DataFrame([
-        {'survey_response_id': 101, 'question_id': 2, 'answer': 1},
-        {'survey_response_id': 102, 'question_id': 2, 'answer': 1},
-        {'survey_response_id': 103, 'question_id': 2, 'answer': 1},
-        {'survey_response_id': 104, 'question_id': 2, 'answer': 1}
-    ])
+    # Four users on deliberately different step scales, so per-subject z-scoring
+    # has something to normalise away. Four rather than two because splitting is
+    # now user-level, and three splits cannot be filled from two participants.
+    user_scales = {5: (10, 20), 6: (100, 200), 7: (30, 60), 8: (300, 600)}
+
+    step_rows, survey_rows, answer_rows = [], [], []
+    sid = 101
+    for uid, (low, high) in user_scales.items():
+        for day in ('2026-01-01', '2026-01-02'):
+            step_rows.append({'app_user_id': uid,
+                              'start_timestamp': pd.Timestamp(f'{day} 10:00:00'), 'steps': low})
+            step_rows.append({'app_user_id': uid,
+                              'start_timestamp': pd.Timestamp(f'{day} 11:00:00'), 'steps': high})
+            survey_rows.append({'id': sid, 'app_user_id': uid,
+                                'timestamp': pd.Timestamp(f'{day} 12:00:00')})
+            answer_rows.append({'survey_response_id': sid, 'question_id': 2, 'answer': 1})
+            sid += 1
+
+    step_df = pd.DataFrame(step_rows)
+    survey_df = pd.DataFrame(survey_rows)
+    answer_df = pd.DataFrame(answer_rows)
     
     demo_list = []
     # users 1, 2, 3, 4
@@ -430,11 +429,13 @@ def test_subject_scaler_normalization(mock_db_class):
     scaler = SubjectScaler(base_scaler=base_scaler)
     
     dm = HealthDataModule(
+    
+        exclude_user_ids=[],
         aggregator=MeanAggregator(question_ids=[2]),
         sampler=OffsetSampler(start_offset_hours=10, end_offset_hours=12, resample_freq="1h"),
         scaler=scaler,
         train_val_test_split=(0.5, 0.25, 0.25),
-        split_mode="random"
+        split_mode="user",
     )
 
     dm.setup()
@@ -503,6 +504,7 @@ def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     # Answers in dummy_data for q2 and q4 are all 1 or 2 (which shift to 0 or 1).
     aggregator = RegressionAggregator(likert_ids=[2, 4])
     dm = HealthDataModule(
+        exclude_user_ids=[],
         aggregator=aggregator,
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
         modalities=["step"]
@@ -998,9 +1000,12 @@ def test_datamodule_use_demographics_toggle(mock_db_class, dummy_data):
     
     # Instantiate with use_demographics=False
     dm = HealthDataModule(
+        exclude_user_ids=[],
         aggregator=MeanAggregator(question_ids=[2]),
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
-        use_demographics=False
+        use_demographics=False,
+        # Isolate the demographics toggle from per-response context features
+        use_survey_context=False,
     )
     
     dm.setup()
