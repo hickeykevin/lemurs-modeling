@@ -343,3 +343,130 @@ def test_datamodule_with_sleep_features(mock_db_class):
     assert len(context_vector) == dm.demographics_dim
 
 
+def test_distance_preprocessor():
+    from src.data.components.preprocessing import DistancePreprocessor
+
+    df = pd.DataFrame({
+        "app_user_id": [1, 1, 1, 2, 2],
+        "start_timestamp": [
+            "2026-01-01 10:00:00",  # study period (keep)
+            "2026-01-01 10:00:00",  # identical start/end (drop)
+            "2025-08-01 10:00:00",  # before study start (drop)
+            "2026-01-01 10:00:00",  # valid record (keep)
+            "2026-01-01 10:00:00"   # duplicate of previous record (drop)
+        ],
+        "end_timestamp": [
+            "2026-01-01 10:05:00",
+            "2026-01-01 10:00:00",  # identical start/end
+            "2025-08-01 10:05:00",
+            "2026-01-01 10:05:00",
+            "2026-01-01 10:05:00"
+        ],
+        "distance": [500.0, 100.0, 200.0, 1200.0, 1200.0],
+        "app_source": ["iPhone", "iPhone", "iPhone", "health.connect.android", "health.connect.android"]
+    })
+
+    preprocessor = DistancePreprocessor()
+    processed_df = preprocessor(df)
+
+    # Expected remaining rows:
+    # 1. Row 0 (user 1, keep, distance = 500.0)
+    # 2. Row 3 (user 2 android, keep, distance = 1200.0)
+    assert len(processed_df) == 2
+    processed_df = processed_df.reset_index(drop=True)
+    assert processed_df.loc[0, "app_user_id"] == 1
+    assert processed_df.loc[0, "distance"] == 500.0
+    assert processed_df.loc[1, "app_user_id"] == 2
+    assert processed_df.loc[1, "distance"] == 1200.0
+
+
+@patch('src.data.components.cohort_builder.DatabaseService')
+def test_datamodule_with_distance_modality(mock_db_class):
+    """Tests HealthDataModule setup with distance modality and DistancePreprocessor."""
+    from src.data.health_datamodule import HealthDataModule
+    from src.data.components.label_aggregators import MeanAggregator
+    from src.data.components.samplers import OffsetSampler
+    from src.data.components.preprocessing import DistancePreprocessor
+
+    step_df = pd.DataFrame({
+        'app_user_id': [10, 11, 12, 13],
+        'start_timestamp': pd.to_datetime([
+            '2025-10-01 02:00:00', '2025-10-01 02:00:00',
+            '2025-10-01 02:00:00', '2025-10-01 02:00:00'
+        ]),
+        'end_timestamp': pd.to_datetime([
+            '2025-10-01 03:00:00', '2025-10-01 03:00:00',
+            '2025-10-01 03:00:00', '2025-10-01 03:00:00'
+        ]),
+        'steps': [100, 150, 200, 250],
+        'app_source': ['iPhone'] * 4
+    })
+
+    distance_df = pd.DataFrame({
+        'app_user_id': [10, 11, 12, 13],
+        'start_timestamp': pd.to_datetime([
+            '2025-10-01 02:00:00', '2025-10-01 02:00:00',
+            '2025-10-01 02:00:00', '2025-10-01 02:00:00'
+        ]),
+        'end_timestamp': pd.to_datetime([
+            '2025-10-01 03:00:00', '2025-10-01 03:00:00',
+            '2025-10-01 03:00:00', '2025-10-01 03:00:00'
+        ]),
+        'distance': [500.0, 750.0, 1000.0, 1250.0],
+        'app_source': ['iPhone'] * 4
+    })
+
+    survey_df = pd.DataFrame({
+        'id': [101, 102, 103, 104],
+        'app_user_id': [10, 11, 12, 13],
+        'timestamp': pd.to_datetime([
+            '2025-10-01 08:00:00', '2025-10-01 08:00:00',
+            '2025-10-01 08:00:00', '2025-10-01 08:00:00'
+        ])
+    })
+
+    answer_df = pd.DataFrame([
+        {'survey_response_id': 101, 'question_id': 2, 'answer': "1"},
+        {'survey_response_id': 102, 'question_id': 2, 'answer': "1"},
+        {'survey_response_id': 103, 'question_id': 2, 'answer': "1"},
+        {'survey_response_id': 104, 'question_id': 2, 'answer': "1"},
+    ])
+
+    demo_df = pd.DataFrame([
+        {'app_user_id': 10, 'keyword': 'age', 'value': '25'},
+        {'app_user_id': 11, 'keyword': 'age', 'value': '30'},
+        {'app_user_id': 12, 'keyword': 'age', 'value': '35'},
+        {'app_user_id': 13, 'keyword': 'age', 'value': '40'},
+    ])
+
+    dummy_data = {
+        "step": step_df,
+        "distance": distance_df,
+        "survey_response": survey_df,
+        "answer": answer_df,
+        "demographic": demo_df
+    }
+
+    mock_db = mock_db_class.return_value
+    mock_db.connect.return_value = True
+    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table].copy()
+
+    dm = HealthDataModule(
+        aggregator=MeanAggregator(question_ids=[2]),
+        sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0, include_time_features=False),
+        train_val_test_split=(0.5, 0.25, 0.25),
+        modalities=["step", "distance"],
+        preprocessors={"distance": DistancePreprocessor()}
+    )
+
+    dm.setup()
+
+    assert dm.data_train is not None
+    assert len(dm.data_train) > 0
+    sample = dm.data_train[0]
+    # Check sequence shape: [24 hours, 2 modalities]
+    assert sample[0].shape == (24, 2)
+
+
+
+
