@@ -69,7 +69,8 @@ def _dm(**kw):
 
     dm = CVHealthDataModule.__new__(CVHealthDataModule)
     defaults = dict(num_folds=5, current_fold=0, num_repeats=20, current_repeat=0,
-                    random_state=7, train_val_test_split=(0.7, 0.15, 0.15))
+                    random_state=7, train_val_test_split=(0.7, 0.15, 0.15),
+                    high_risk_user_ids=[])
     defaults.update(kw)
     # hparams is a read-only property; Lightning reads it from _hparams.
     dm._hparams = AttributeDict(defaults)

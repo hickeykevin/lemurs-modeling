@@ -31,7 +31,6 @@ require_sensor_data: true
 
 # Carry which daily survey a response is, and how long its referent period ran
 use_survey_context: true
-use_prev_prediction: ${model.use_prev_prediction}
 use_demographics: true
 use_sleep: true
 

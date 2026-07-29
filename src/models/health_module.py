@@ -75,9 +75,6 @@ class HealthLitModule(LightningModule):
         compile: bool = False,
         class_weights: Optional[List[float]] = None,
         auto_class_weights: bool = False,
-        user_id_dropout: float = 0.0,
-        use_prev_prediction: bool = False,
-        use_subject_embedding: bool = False,
         use_sequence_data: bool = True,
     ) -> None:
         """Initializes the HealthLitModule.
@@ -88,9 +85,6 @@ class HealthLitModule(LightningModule):
             scheduler (torch.optim.lr_scheduler): The learning rate scheduler to use for training.
             compile (bool): Whether to compile the model for faster execution.
             class_weights (Optional[List[float]]): Optional weights for each class in the loss function.
-            user_id_dropout (float): Probability of dropping out user index (replacing with 0) during training.
-            use_prev_prediction (bool): Whether to use previous prediction as input to the model.
-            use_subject_embedding (bool): Whether to include subject embeddings.
             use_sequence_data (bool): Whether to include sequence data.
         """
         super().__init__()
@@ -113,38 +107,20 @@ class HealthLitModule(LightningModule):
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
 
-    def forward(self, x: torch.Tensor, user_idx: Optional[torch.Tensor] = None, prev_pred: Optional[torch.Tensor] = None, demographics: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, demographics: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Perform a forward pass through the network.
 
         Args:
             x: Input tensor of shape [batch_size, sequence_length, features].
-            user_idx: Optional user indices tensor of shape [batch_size].
-            prev_pred: Optional previous predictions tensor of shape [batch_size].
             demographics: Optional demographics tensor of shape [batch_size, demographics_dim].
 
         Returns:
             Logits tensor of shape [batch_size, num_classes].
         """
-        return self.net(x, user_idx, prev_pred, demographics)
+        return self.net(x, demographics)
 
     def on_train_start(self) -> None:
         pass
-
-    def _update_predictions_cache(self, idx: torch.Tensor, preds: torch.Tensor) -> None:
-        if self.trainer is not None and self.trainer.datamodule is not None:
-            if self.training:
-                dataset = getattr(self.trainer.datamodule, "data_train", None)
-            elif getattr(self.trainer, "validating", False) or getattr(self.trainer, "sanity_checking", False):
-                dataset = getattr(self.trainer.datamodule, "data_val", None)
-            elif getattr(self.trainer, "testing", False):
-                dataset = getattr(self.trainer.datamodule, "data_test", None)
-            else:
-                dataset = None
-
-            if dataset is not None and hasattr(dataset, "predictions_cache"):
-                indices = idx.detach().cpu().numpy()
-                values = preds.detach().cpu().numpy()
-                dataset.predictions_cache[indices] = values
 
     def _compute_class_weights(self) -> Optional[torch.Tensor]:
         """Computes balanced (inverse-frequency) class weights from the training labels.
@@ -180,30 +156,20 @@ class HealthLitModule(LightningModule):
         Returns:
             A tuple of (loss, predictions, targets, logits).
         """
-        if len(batch) == 6:
-            x, y, user_idx, prev_pred, idx, demographics = batch
+        if len(batch) == 4:
+            x, y, _, demographics = batch
+        elif len(batch) == 6:
+            x, y, _, _, _, demographics = batch
         elif len(batch) == 5:
-            x, y, user_idx, prev_pred, idx = batch
+            x, y, _, _, _ = batch
             demographics = None
-        elif len(batch) == 4:
-            x, y, user_idx, demographics = batch
-            prev_pred, idx = None, None
         else:
-            x, y, user_idx = batch
-            prev_pred, idx, demographics = None, None, None
-        
-        # Apply user ID dropout during training to fallback to the population average (index 0)
-        if self.training and self.hparams.user_id_dropout > 0:
-            mask = torch.rand(user_idx.shape, device=user_idx.device) < self.hparams.user_id_dropout
-            user_idx = torch.where(mask, torch.zeros_like(user_idx), user_idx)
+            x, y = batch[0], batch[1]
+            demographics = None
 
-        logits = self.forward(x, user_idx, prev_pred, demographics)
+        logits = self.forward(x, demographics)
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
-
-        # Update cache if use_prev_prediction is True
-        if self.hparams.use_prev_prediction and idx is not None:
-            self._update_predictions_cache(idx, preds)
 
         return loss, preds, y, logits
 
@@ -295,10 +261,6 @@ class HealthLitModule(LightningModule):
             if hasattr(dm, "demographics_dim") and dm.demographics_dim is not None:
                 if hasattr(self.net, "init_demographics"):
                     self.net.init_demographics(dm.demographics_dim)
-            if hasattr(dm, "user_to_idx") and dm.user_to_idx is not None:
-                self.num_users = len(dm.user_to_idx) + 1
-                if hasattr(self.net, "init_user_embedding"):
-                    self.net.init_user_embedding(self.num_users)
             self.net.to(self.device)  # Make sure weights are moved to correct device
 
         # Auto-compute inverse-frequency class weights from the training split.
@@ -314,7 +276,7 @@ class HealthLitModule(LightningModule):
         self.val_loss.reset()
 
     def load_state_dict(self, state_dict: Dict[str, Any], strict: bool = True) -> Any:
-        """Dynamically adjust user embedding and demographics shapes if present in state_dict before loading."""
+        """Dynamically adjust demographics shapes if present in state_dict before loading."""
         fc_weight_key = "net.fc.weight"
         if fc_weight_key in state_dict:
             checkpoint_in_features = state_dict[fc_weight_key].shape[1]
@@ -330,11 +292,6 @@ class HealthLitModule(LightningModule):
             if hasattr(self.net, "init_input_size"):
                 self.net.init_input_size(checkpoint_input_size)
 
-        weight_key = "net.user_embedding.weight"
-        if weight_key in state_dict:
-            num_users = state_dict[weight_key].shape[0]
-            if hasattr(self.net, "init_user_embedding"):
-                self.net.init_user_embedding(num_users)
         return super().load_state_dict(state_dict, strict=strict)
 
     def configure_optimizers(self) -> Dict[str, Any]:
@@ -660,8 +617,6 @@ class HealthRegressionLitModule(LightningModule):
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler = None,
         compile: bool = False,
-        user_id_dropout: float = 0.0,
-        use_prev_prediction: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -674,52 +629,26 @@ class HealthRegressionLitModule(LightningModule):
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
 
-    def forward(self, x: torch.Tensor, user_idx: Optional[torch.Tensor] = None, prev_pred: Optional[torch.Tensor] = None, demographics: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.net(x, user_idx, prev_pred, demographics)
-
-    def _update_predictions_cache(self, idx: torch.Tensor, preds: torch.Tensor) -> None:
-        if self.trainer is not None and self.trainer.datamodule is not None:
-            if self.training:
-                dataset = getattr(self.trainer.datamodule, "data_train", None)
-            elif getattr(self.trainer, "validating", False) or getattr(self.trainer, "sanity_checking", False):
-                dataset = getattr(self.trainer.datamodule, "data_val", None)
-            elif getattr(self.trainer, "testing", False):
-                dataset = getattr(self.trainer.datamodule, "data_test", None)
-            else:
-                dataset = None
-
-            if dataset is not None and hasattr(dataset, "predictions_cache"):
-                indices = idx.detach().cpu().numpy()
-                values = preds.detach().cpu().numpy()
-                dataset.predictions_cache[indices] = values
+    def forward(self, x: torch.Tensor, demographics: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.net(x, demographics)
 
     def model_step(
         self, batch: Any
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        if len(batch) == 6:
-            x, y, user_idx, prev_pred, idx, demographics = batch
+        if len(batch) == 4:
+            x, y, _, demographics = batch
+        elif len(batch) == 6:
+            x, y, _, _, _, demographics = batch
         elif len(batch) == 5:
-            x, y, user_idx, prev_pred, idx = batch
+            x, y, _, _, _ = batch
             demographics = None
-        elif len(batch) == 4:
-            x, y, user_idx, demographics = batch
-            prev_pred, idx = None, None
         else:
-            x, y, user_idx = batch
-            prev_pred, idx, demographics = None, None, None
-            
-        # Apply user ID dropout during training to fallback to the population average (index 0)
-        if self.training and self.hparams.user_id_dropout > 0:
-            mask = torch.rand(user_idx.shape, device=user_idx.device) < self.hparams.user_id_dropout
-            user_idx = torch.where(mask, torch.zeros_like(user_idx), user_idx)
+            x, y = batch[0], batch[1]
+            demographics = None
 
-        logits = self.forward(x, user_idx, prev_pred, demographics) # shape [Batch, output_size=1]
+        logits = self.forward(x, demographics) # shape [Batch, output_size=1]
         preds = logits.squeeze(-1)
         loss = self.criterion(preds, y.float())
-
-        # Update cache if use_prev_prediction is True
-        if self.hparams.use_prev_prediction and idx is not None:
-            self._update_predictions_cache(idx, preds)
 
         return loss, preds, y, logits
 
@@ -762,16 +691,12 @@ class HealthRegressionLitModule(LightningModule):
             if hasattr(dm, "demographics_dim") and dm.demographics_dim is not None:
                 if hasattr(self.net, "init_demographics"):
                     self.net.init_demographics(dm.demographics_dim)
-            if hasattr(dm, "user_to_idx") and dm.user_to_idx is not None:
-                self.num_users = len(dm.user_to_idx) + 1
-                if hasattr(self.net, "init_user_embedding"):
-                    self.net.init_user_embedding(self.num_users)
             self.net.to(self.device)  # Make sure weights are moved to correct device
 
         self.val_loss.reset()
 
     def load_state_dict(self, state_dict: Dict[str, Any], strict: bool = True) -> Any:
-        """Dynamically adjust user embedding and demographics shapes if present in state_dict before loading."""
+        """Dynamically adjust demographics shapes if present in state_dict before loading."""
         fc_weight_key = "net.fc.weight"
         if fc_weight_key in state_dict:
             checkpoint_in_features = state_dict[fc_weight_key].shape[1]
@@ -787,11 +712,6 @@ class HealthRegressionLitModule(LightningModule):
             if hasattr(self.net, "init_input_size"):
                 self.net.init_input_size(checkpoint_input_size)
 
-        weight_key = "net.user_embedding.weight"
-        if weight_key in state_dict:
-            num_users = state_dict[weight_key].shape[0]
-            if hasattr(self.net, "init_user_embedding"):
-                self.net.init_user_embedding(num_users)
         return super().load_state_dict(state_dict, strict=strict)
 
     def configure_optimizers(self) -> Dict[str, Any]:

@@ -33,7 +33,6 @@ collapse_strategy: none
 require_sensor_data: true
 use_survey_context: true
 
-use_prev_prediction: ${model.use_prev_prediction}
 use_demographics: true
 use_sleep: false
 

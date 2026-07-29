@@ -55,7 +55,6 @@ class HealthDataModule(LightningDataModule):
         split_mode: Literal["user", "longitudinal"] = "user",
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
         collapse_strategy: str = "mean",
-        use_prev_prediction: bool = False,
         use_demographics: bool = True,
         use_sleep: bool = False,
         enrollment_lead_days: float = 7.0,
@@ -87,7 +86,6 @@ class HealthDataModule(LightningDataModule):
                 - "longitudinal": Temporal split per user (predict future from past).
                 Row-level random splitting was removed; see CohortSplitter for why.
             collapse_strategy (str): Aggregation strategy to collapse multiple daily survey responses for non-yes-no questions.
-            use_prev_prediction (bool): Whether to use the previous day's prediction as input to the model.
             use_demographics (bool): Whether to query, process, and pass user demographics as context.
             enrollment_lead_days (float): Days of sensor data retained before each user's
                 first survey. Must exceed the sampler's lookback so early surveys still
@@ -225,17 +223,12 @@ class HealthDataModule(LightningDataModule):
             if self.hparams.scaler is not None and hasattr(self.hparams.scaler, "fit"):
                 self._fit_scaler(train_df, modality_dfs)
 
-            # Sort chronologically and precompute link mappings if use_prev_prediction is True
-            if self.hparams.use_prev_prediction:
-                train_df, val_df, test_df = PrevPredictionLinker.link(train_df, val_df, test_df)
-
             # Instantiate Dataset objects
             is_regression = getattr(self.hparams.aggregator, "is_regression", False)
             self.data_train = HealthDataset(
                 train_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
                 is_regression=is_regression,
-                use_prev_prediction=self.hparams.use_prev_prediction,
                 demographics_map=self.demographics_map,
                 default_demographics=self.default_demographics,
                 use_sleep=self.hparams.use_sleep,
@@ -245,7 +238,6 @@ class HealthDataModule(LightningDataModule):
                 val_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
                 is_regression=is_regression,
-                use_prev_prediction=self.hparams.use_prev_prediction,
                 demographics_map=self.demographics_map,
                 default_demographics=self.default_demographics,
                 use_sleep=self.hparams.use_sleep,
@@ -255,7 +247,6 @@ class HealthDataModule(LightningDataModule):
                 test_df, modality_dfs, self.hparams.modality_cols,
                 self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
                 is_regression=is_regression,
-                use_prev_prediction=self.hparams.use_prev_prediction,
                 demographics_map=self.demographics_map,
                 default_demographics=self.default_demographics,
                 use_sleep=self.hparams.use_sleep,

@@ -9,25 +9,15 @@ class SimpleLSTM(nn.Module):
         num_layers: int = 2,
         output_size: int = 5,
         dropout: float = 0.0,
-        user_embedding_dim: int = 16,
-        use_user_embedding: bool = True,
         use_sequence_data: bool = True,
-        use_prev_prediction: bool = False,
         demographics_dim: int = 0,
         pooling: str = "last",
     ):
         super(SimpleLSTM, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.user_embedding_dim = user_embedding_dim
-        self.use_user_embedding = use_user_embedding
         self.use_sequence_data = use_sequence_data
-        self.use_prev_prediction = use_prev_prediction
         self.demographics_dim = demographics_dim
-        # How to collapse the LSTM output sequence into a fixed vector:
-        # "last" (final timestep), "mean", or "max" over time. Mean/max pool
-        # over the whole window, which is more robust than last-step for the
-        # short, sparse activity sequences here.
         if pooling not in ("last", "mean", "max"):
             raise ValueError(f"pooling must be one of 'last', 'mean', 'max'; got {pooling!r}")
         self.pooling = pooling
@@ -38,46 +28,18 @@ class SimpleLSTM(nn.Module):
             fc_input_size = hidden_size
         else:
             fc_input_size = 0
-            
-        if self.use_prev_prediction:
-            fc_input_size += 1
-            
+
         # Add demographics_dim to fc_input_size
         fc_input_size += self.demographics_dim
-            
+
         # Fully connected layer to map hidden states to output classes
         self.fc = nn.Linear(max(1, fc_input_size), output_size)
-        
-    def init_user_embedding(self, num_users: int) -> None:
-        """Initializes user embedding layer and adjusts the output linear projection."""
-        if not self.use_user_embedding:
-            return
-            
-        if num_users > 0:
-            self.num_users = num_users
-            self.user_embedding = nn.Embedding(num_users, self.user_embedding_dim)
-            
-            fc_input_size = 0
-            if self.use_sequence_data:
-                fc_input_size += self.hidden_size
-            if self.use_prev_prediction:
-                fc_input_size += 1
-                
-            self.fc = nn.Linear(fc_input_size + self.user_embedding_dim + self.demographics_dim, self.fc.out_features)
 
     def init_demographics(self, demographics_dim: int) -> None:
         """Adjusts the output linear projection to support static demographics."""
         if demographics_dim > 0 and self.demographics_dim == 0:
             self.demographics_dim = demographics_dim
-            # Recalculate input features from scratch to avoid dummy size-0 guard mismatches
-            fc_input_size = 0
-            if self.use_sequence_data:
-                fc_input_size += self.hidden_size
-            if self.use_prev_prediction:
-                fc_input_size += 1
-            if self.use_user_embedding and hasattr(self, "user_embedding"):
-                fc_input_size += self.user_embedding_dim
-                
+            fc_input_size = self.hidden_size if self.use_sequence_data else 0
             in_features = fc_input_size + demographics_dim
             out_features = self.fc.out_features
             self.fc = nn.Linear(in_features, out_features)
@@ -93,15 +55,13 @@ class SimpleLSTM(nn.Module):
                 dropout=self.lstm.dropout
             )
 
-    def forward(self, x, user_idx=None, prev_pred=None, demographics=None):
+    def forward(self, x=None, demographics=None):
         # x shape: [Batch, Time=24, Features=input_size]
         if self.use_sequence_data:
             if x is not None and x.shape[-1] != self.lstm.input_size:
                 self.init_input_size(x.shape[-1])
             # Forward pass through LSTM
-            # out: [Batch, Time, hidden_size]
             out, (hn, cn) = self.lstm(x)
-            # Collapse the time dimension according to the configured pooling strategy
             if self.pooling == "mean":
                 last_out = out.mean(dim=1)
             elif self.pooling == "max":
@@ -110,40 +70,17 @@ class SimpleLSTM(nn.Module):
                 last_out = out[:, -1, :]
         else:
             last_out = None
-        
-        # Concatenate prev_pred if enabled
-        if self.use_prev_prediction:
-            if prev_pred is None:
-                # Fallback default
-                batch_size = x.shape[0] if x is not None else (user_idx.shape[0] if user_idx is not None else 1)
-                prev_pred = torch.zeros(batch_size, dtype=torch.float, device=x.device if x is not None else (user_idx.device if user_idx is not None else None))
-            
-            if prev_pred.dim() == 1:
-                prev_pred = prev_pred.unsqueeze(-1)
-                
-            if last_out is not None:
-                last_out = torch.cat([last_out, prev_pred], dim=-1)
-            else:
-                last_out = prev_pred
-        
-        # Concatenate user embedding if present and user_idx is provided
-        if self.use_user_embedding and user_idx is not None and hasattr(self, "user_embedding"):
-            embed = self.user_embedding(user_idx)  # [Batch, user_embedding_dim]
-            if last_out is not None:
-                last_out = torch.cat([last_out, embed], dim=-1)
-            else:
-                last_out = embed
-                
+
         # Concatenate demographics if present
         if demographics is not None:
             if last_out is not None:
                 last_out = torch.cat([last_out, demographics], dim=-1)
             else:
                 last_out = demographics
-                
+
         if last_out is None:
-            raise ValueError("At least one of use_sequence_data, use_user_embedding, use_prev_prediction, or demographics must be enabled.")
-        
+            raise ValueError("At least one of use_sequence_data or demographics must be enabled.")
+
         # Map to logits
         logits = self.fc(last_out)
         return logits
