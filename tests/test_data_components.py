@@ -464,7 +464,8 @@ def test_datamodule_with_distance_modality(mock_db_class):
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0, include_time_features=False),
         train_val_test_split=(0.5, 0.25, 0.25),
         modalities=["step", "distance"],
-        preprocessors={"distance": DistancePreprocessor()}
+        preprocessors={"distance": DistancePreprocessor()},
+        require_sensor_data=False
     )
 
     dm.setup()
