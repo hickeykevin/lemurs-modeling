@@ -2,7 +2,7 @@ defaults:
   - _self_
   - aggregator: suicide_risk
   - sampler: interval_aware
-  - scaler: standard
+  - scaler: dual
   - preprocessors: [step, calorie]
 
 _target_: src.data.cv_health_datamodule.CVHealthDataModule
@@ -18,7 +18,7 @@ current_fold: 0
 # users, which users land together drives the result more than most modelling
 # choices; repeats convert that into a reported interval instead of hidden
 # noise. 20 repeats x 5 folds = 100 runs — drop to 3-5 while iterating.
-num_repeats: 20
+num_repeats: 10
 current_repeat: 0
 
 batch_size: 16
@@ -29,12 +29,12 @@ random_state: ${seed}
 os_filter: both # both, ios, android
 
 # One sample per survey response; see configs/data/default.yaml
-collapse_strategy: none
+collapse_strategy: null
 require_sensor_data: true
 use_survey_context: true
 include_time_features: true
 
 use_demographics: true
-use_sleep: false
+use_sleep: true
 
 exclude_user_ids: null
