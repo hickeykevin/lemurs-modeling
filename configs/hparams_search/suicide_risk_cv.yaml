@@ -1,0 +1,40 @@
+name: cv_train_full_grid_sweep
+project: lemurs-modeling
+method: grid
+metric:
+  name: val/f1
+  goal: maximize
+
+parameters:
+  data/sampler:
+    values: [offset, interval_aware, rolling]
+  data/scaler:
+    values: [subject_standard, dual, standard]
+  data.os_filter:
+    values: [ios, both]
+  data.collapse_strategy:
+    values: [none, mean]
+  data.use_sleep:
+    values: [true,false]
+  model.auto_class_weights:
+    values: [true, false]
+
+command:
+  - uv
+  - run
+  - src/cv_train.py
+  - "data/aggregator=suicide_risk"
+  - "data/preprocessors=[step,calorie]"
+  - "data.use_demographics=true"
+  - "data.use_survey_context=true"
+  - "model/net=lstm"
+  - "model/optimizer=adam"
+  - "callbacks=[classification_metrics,confusion_matrix]"
+  - "callbacks.confusion_matrix.print_report=false"
+  - "callbacks.confusion_matrix.frequency=5"
+  - "trainer=cpu"
+  - "trainer.max_epochs=100"
+  - "seed=7"
+  - "logger=[wandb]"
+  - "data.num_repeats=10"
+  - ${args_no_hyphens}

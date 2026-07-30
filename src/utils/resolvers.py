@@ -1,4 +1,6 @@
 from omegaconf import OmegaConf, ListConfig, DictConfig
+import os
+import uuid
 
 
 def register_resolvers() -> None:
@@ -35,4 +37,13 @@ def register_resolvers() -> None:
         except TypeError:
             return 0
 
+    def _get_sweep_suffix() -> str:
+        """Returns a unique suffix if running a W&B sweep, otherwise empty string."""
+        if "WANDB_SWEEP_ID" in os.environ or "WANDB_RUN_ID" in os.environ:
+            run_id = os.environ.get("WANDB_RUN_ID", uuid.uuid4().hex[:8])
+            return f"_{run_id}"
+        return ""
+
     OmegaConf.register_new_resolver("len", _get_len, replace=True)
+    OmegaConf.register_new_resolver("sweep_suffix", _get_sweep_suffix, replace=True)
+
