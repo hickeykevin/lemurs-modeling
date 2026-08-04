@@ -1,0 +1,42 @@
+data:
+- /aggregator: suicide_risk
+- /sampler: 
+  - offset: start_offset_hours: [5 values of 24 to 120 hours], end_offset_hours: 0, resample_freq: 4h,6h,8hr,12h, include_time_features: true and false (needs to be interpolated from data.include_time_features), label_time_window_hours: 12
+  - rolling: lookback_hours: [5 values of 24 to 120 hours], resample_freq: [4h, 6h, 8hr, 12h], include_time_features: (needs to be interpolated from data.include_time_features)
+  - interval_aware: bin_edge_hours: [0,3, 6,12,24,48,72] (think of having multiple lists), keep the rest as true, include_time_features: (needs to be interpolated from data.include_time_features)
+- /scaler: standard, subject_standard, dual
+- /preprocessors: all variations
+- modalities: all variations 
+- split_mode: longitudinal
+- os_filter: 'ios' and 'both'
+- collapse_strategy: 'mean' and null
+- requires_sensor_data: true and false
+- use_survey_context: true and false
+- include_time_features: true and false
+- use_demographics: true and false
+- use_sleep: true and false
+
+
+model:
+- default and flaml
+- net (for default): 
+  - lstm: 
+    - pooling: 'mean' and 'last'
+  - transformer: 
+    - pooling: 'mean' and 'last'
+- optimizer: 
+- weight_decay: 0, 0.0001,
+for all three models:
+- auto_class_weights: false, using class_weights of ([1.0, 1.0],[1.0, 2.0], [1.0, 3.0], [1.0, 5.0])
+
+callbacks: [classification_metrics, confusion_matrix, model_checkpoint]
+- model_checkpoint.monitor: 'val/f1' 
+- model.checkpoint.mode: 'max', 
+- model.checkpoint.save_top_k: 1, 
+- model.checkpoint.save_last: false
+- confusion_matrix.frequency: 5 (every 5 epochs)
+logger: [csv,wandb]
+seed: 7
+trainer: cpu
+- max_epochs: 100
+

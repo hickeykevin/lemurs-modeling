@@ -1,0 +1,91 @@
+# W&B Sweep Configuration: Big Pegah Sweep
+# Created based on specs in configs/hparams_search/big_pegah_sweep.txt
+# Uses scripts/big_pegah_sweep_wrapper.sh to sanitize arguments and prevent Hydra composition errors
+
+name: big_pegah_sweep
+project: lemurs-modeling
+method: bayes
+metric:
+  name: val/f1_best
+  goal: maximize
+
+parameters:
+  # --- Model Options ---
+  model_choice:
+    values: [default, flaml]
+
+  net_choice:
+    values: [lstm, transformer]
+
+  pooling_choice:
+    values: [mean, last]
+
+  weight_decay_choice:
+    values: [0.0, 0.0001]
+
+  class_weights_choice:
+    values:
+      - [1.0, 1.0]
+      - [1.0, 2.0]
+      - [1.0, 3.0]
+      - [1.0, 5.0]
+
+  # --- Data Scaler & Sampler Options ---
+  scaler_choice:
+    values: [standard, subject_standard, dual]
+
+  sampler_choice:
+    values: [offset, rolling, interval_aware]
+
+  start_offset_hours_choice:
+    values: [-24, -48, -72, -96, -120]
+
+  lookback_hours_choice:
+    values: [24, 48, 72, 96, 120]
+
+  resample_freq_choice:
+    values: ["4h", "6h", "8h", "12h"]
+
+  bin_edges_hours_choice:
+    values:
+      - [0, 3, 6, 12, 24, 48, 72]
+      - [0, 3, 6, 12, 24, 48, 72, 96]
+      - [0, 3, 6, 12, 24, 48, 72, 96, 120]
+
+  # --- Modalities & Preprocessors Variations ---
+  modalities_choice:
+    values:
+      - ["step"]
+      - ["calorie"]
+      - ["distance"]
+      - ["step", "calorie"]
+      - ["step", "distance"]
+      - ["calorie", "distance"]
+      - ["step", "calorie", "distance"]
+
+  # --- Data Filters and Flags ---
+  os_filter_choice:
+    values: [ios, both]
+
+  collapse_strategy_choice:
+    values: [mean, none]
+
+  require_sensor_data_choice:
+    values: [true, false]
+
+  use_survey_context_choice:
+    values: [true, false]
+
+  include_time_features_choice:
+    values: [true, false]
+
+  use_demographics_choice:
+    values: [true, false]
+
+  use_sleep_choice:
+    values: [true, false]
+
+command:
+  - bash
+  - scripts/big_pegah_sweep_wrapper.sh
+  - ${args_no_hyphens}
