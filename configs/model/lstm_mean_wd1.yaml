@@ -1,0 +1,16 @@
+defaults:
+  - net: lstm
+  - optimizer: adam
+  - scheduler: null
+
+_target_: src.models.health_module.HealthLitModule
+compile: false
+auto_class_weights: true
+class_weights: null
+use_sequence_data: true
+
+net:
+  pooling: mean
+
+optimizer:
+  weight_decay: 0.0001

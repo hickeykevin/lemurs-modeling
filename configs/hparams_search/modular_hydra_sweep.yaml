@@ -1,0 +1,126 @@
+# W&B Sweep Configuration: Modular Hydra Sweep
+# Replaces flat sweep parameters with clean, native Hydra package selections.
+# Eliminates parameter leakage and dummy variables entirely.
+
+name: modular_hydra_sweep
+project: lemurs-modeling
+program: src/train.py
+method: bayes
+metric:
+  name: val/f1_best
+  goal: maximize
+
+parameters:
+  # --- Data Scaler Choices ---
+  data/scaler:
+    values: [standard, subject_standard, dual]
+
+  # --- Modular Data Sampler Packages (43 total explicit sampler files) ---
+  data/sampler:
+    values:
+      # Offset Samplers (20 options)
+      - offset_24h_4h
+      - offset_24h_6h
+      - offset_24h_8h
+      - offset_24h_12h
+      - offset_48h_4h
+      - offset_48h_6h
+      - offset_48h_8h
+      - offset_48h_12h
+      - offset_72h_4h
+      - offset_72h_6h
+      - offset_72h_8h
+      - offset_72h_12h
+      - offset_96h_4h
+      - offset_96h_6h
+      - offset_96h_8h
+      - offset_96h_12h
+      - offset_120h_4h
+      - offset_120h_6h
+      - offset_120h_8h
+      - offset_120h_12h
+      # Rolling Samplers (20 options)
+      - rolling_24h_4h
+      - rolling_24h_6h
+      - rolling_24h_8h
+      - rolling_24h_12h
+      - rolling_48h_4h
+      - rolling_48h_6h
+      - rolling_48h_8h
+      - rolling_48h_12h
+      - rolling_72h_4h
+      - rolling_72h_6h
+      - rolling_72h_8h
+      - rolling_72h_12h
+      - rolling_96h_4h
+      - rolling_96h_6h
+      - rolling_96h_8h
+      - rolling_96h_12h
+      - rolling_120h_4h
+      - rolling_120h_6h
+      - rolling_120h_8h
+      - rolling_120h_12h
+      # Interval-Aware Samplers (3 options)
+      - interval_72h
+      - interval_96h
+      - interval_120h
+
+  # --- Modalities Choices (ALL 7 options) ---
+  data.modalities:
+    values:
+      - ["step"]
+      - ["calorie"]
+      - ["distance"]
+      - ["step", "calorie"]
+      - ["step", "distance"]
+      - ["calorie", "distance"]
+      - ["step", "calorie", "distance"]
+
+  # --- Cohort Data Filtering Flags ---
+  data.os_filter:
+    values: [ios, both]
+
+  data.collapse_strategy:
+    values: [mean, none]
+
+  data.require_sensor_data:
+    values: [true, false]
+
+  data.use_survey_context:
+    values: [true, false]
+
+  data.include_time_features:
+    values: [true, false]
+
+  data.use_demographics:
+    values: [true, false]
+
+  data.use_sleep:
+    values: [true, false]
+
+  # --- Model Architecture Modular Packages (FLAML + 8 PyTorch Neural Net packages) ---
+  model:
+    values:
+      - flaml                       # FLAML AutoML (LightGBM, XGBoost, CatBoost, RandomForest)
+      - transformer_mean_wd0        # Transformer, pooling=mean, weight_decay=0.0
+      - transformer_mean_wd1        # Transformer, pooling=mean, weight_decay=0.0001
+      - transformer_last_wd0         # Transformer, pooling=last, weight_decay=0.0
+      - transformer_last_wd1         # Transformer, pooling=last, weight_decay=0.0001
+      - lstm_mean_wd0               # LSTM, pooling=mean, weight_decay=0.0
+      - lstm_mean_wd1               # LSTM, pooling=mean, weight_decay=0.0001
+      - lstm_last_wd0                # LSTM, pooling=last, weight_decay=0.0
+      - lstm_last_wd1                # LSTM, pooling=last, weight_decay=0.0001
+
+  # --- Class Weights ---
+  model.class_weights:
+    values:
+      - [1.0, 1.0]
+      - [1.0, 2.0]
+      - [1.0, 3.0]
+      - [1.0, 5.0]
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}

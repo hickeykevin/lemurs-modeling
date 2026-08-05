@@ -104,7 +104,7 @@ done
 # Execute training script with base configs and sanitized overrides
 eval "uv run python src/train.py \
     task_name=big_pegah_sweep \
-    paths.log_dir=\${paths.root_dir}/logs/big_pegah_sweep \
+    paths.log_dir=logs/big_pegah_sweep \
     data/aggregator=suicide_risk \
     data.split_mode=longitudinal \
     seed=7 \
