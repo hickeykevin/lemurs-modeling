@@ -11,12 +11,12 @@ metric:
   goal: maximize
 
 parameters:
-  # --- Data Scaler Choices ---
-  data/scaler:
+  # --- Data Scaler Package ---
+  scaler_pkg:
     values: [standard, subject_standard, dual]
 
   # --- Modular Data Sampler Packages (43 total explicit sampler files) ---
-  data/sampler:
+  sampler_pkg:
     values:
       # Offset Samplers (20 options)
       - offset_24h_4h
@@ -66,7 +66,7 @@ parameters:
       - interval_120h
 
   # --- Modalities Choices (ALL 7 options) ---
-  data.modalities:
+  modalities_choice:
     values:
       - ["step"]
       - ["calorie"]
@@ -77,29 +77,29 @@ parameters:
       - ["step", "calorie", "distance"]
 
   # --- Cohort Data Filtering Flags ---
-  data.os_filter:
+  os_filter_choice:
     values: [ios, both]
 
-  data.collapse_strategy:
+  collapse_strategy_choice:
     values: [mean, none]
 
-  data.require_sensor_data:
+  require_sensor_data_choice:
     values: [true, false]
 
-  data.use_survey_context:
+  use_survey_context_choice:
     values: [true, false]
 
-  data.include_time_features:
+  include_time_features_choice:
     values: [true, false]
 
-  data.use_demographics:
+  use_demographics_choice:
     values: [true, false]
 
-  data.use_sleep:
+  use_sleep_choice:
     values: [true, false]
 
   # --- Model Architecture Modular Packages (FLAML + 8 PyTorch Neural Net packages) ---
-  model:
+  model_pkg:
     values:
       - flaml                       # FLAML AutoML (LightGBM, XGBoost, CatBoost, RandomForest)
       - transformer_mean_wd0        # Transformer, pooling=mean, weight_decay=0.0
@@ -112,7 +112,7 @@ parameters:
       - lstm_last_wd1                # LSTM, pooling=last, weight_decay=0.0001
 
   # --- Class Weights ---
-  model.class_weights:
+  class_weights_choice:
     values:
       - [1.0, 1.0]
       - [1.0, 2.0]
@@ -123,4 +123,17 @@ command:
   - ${env}
   - python
   - ${program}
-  - ${args_no_hyphens}
+  - "data/scaler=${scaler_pkg}"
+  - "data/sampler=${sampler_pkg}"
+  - "model=${model_pkg}"
+  - "data.modalities=${modalities_choice}"
+  - "data/preprocessors=${modalities_choice}"
+  - "data.os_filter=${os_filter_choice}"
+  - "data.collapse_strategy=${collapse_strategy_choice}"
+  - "data.require_sensor_data=${require_sensor_data_choice}"
+  - "data.use_survey_context=${use_survey_context_choice}"
+  - "data.include_time_features=${include_time_features_choice}"
+  - "data.use_demographics=${use_demographics_choice}"
+  - "data.use_sleep=${use_sleep_choice}"
+  - "model.class_weights=${class_weights_choice}"
+  - "data.num_workers=4"
