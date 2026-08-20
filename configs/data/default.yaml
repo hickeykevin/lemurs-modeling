@@ -18,6 +18,12 @@ random_state: ${seed}
 # Row-level random splitting was removed: it leaks users across the split and
 # measures user identification rather than risk. See CohortSplitter.
 split_mode: longitudinal # user, longitudinal
+# Longitudinal mode only: gap (hours) purged around each train/val and val/test
+# boundary so a retained sample's sampler window can't reach across the boundary
+# into data used on the other side of it. null derives it from the sampler's own
+# lookback (data/sampler's window_bounds span) automatically; set explicitly to
+# hold purge width fixed across a sweep over multiple sampler configs.
+purge_hours: null
 os_filter: both # both, ios, android
 # none = one sample per survey response. The morning and afternoon surveys ask
 # about different periods ("since your last prompt"), so collapsing them to a

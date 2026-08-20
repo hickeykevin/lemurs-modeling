@@ -10,7 +10,7 @@ from src.data.components.cohort_builder import CohortBuilder
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from src.data.components.cohort_splitter import CohortSplitter
+from src.data.components.cohort_splitter import CohortSplitter, lookback_hours_from_sampler
 from src.data.components.demographics_processor import DemographicsProcessor
 from src.data.components.prev_prediction_linker import PrevPredictionLinker
 
@@ -64,6 +64,7 @@ class HealthDataModule(LightningDataModule):
         include_time_features: Optional[bool] = None,
         exclude_user_ids: Optional[List[int]] = None,
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
+        purge_hours: Optional[float] = None,
     ) -> None:
 
 
@@ -105,6 +106,15 @@ class HealthDataModule(LightningDataModule):
                 cyclical time features in the sequence sampler.
             exclude_user_ids (Optional[List[int]]): Users dropped from every stream.
                 Defaults to CohortBuilder's test/discontinued accounts.
+            purge_hours (Optional[float]): Only used when split_mode="longitudinal".
+                Width of the gap dropped around each user's train/val and
+                val/test boundary, so a retained sample's sampler window
+                cannot reach across the boundary into data used on the other
+                side (see CohortSplitter for why this matters). Defaults to
+                the sampler's own lookback window when None — pass an
+                explicit value (e.g. the largest lookback in a sweep across
+                sampler configs) to keep purge width, and therefore what each
+                split contains, consistent across a comparison.
         """
         super().__init__()
         if include_time_features is not None and hasattr(sampler, "include_time_features"):
@@ -393,16 +403,32 @@ class HealthDataModule(LightningDataModule):
     def _split_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Dispatches to the appropriate splitting strategy.
 
+        For split_mode="longitudinal", the purge gap defaults to the
+        sampler's own lookback window (derived via
+        ``lookback_hours_from_sampler``) so that val/test samples can never
+        share raw sensor records with a sample on the other side of a split
+        boundary. Pass ``purge_hours`` explicitly to override this, e.g. to
+        hold the purge width fixed across a sweep over sampler configs.
+
         Args:
             df: The master linked dataframe to split.
 
         Returns:
             Tuple of (train_df, val_df, test_df).
         """
+        purge_hours = self.hparams.purge_hours
+        if purge_hours is None:
+            purge_hours = (
+                lookback_hours_from_sampler(self.hparams.sampler)
+                if self.hparams.split_mode == "longitudinal"
+                else 0.0
+            )
+
         splitter = CohortSplitter(
             split_mode=self.hparams.split_mode,
             train_val_test_split=self.hparams.train_val_test_split,
             random_state=self.hparams.random_state,
+            purge_hours=purge_hours,
         )
         return splitter.split(df)
 

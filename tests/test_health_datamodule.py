@@ -317,16 +317,23 @@ def test_datamodule_longitudinal_split(mock_db_class, dummy_data):
     mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
     
     dm = HealthDataModule(
-    
+
         exclude_user_ids=[],
         aggregator=MeanAggregator(threshold=None),
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
         train_val_test_split=(0.5, 0.25, 0.25),
-        split_mode="longitudinal"
+        split_mode="longitudinal",
+        # This fixture's daily survey cadence exactly equals the sampler's 24h
+        # window, so the default auto-derived purge (also 24h) would purge
+        # every response and leave every split empty -- see
+        # test_cohort_splitter_longitudinal_purge_can_empty_a_split for that
+        # behavior in isolation. This test is only about chronological
+        # ordering across the split, so purging is disabled here.
+        purge_hours=0.0,
     )
-    
+
     dm.setup()
-    
+
     # For user 1, response 101 (2023-01-02) should be in train
     # response 102 (2023-01-03) should be in val or test
     user1_train = dm.data_train.data_links[dm.data_train.data_links['app_user_id'] == 1]

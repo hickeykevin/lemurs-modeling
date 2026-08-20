@@ -1,6 +1,25 @@
-from typing import Tuple, Literal
+from typing import Tuple, Literal, Any
 import pandas as pd
 from sklearn.model_selection import train_test_split
+
+
+def lookback_hours_from_sampler(sampler: Any) -> float:
+    """Derives a purge width (in hours) from a ``TimeSampler``'s own window.
+
+    Reads the sampler's ``window_bounds`` at an arbitrary anchor timestamp
+    rather than a type-specific attribute (``lookback_hours``,
+    ``lookback_days``, ``bin_edges_hours``, ...), so it works uniformly
+    across every ``TimeSampler`` subclass, including future ones. Samplers
+    that read no sensor data (e.g. ``LagSampler``) report no window and
+    contribute 0 — there is nothing to purge for them.
+    """
+    if not hasattr(sampler, "window_bounds"):
+        return 0.0
+    bounds = sampler.window_bounds(pd.Timestamp("2000-01-01"))
+    if bounds is None:
+        return 0.0
+    start, end = bounds
+    return max(0.0, (pd.Timestamp(end) - pd.Timestamp(start)).total_seconds() / 3600.0)
 
 
 class CohortSplitter:
@@ -20,6 +39,19 @@ class CohortSplitter:
     prediction label. It is also the wrong question: new users of the app never
     take surveys, so every deployment prediction is for a person the model has
     no labels for, which is exactly what a user-level split measures.
+
+    Longitudinal mode has its own, separate leakage channel: it partitions
+    survey *responses* by chronological position, but the raw sensor tables
+    (``modality_dfs``) are shared unmodified across train/val/test. A sampler
+    with a lookback window reads backward from each response's timestamp, so
+    a val or test response sitting close in time to the preceding split's
+    last response has a window that overlaps — and can contain sensor records
+    identical to — the window used to build a sample on the other side of the
+    boundary. Left unpurged, this lets a model see raw inputs from a "held
+    out" sample during training, independent of any genuine same-user
+    future-prediction skill. ``purge_hours`` closes this by dropping the
+    responses closest to each boundary rather than assigning every response
+    to a side.
     """
 
     #: Split modes that were removed, mapped to why, so configs fail loudly
@@ -39,10 +71,28 @@ class CohortSplitter:
         split_mode: Literal["user", "longitudinal"] = "user",
         train_val_test_split: Tuple[float, float, float] = (0.7, 0.15, 0.15),
         random_state: int = 42,
+        purge_hours: float = 0.0,
     ) -> None:
+        """Initializes the CohortSplitter.
+
+        Args:
+            split_mode: "user" (disjoint populations) or "longitudinal"
+                (per-user temporal split).
+            train_val_test_split: Fractions of each user's responses assigned
+                to train, val, and test.
+            random_state: Seed for the "user" mode's random partitioning.
+            purge_hours: Only used by "longitudinal" mode. Width of the gap
+                dropped around each user's train/val and val/test boundary,
+                so that no retained sample's sampler window can reach across
+                a split boundary into data used on the other side of it. Set
+                this to at least the sampler's own lookback (its
+                ``window_bounds`` span) — see ``lookback_hours_from_sampler``.
+                0 (the default) reproduces the previous unpurged behaviour.
+        """
         self.split_mode = split_mode
         self.train_val_test_split = train_val_test_split
         self.random_state = random_state
+        self.purge_hours = purge_hours
 
     def split(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Dispatches to the appropriate splitting strategy.
@@ -97,8 +147,20 @@ class CohortSplitter:
         return train_df, val_df, test_df
 
     def _split_longitudinally(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """Performs a temporal split within each individual user's history."""
+        """Performs a temporal split within each individual user's history.
+
+        Responses are first cut proportionally by chronological position, as
+        before. If ``purge_hours`` is set, responses within that many hours of
+        a train/val or val/test boundary are then dropped from the side
+        closer to the boundary (see the class docstring for why). Purging
+        never moves a response to a different side — it only removes samples
+        whose sampler window would otherwise reach across the boundary — so a
+        wide ``purge_hours`` relative to a user's response cadence can leave
+        a user with fewer than the nominal proportional count in a split, or
+        with none at all.
+        """
         train_ratio, val_ratio, test_ratio = self.train_val_test_split
+        purge = pd.Timedelta(hours=self.purge_hours) if self.purge_hours else pd.Timedelta(0)
         train_list, val_list, test_list = [], [], []
 
         for _, group in df.groupby("app_user_id"):
@@ -117,8 +179,27 @@ class CohortSplitter:
             train_end = max(1, train_end)
             val_end = max(train_end + 1, val_end)
 
-            train_list.append(group.iloc[:train_end])
-            val_list.append(group.iloc[train_end:val_end])
-            test_list.append(group.iloc[val_end:])
+            train_part = group.iloc[:train_end]
+            val_part = group.iloc[train_end:val_end]
+            test_part = group.iloc[val_end:]
 
-        return pd.concat(train_list), pd.concat(val_list), pd.concat(test_list)
+            if purge > pd.Timedelta(0):
+                if not val_part.empty:
+                    val_start = val_part["record_timestamp"].iloc[0]
+                    train_part = train_part[
+                        train_part["record_timestamp"] < val_start - purge
+                    ]
+                if not test_part.empty:
+                    test_start = test_part["record_timestamp"].iloc[0]
+                    val_part = val_part[
+                        val_part["record_timestamp"] < test_start - purge
+                    ]
+
+            train_list.append(train_part)
+            val_list.append(val_part)
+            test_list.append(test_part)
+
+        train_df = pd.concat(train_list) if train_list else df.iloc[0:0]
+        val_df = pd.concat(val_list) if val_list else df.iloc[0:0]
+        test_df = pd.concat(test_list) if test_list else df.iloc[0:0]
+        return train_df, val_df, test_df

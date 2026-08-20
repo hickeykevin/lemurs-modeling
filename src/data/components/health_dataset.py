@@ -104,6 +104,18 @@ class HealthDataset(Dataset):
             else:
                 user_indices.append(0)
 
+        if not sequences:
+            # An empty split (e.g. every response for every user fell within
+            # a longitudinal purge gap) has no sequence to infer [T, F] from.
+            # Returning a [0, T, F]-shaped-as-[0] array rather than crashing
+            # lets the dataset behave as a normal, simply empty, Dataset.
+            target_dtype = np.float32 if self.is_regression else np.int64
+            return (
+                np.zeros((0,), dtype=np.float32),
+                np.array([], dtype=target_dtype),
+                np.array([], dtype=np.int64),
+            )
+
         seqs_np = np.stack(sequences, axis=0).astype(np.float32)  # [N, T, F]
 
         if self.scaler is not None:

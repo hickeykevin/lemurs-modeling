@@ -2,9 +2,11 @@ import numpy as np
 import pandas as pd
 import pytest
 from unittest.mock import patch
-from src.data.components.cohort_splitter import CohortSplitter
+from src.data.components.cohort_splitter import CohortSplitter, lookback_hours_from_sampler
 from src.data.components.demographics_processor import DemographicsProcessor
 from src.data.components.prev_prediction_linker import PrevPredictionLinker
+from src.data.components.health_dataset import HealthDataset
+from src.data.components.samplers import OffsetSampler
 
 
 @pytest.fixture
@@ -63,6 +65,118 @@ def test_cohort_splitter_longitudinal(dummy_splitter_data):
     assert len(u1_test) == 1
     assert u1_train["record_timestamp"].max() < u1_val["record_timestamp"].min()
     assert u1_val["record_timestamp"].max() < u1_test["record_timestamp"].min()
+
+
+def test_cohort_splitter_longitudinal_purge_drops_boundary_rows():
+    """Rows within purge_hours of a boundary are dropped, not reassigned."""
+    # One user, 10 responses spaced 6h apart -> 54h total span.
+    # Unpurged (0.5/0.25/0.25): train_end=5, val_end=7 -> train=5, val=2, test=3.
+    df = pd.DataFrame({
+        "app_user_id": [1] * 10,
+        "record_timestamp": pd.date_range("2026-01-01", periods=10, freq="6h"),
+        "answer": list(range(10)),
+    })
+
+    splitter = CohortSplitter(
+        split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25), purge_hours=10.0
+    )
+    train_df, val_df, test_df = splitter.split(df)
+
+    # Every retained row must be at least purge_hours from the next split's
+    # first timestamp.
+    purge = pd.Timedelta(hours=10)
+    val_start = val_df["record_timestamp"].min()
+    test_start = test_df["record_timestamp"].min()
+    assert (train_df["record_timestamp"] < val_start - purge).all()
+    assert (val_df["record_timestamp"] < test_start - purge).all()
+
+    # Purging only removes rows near a boundary -- it never reassigns a row
+    # to a different split.
+    unpurged_train, unpurged_val, unpurged_test = CohortSplitter(
+        split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25)
+    ).split(df)
+    assert set(train_df["answer"]).issubset(set(unpurged_train["answer"]))
+    assert set(val_df["answer"]).issubset(set(unpurged_val["answer"]))
+    assert set(test_df["answer"]).issubset(set(unpurged_test["answer"]))
+
+    # Purging strictly shrinks train/val relative to the unpurged split here.
+    assert len(train_df) < len(unpurged_train)
+    assert len(val_df) < len(unpurged_val)
+
+
+def test_cohort_splitter_longitudinal_purge_zero_matches_unpurged():
+    """purge_hours=0 (the default) reproduces the original unpurged split exactly."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 8,
+        "record_timestamp": pd.date_range("2026-01-01", periods=8, freq="12h"),
+        "answer": list(range(8)),
+    })
+
+    default_split = CohortSplitter(split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25))
+    explicit_zero_split = CohortSplitter(
+        split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25), purge_hours=0.0
+    )
+
+    for a, b in zip(default_split.split(df), explicit_zero_split.split(df)):
+        pd.testing.assert_frame_equal(a.reset_index(drop=True), b.reset_index(drop=True))
+
+
+def test_cohort_splitter_longitudinal_purge_can_empty_a_split():
+    """A purge wider than a user's total span can empty out train and val entirely.
+
+    n=6 hourly responses spans only 5h; a 24h purge against val's and test's
+    start times is wider than the whole series, so every train/val row falls
+    within the purge window and only the unpurged final split (test) survives.
+    This is intentional: purging never reassigns a row, it only ever drops
+    ones whose sampler window would otherwise reach across a boundary, so an
+    overly wide purge relative to a user's cadence can leave them with no
+    train or val contribution at all.
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 6,
+        "record_timestamp": pd.date_range("2026-01-01", periods=6, freq="1h"),
+        "answer": list(range(6)),
+    })
+
+    splitter = CohortSplitter(
+        split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25), purge_hours=24.0
+    )
+    train_df, val_df, test_df = splitter.split(df)
+    assert train_df.empty
+    assert val_df.empty
+    assert not test_df.empty
+
+
+def test_lookback_hours_from_sampler():
+    """Derives purge width from window_bounds rather than a type-specific attribute."""
+
+    class FakeSampler:
+        def window_bounds(self, ts):
+            ts = pd.Timestamp(ts)
+            return ts - pd.Timedelta(hours=96), ts
+
+    class NoWindowSampler:
+        """Mimics LagSampler: no window_bounds override, reads no sensor data."""
+        pass
+
+    assert lookback_hours_from_sampler(FakeSampler()) == 96.0
+    assert lookback_hours_from_sampler(NoWindowSampler()) == 0.0
+
+
+def test_health_dataset_handles_empty_split():
+    """An empty split (e.g. every response purged) yields a valid, empty Dataset
+    rather than crashing on np.stack([])."""
+    empty_links = pd.DataFrame(columns=["app_user_id", "record_timestamp", "answer"])
+    step_df = pd.DataFrame(columns=["app_user_id", "start_timestamp", "steps"])
+
+    dataset = HealthDataset(
+        linked_data=empty_links,
+        modality_dfs={"step": step_df},
+        modality_cols={"step": "steps"},
+        sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
+    )
+
+    assert len(dataset) == 0
 
 
 def test_demographics_processor():
