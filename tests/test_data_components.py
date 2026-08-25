@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 from unittest.mock import patch
 from src.data.components.cohort_splitter import CohortSplitter, lookback_hours_from_sampler
 from src.data.components.demographics_processor import DemographicsProcessor
@@ -193,6 +194,199 @@ def test_cohort_splitter_longitudinal_purge_can_empty_a_split():
     assert not test_df.empty
 
 
+def test_cohort_splitter_walk_forward_basic_shape():
+    """Walk-forward produces sequential, expanding-train folds per user.
+
+    12 hourly responses, burn_in=4, step=2, val=2, no purge:
+      fold 0: train=[0:4]  val=[4:6]  test=[6:8]
+      fold 1: train=[0:8]  val=[8:10] test=[10:12]
+      fold 2: would need test_end=14 > 12 -> stops after fold 1.
+    Train expands to absorb the previous fold's test rows (fold 1's train
+    includes fold 0's test rows) -- once a response is in the past relative
+    to a later test window, the model may train on it.
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 12,
+        "record_timestamp": pd.date_range("2026-01-01", periods=12, freq="1h"),
+        "answer": list(range(12)),
+    })
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward(
+        df, burn_in_responses=4, step_responses=2, val_responses=2
+    )
+
+    assert [f.fold_index for f in folds] == [0, 1]
+
+    assert list(folds[0].train_df["answer"]) == [0, 1, 2, 3]
+    assert list(folds[0].val_df["answer"]) == [4, 5]
+    assert list(folds[0].test_df["answer"]) == [6, 7]
+
+    assert list(folds[1].train_df["answer"]) == [0, 1, 2, 3, 4, 5, 6, 7]
+    assert list(folds[1].val_df["answer"]) == [8, 9]
+    assert list(folds[1].test_df["answer"]) == [10, 11]
+
+
+def test_cohort_splitter_walk_forward_purges_every_fold_boundary():
+    """purge_hours is applied at every fold's train/val and val/test boundary, not just once."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 12,
+        "record_timestamp": pd.date_range("2026-01-01", periods=12, freq="1h"),
+        "answer": list(range(12)),
+    })
+
+    splitter = CohortSplitter(purge_hours=1.5)
+    folds = splitter.split_walk_forward(
+        df, burn_in_responses=4, step_responses=2, val_responses=2
+    )
+
+    for fold in folds:
+        if fold.val_df.empty or fold.test_df.empty:
+            continue
+        val_start = fold.val_df["record_timestamp"].min()
+        test_start = fold.test_df["record_timestamp"].min()
+        purge = pd.Timedelta(hours=1.5)
+        if not fold.train_df.empty:
+            assert (fold.train_df["record_timestamp"] < val_start - purge).all()
+        assert (fold.val_df["record_timestamp"] < test_start - purge).all()
+
+
+def test_cohort_splitter_walk_forward_short_user_contributes_no_folds():
+    """A user with too few responses to clear burn-in + val + one step is silently excluded, not an error."""
+    df = pd.DataFrame({
+        "app_user_id": [1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+        "record_timestamp": pd.date_range("2026-01-01", periods=12, freq="1h"),
+        "answer": list(range(12)),
+    })
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward(
+        df, burn_in_responses=4, step_responses=2, val_responses=2
+    )
+
+    assert len(folds) > 0
+    for fold in folds:
+        assert (fold.train_df["app_user_id"] != 1).all()
+        assert (fold.val_df["app_user_id"] != 1).all()
+        assert (fold.test_df["app_user_id"] != 1).all()
+
+
+def test_cohort_splitter_walk_forward_no_response_is_a_test_example_twice():
+    """Pooled-metric honesty check: a given response is a test-role example in at most one fold."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 20,
+        "record_timestamp": pd.date_range("2026-01-01", periods=20, freq="1h"),
+        "answer": list(range(20)),
+    })
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward(
+        df, burn_in_responses=5, step_responses=3, val_responses=2
+    )
+
+    seen_test_answers = []
+    for fold in folds:
+        seen_test_answers.extend(fold.test_df["answer"].tolist())
+    assert len(seen_test_answers) == len(set(seen_test_answers))
+
+
+def test_cohort_splitter_walk_forward_invalid_args_raise():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 4,
+        "record_timestamp": pd.date_range("2026-01-01", periods=4, freq="1h"),
+        "answer": list(range(4)),
+    })
+    splitter = CohortSplitter()
+    with pytest.raises(ValueError, match="burn_in_responses"):
+        splitter.split_walk_forward(df, burn_in_responses=0, step_responses=1, val_responses=1)
+    with pytest.raises(ValueError, match="step_responses"):
+        splitter.split_walk_forward(df, burn_in_responses=1, step_responses=0, val_responses=1)
+    with pytest.raises(ValueError, match="val_responses"):
+        splitter.split_walk_forward(df, burn_in_responses=1, step_responses=1, val_responses=0)
+
+
+def test_cohort_splitter_walk_forward_no_user_clears_burn_in_returns_empty():
+    """burn_in wider than any user's data yields an empty list, not an error."""
+    df = pd.DataFrame({
+        "app_user_id": [1, 1, 2, 2],
+        "record_timestamp": pd.date_range("2026-01-01", periods=4, freq="1h"),
+        "answer": [0, 1, 0, 1],
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward(
+        df, burn_in_responses=10, step_responses=1, val_responses=1
+    )
+    assert folds == []
+
+
+def test_cohort_splitter_walk_forward_users_contribute_different_fold_counts():
+    """A longer-history user contributes more folds; shorter users just stop appearing.
+
+    User 1: 20 responses, burn_in=4, step=2, val=2 -> folds at train_end
+    4,8,12,16 (4 folds, since test_end<=20 for all of them: 8,12,16,20).
+    User 2: 8 responses -> only fold 0 fits (train_end=4, val 4:6, test 6:8);
+    fold 1 would need test_end=12 > 8, so user 2 stops after fold 0.
+    """
+    rows = []
+    for i in range(20):
+        rows.append({"app_user_id": 1, "record_timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(hours=i), "answer": i})
+    for i in range(8):
+        rows.append({"app_user_id": 2, "record_timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(hours=i), "answer": i})
+    df = pd.DataFrame(rows)
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward(df, burn_in_responses=4, step_responses=2, val_responses=2)
+
+    assert [f.fold_index for f in folds] == [0, 1, 2, 3]
+
+    # Fold 0: both users present.
+    assert set(folds[0].test_df["app_user_id"]) == {1, 2}
+    # Folds 1-3: user 2 has run out of data, only user 1 remains.
+    for fold in folds[1:]:
+        assert set(fold.test_df["app_user_id"]) == {1}
+        assert set(fold.train_df["app_user_id"]) == {1}
+
+
+def test_cohort_splitter_walk_forward_folds_ordered_by_index_then_input_order():
+    """Folds are returned sorted by fold_index; users within a fold follow df's own order."""
+    rows = []
+    for uid in [3, 1, 2]:  # deliberately not sorted, to check output isn't silently re-sorted by user id
+        for i in range(10):
+            rows.append({
+                "app_user_id": uid,
+                "record_timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(hours=i),
+                "answer": i,
+            })
+    df = pd.DataFrame(rows)
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward(df, burn_in_responses=4, step_responses=2, val_responses=2)
+
+    assert [f.fold_index for f in folds] == sorted(f.fold_index for f in folds)
+    # Every fold covers all three users (10 responses/user is enough for 2 folds).
+    for fold in folds:
+        assert set(fold.test_df["app_user_id"]) == {1, 2, 3}
+
+
+def test_cohort_splitter_walk_forward_purge_can_empty_a_folds_train_or_val():
+    """A purge wider than the gap between chunks can empty train/val for a fold, mirroring longitudinal mode."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 12,
+        "record_timestamp": pd.date_range("2026-01-01", periods=12, freq="1h"),
+        "answer": list(range(12)),
+    })
+    # 10h purge vs. 1h spacing: train and val should both be fully purged in
+    # every fold (their rows all fall within 10h of the next chunk's start).
+    splitter = CohortSplitter(purge_hours=10.0)
+    folds = splitter.split_walk_forward(df, burn_in_responses=4, step_responses=2, val_responses=2)
+
+    assert len(folds) > 0
+    for fold in folds:
+        assert fold.train_df.empty
+        assert fold.val_df.empty
+        assert not fold.test_df.empty  # test is never purged against anything after it
+
+
 def test_lookback_hours_from_sampler():
     """Derives purge width from window_bounds rather than a type-specific attribute."""
 
@@ -223,6 +417,52 @@ def test_health_dataset_handles_empty_split():
     )
 
     assert len(dataset) == 0
+
+
+def test_health_dataset_return_index_appends_idx_last():
+    """return_index=True appends idx as the tuple's last element without changing anything else.
+
+    Off by default so existing model_step branches (fixed lengths 4/5/6) are
+    unaffected; a caller that opts in can join a prediction back to
+    dataset.data_links.iloc[idx] to recover app_user_id/record_timestamp.
+    """
+    links = pd.DataFrame({
+        "app_user_id": [1, 1, 2],
+        "record_timestamp": pd.to_datetime([
+            "2026-01-01 08:00:00", "2026-01-02 08:00:00", "2026-01-01 08:00:00",
+        ]),
+        "answer": [0, 1, 0],
+    })
+    step_df = pd.DataFrame({
+        "app_user_id": [1, 1, 2],
+        "start_timestamp": pd.to_datetime([
+            "2026-01-01 06:00:00", "2026-01-02 06:00:00", "2026-01-01 06:00:00",
+        ]),
+        "steps": [100, 200, 300],
+    })
+    sampler = OffsetSampler(start_offset_hours=-24, end_offset_hours=0)
+
+    dataset_without = HealthDataset(
+        linked_data=links, modality_dfs={"step": step_df},
+        modality_cols={"step": "steps"}, sampler=sampler,
+    )
+    dataset_with = HealthDataset(
+        linked_data=links, modality_dfs={"step": step_df},
+        modality_cols={"step": "steps"}, sampler=sampler, return_index=True,
+    )
+
+    without_len = len(dataset_without[0])
+    with_item = dataset_with[0]
+    assert len(with_item) == without_len + 1
+    assert with_item[-1].dtype == torch.long
+    assert with_item[-1].item() == 0
+
+    # idx recovers the correct source row via data_links.
+    for i in range(len(dataset_with)):
+        item = dataset_with[i]
+        idx = item[-1].item()
+        assert idx == i
+        assert dataset_with.data_links.iloc[idx]["app_user_id"] == links.iloc[i]["app_user_id"]
 
 
 def test_demographics_processor():

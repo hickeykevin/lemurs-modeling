@@ -209,6 +209,11 @@ class HealthDataModule(LightningDataModule):
                 )
 
             self.master_df = master_df
+            # Stored unconditionally (unlike self.raw_cohort, which only the
+            # non-prebuilt branch above sets) so a subclass's setup() override
+            # can rebuild a HealthDataset after super().setup() runs without
+            # re-deriving modality_dfs a third way.
+            self.modality_dfs = modality_dfs
 
             # Perform splitting based on the selected evaluation strategy
             train_df, val_df, test_df = self._split_data(master_df)

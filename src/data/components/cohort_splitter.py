@@ -1,6 +1,20 @@
-from typing import Tuple, Literal, Any
+from typing import Tuple, Literal, Any, List, NamedTuple
 import pandas as pd
 from sklearn.model_selection import train_test_split
+
+
+class WalkForwardFold(NamedTuple):
+    """One fold of a per-user walk-forward split.
+
+    ``fold_index`` is the fold's position in the walk (0-based, chronological)
+    so callers can report per-fold diagnostics (e.g. "does accuracy improve
+    with more accumulated history") without re-deriving order from timestamps.
+    """
+
+    train_df: pd.DataFrame
+    val_df: pd.DataFrame
+    test_df: pd.DataFrame
+    fold_index: int
 
 
 def lookback_hours_from_sampler(sampler: Any) -> float:
@@ -270,3 +284,120 @@ class CohortSplitter:
             # Last chunk (unpurged, normally "test") -> returned as val.
             return train_df, last_df, middle_df
         return train_df, middle_df, last_df
+
+    def split_walk_forward(
+        self,
+        df: pd.DataFrame,
+        burn_in_responses: int,
+        step_responses: int,
+        val_responses: int,
+    ) -> List[WalkForwardFold]:
+        """Per-user, purged, expanding-window walk-forward split.
+
+        Answers "given a user's own history, can the model forecast their
+        near-future risk?" — as distinct from ``split_mode="longitudinal"``'s
+        single train/val/test cut, which only samples this question once per
+        user. Here each user contributes multiple sequential forecast folds:
+        fold *k*'s train set is everything before its test window (all of the
+        user's own past, not a fixed-size trailing slice — the model is meant
+        to accumulate history, mirroring how a deployed app would), and folds
+        walk forward through the remainder of the user's responses.
+
+        Purging is applied at *every* fold's train/val and val/test boundary
+        using the exact same logic as ``split_mode="longitudinal"`` — see the
+        class docstring for why this is necessary (a sampler's lookback window
+        can otherwise reach across a boundary into data assigned to the other
+        side of it). ``self.purge_hours`` sets the width, same as elsewhere.
+
+        A user contributes as many folds as their response count supports
+        after ``burn_in_responses``; a user with fewer than
+        ``burn_in_responses + val_responses + 1`` responses contributes none.
+        This is expected, not an error — short-history users simply cannot
+        be forecast-evaluated yet, and are reported as excluded rather than
+        silently padded or dropped from the cohort entirely (they still
+        appear in every fold's train set once they clear burn-in).
+
+        Folds are aligned by position (fold 0, fold 1, ...) across users, not
+        by calendar date — a user with more responses contributes more folds,
+        a user with fewer contributes fewer, and the ``fold_index`` for a
+        given user's Nth walk-forward step does not necessarily correspond to
+        the same calendar period as another user's Nth step. Pool predictions
+        across users within a fold index with this in mind: it is "the Nth
+        forecast step for each user who has one", not "the same time window
+        for everyone".
+
+        Args:
+            df: The master linked dataframe to split.
+            burn_in_responses: Minimum number of a user's earliest responses
+                reserved for the first fold's training set before any
+                forecasting is evaluated for that user.
+            step_responses: Number of responses each successive fold's test
+                window covers, and by which the train window expands.
+            val_responses: Number of responses each fold's validation window
+                covers, sliced immediately after that fold's train window and
+                immediately before its test window.
+
+        Returns:
+            A list of ``WalkForwardFold`` namedtuples, ordered first by
+            ``fold_index`` then by the order users appear in ``df``. Empty
+            if no user clears burn-in.
+        """
+        if burn_in_responses < 1:
+            raise ValueError(f"burn_in_responses must be >= 1; got {burn_in_responses}")
+        if step_responses < 1:
+            raise ValueError(f"step_responses must be >= 1; got {step_responses}")
+        if val_responses < 1:
+            raise ValueError(f"val_responses must be >= 1; got {val_responses}")
+
+        purge = pd.Timedelta(hours=self.purge_hours) if self.purge_hours else pd.Timedelta(0)
+
+        # Collect this user's folds as (train, val, test) triples, keyed by
+        # fold_index, so folds can be regrouped and concatenated across users
+        # by index afterward rather than by user.
+        folds_by_index: dict = {}
+
+        for _, group in df.groupby("app_user_id"):
+            group = group.sort_values("record_timestamp")
+            n = len(group)
+
+            fold_index = 0
+            train_end = burn_in_responses
+            while True:
+                val_end = train_end + val_responses
+                test_end = val_end + step_responses
+                if test_end > n:
+                    break
+
+                train_part = group.iloc[:train_end]
+                val_part = group.iloc[train_end:val_end]
+                test_part = group.iloc[val_end:test_end]
+
+                if purge > pd.Timedelta(0):
+                    if not val_part.empty:
+                        val_start = val_part["record_timestamp"].iloc[0]
+                        train_part = train_part[
+                            train_part["record_timestamp"] < val_start - purge
+                        ]
+                    if not test_part.empty:
+                        test_start = test_part["record_timestamp"].iloc[0]
+                        val_part = val_part[
+                            val_part["record_timestamp"] < test_start - purge
+                        ]
+
+                folds_by_index.setdefault(fold_index, ([], [], []))
+                folds_by_index[fold_index][0].append(train_part)
+                folds_by_index[fold_index][1].append(val_part)
+                folds_by_index[fold_index][2].append(test_part)
+
+                fold_index += 1
+                train_end = test_end  # expanding window: next fold's train includes this fold's test
+
+        result: List[WalkForwardFold] = []
+        for fold_index in sorted(folds_by_index.keys()):
+            train_list, val_list, test_list = folds_by_index[fold_index]
+            train_df = pd.concat(train_list) if train_list else df.iloc[0:0]
+            val_df = pd.concat(val_list) if val_list else df.iloc[0:0]
+            test_df = pd.concat(test_list) if test_list else df.iloc[0:0]
+            result.append(WalkForwardFold(train_df, val_df, test_df, fold_index))
+
+        return result
