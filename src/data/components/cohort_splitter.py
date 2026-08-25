@@ -72,6 +72,8 @@ class CohortSplitter:
         train_val_test_split: Tuple[float, float, float] = (0.7, 0.15, 0.15),
         random_state: int = 42,
         purge_hours: float = 0.0,
+        swap_val_test: bool = False,
+        symmetric_purge_diagnostic: bool = False,
     ) -> None:
         """Initializes the CohortSplitter.
 
@@ -88,11 +90,51 @@ class CohortSplitter:
                 this to at least the sampler's own lookback (its
                 ``window_bounds`` span) — see ``lookback_hours_from_sampler``.
                 0 (the default) reproduces the previous unpurged behaviour.
+            swap_val_test: Only used by "longitudinal" mode. Diagnostic flag
+                for isolating a role effect (val vs. test position) from a
+                content effect (which chunk of a user's timeline it is). The
+                two post-train chunks are cut and purged exactly as usual —
+                this only relabels which chunk is returned as ``val_df`` and
+                which as ``test_df``. The middle chunk (normally "val",
+                sized by ``val_ratio``) is returned as test; the last chunk
+                (normally "test", sized by ``test_ratio``) is returned as
+                val. Because purging is positional, not label-based, the
+                purge asymmetry flips too: the middle chunk (now "test") is
+                purged against the last chunk's start, and the last chunk
+                (now "val") is never purged, since nothing follows it. This
+                is the mirror image of the unswapped case, not a bug — see
+                the class docstring. Default False reproduces standard
+                behaviour.
+            symmetric_purge_diagnostic: Only used by "longitudinal" mode.
+                A second diagnostic, distinct from ``swap_val_test``: isolates
+                whether the middle vs. last post-train chunk differ in
+                difficulty for a *content* reason, independent of purging.
+                Normally only the middle chunk is purged (against the last
+                chunk's start) — the last chunk never is, since nothing
+                follows it, which confounds "this chunk is purged" with
+                "this chunk is later" whenever the two chunks are compared.
+                When True, purging instead drops rows within ``purge_hours``
+                of each of the two post-train chunks' *own* start, applying
+                the identical treatment to both regardless of position. If a
+                score gap between the two chunks survives this symmetric
+                purge, it reflects the chunks' content, not which one used to
+                get purged; if it collapses, the original gap was purge-driven.
+                Mutually exclusive with ``swap_val_test`` (raises if both are
+                set — combining them doesn't correspond to a meaningful
+                comparison). Default False reproduces standard behaviour.
         """
         self.split_mode = split_mode
         self.train_val_test_split = train_val_test_split
         self.random_state = random_state
         self.purge_hours = purge_hours
+        self.swap_val_test = swap_val_test
+        self.symmetric_purge_diagnostic = symmetric_purge_diagnostic
+        if swap_val_test and symmetric_purge_diagnostic:
+            raise ValueError(
+                "swap_val_test and symmetric_purge_diagnostic are mutually "
+                "exclusive diagnostics answering different questions — "
+                "combining them doesn't correspond to a meaningful comparison."
+            )
 
     def split(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Dispatches to the appropriate splitting strategy.
@@ -158,6 +200,10 @@ class CohortSplitter:
         wide ``purge_hours`` relative to a user's response cadence can leave
         a user with fewer than the nominal proportional count in a split, or
         with none at all.
+
+        The middle and last chunks are always cut and purged positionally
+        first; ``swap_val_test`` only relabels which one is returned as
+        ``val_df`` vs. ``test_df`` (see ``__init__``).
         """
         train_ratio, val_ratio, test_ratio = self.train_val_test_split
         purge = pd.Timedelta(hours=self.purge_hours) if self.purge_hours else pd.Timedelta(0)
@@ -184,22 +230,43 @@ class CohortSplitter:
             test_part = group.iloc[val_end:]
 
             if purge > pd.Timedelta(0):
-                if not val_part.empty:
-                    val_start = val_part["record_timestamp"].iloc[0]
-                    train_part = train_part[
-                        train_part["record_timestamp"] < val_start - purge
-                    ]
-                if not test_part.empty:
-                    test_start = test_part["record_timestamp"].iloc[0]
-                    val_part = val_part[
-                        val_part["record_timestamp"] < test_start - purge
-                    ]
+                if self.symmetric_purge_diagnostic:
+                    # Diagnostic only: purge each post-train chunk against its
+                    # OWN start, not against the next chunk's start. Both
+                    # chunks get identical treatment, so a boundary-adjacency
+                    # asymmetry can't explain any score gap between them.
+                    if not val_part.empty:
+                        val_start = val_part["record_timestamp"].iloc[0]
+                        val_part = val_part[
+                            val_part["record_timestamp"] >= val_start + purge
+                        ]
+                    if not test_part.empty:
+                        test_start = test_part["record_timestamp"].iloc[0]
+                        test_part = test_part[
+                            test_part["record_timestamp"] >= test_start + purge
+                        ]
+                else:
+                    if not val_part.empty:
+                        val_start = val_part["record_timestamp"].iloc[0]
+                        train_part = train_part[
+                            train_part["record_timestamp"] < val_start - purge
+                        ]
+                    if not test_part.empty:
+                        test_start = test_part["record_timestamp"].iloc[0]
+                        val_part = val_part[
+                            val_part["record_timestamp"] < test_start - purge
+                        ]
 
             train_list.append(train_part)
             val_list.append(val_part)
             test_list.append(test_part)
 
         train_df = pd.concat(train_list) if train_list else df.iloc[0:0]
-        val_df = pd.concat(val_list) if val_list else df.iloc[0:0]
-        test_df = pd.concat(test_list) if test_list else df.iloc[0:0]
-        return train_df, val_df, test_df
+        middle_df = pd.concat(val_list) if val_list else df.iloc[0:0]
+        last_df = pd.concat(test_list) if test_list else df.iloc[0:0]
+
+        if self.swap_val_test:
+            # Middle chunk (purged, normally "val") -> returned as test.
+            # Last chunk (unpurged, normally "test") -> returned as val.
+            return train_df, last_df, middle_df
+        return train_df, middle_df, last_df

@@ -121,6 +121,52 @@ def test_cohort_splitter_longitudinal_purge_zero_matches_unpurged():
         pd.testing.assert_frame_equal(a.reset_index(drop=True), b.reset_index(drop=True))
 
 
+def test_cohort_splitter_swap_val_test_relabels_without_changing_the_cut():
+    """swap_val_test relabels the two post-train chunks; it doesn't recut or reroute purging.
+
+    Same fixture as test_cohort_splitter_longitudinal_purge_drops_boundary_rows
+    (10 responses, 6h apart, 0.5/0.25/0.25, purge_hours=10). Unswapped: middle
+    chunk (purged against the last chunk's start) is returned as val, last
+    chunk (never purged) is returned as test. Swapped: same two chunks, exact
+    same rows, but middle -> test and last -> val -- so the purge asymmetry
+    flips with the label: it's now "test" that's purged, and "val" that isn't.
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 10,
+        "record_timestamp": pd.date_range("2026-01-01", periods=10, freq="6h"),
+        "answer": list(range(10)),
+    })
+
+    unswapped_train, unswapped_val, unswapped_test = CohortSplitter(
+        split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25), purge_hours=10.0
+    ).split(df)
+    swapped_train, swapped_val, swapped_test = CohortSplitter(
+        split_mode="longitudinal",
+        train_val_test_split=(0.5, 0.25, 0.25),
+        purge_hours=10.0,
+        swap_val_test=True,
+    ).split(df)
+
+    # Train is untouched by the swap.
+    pd.testing.assert_frame_equal(
+        unswapped_train.reset_index(drop=True), swapped_train.reset_index(drop=True)
+    )
+    # The middle chunk's rows (purged, previously "val") now come back as test.
+    pd.testing.assert_frame_equal(
+        unswapped_val.reset_index(drop=True), swapped_test.reset_index(drop=True)
+    )
+    # The last chunk's rows (unpurged, previously "test") now come back as val.
+    pd.testing.assert_frame_equal(
+        unswapped_test.reset_index(drop=True), swapped_val.reset_index(drop=True)
+    )
+
+    # The purge asymmetry travels with the position, not the label: swapped
+    # "test" (middle chunk) is purged against swapped "val" (last chunk)'s start.
+    purge = pd.Timedelta(hours=10)
+    swapped_val_start = swapped_val["record_timestamp"].min()
+    assert (swapped_test["record_timestamp"] < swapped_val_start - purge).all()
+
+
 def test_cohort_splitter_longitudinal_purge_can_empty_a_split():
     """A purge wider than a user's total span can empty out train and val entirely.
 

@@ -65,6 +65,8 @@ class HealthDataModule(LightningDataModule):
         exclude_user_ids: Optional[List[int]] = None,
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
         purge_hours: Optional[float] = None,
+        swap_val_test: bool = False,
+        symmetric_purge_diagnostic: bool = False,
     ) -> None:
 
 
@@ -115,6 +117,22 @@ class HealthDataModule(LightningDataModule):
                 explicit value (e.g. the largest lookback in a sweep across
                 sampler configs) to keep purge width, and therefore what each
                 split contains, consistent across a comparison.
+            swap_val_test (bool): Only used when split_mode="longitudinal".
+                Diagnostic flag that relabels which post-train chunk is val
+                vs. test, without changing how either chunk is cut or purged
+                (see CohortSplitter.swap_val_test) — isolates whether a
+                val/test score gap tracks split *role* or chunk *content*.
+                Purge asymmetry flips with it: the middle chunk (now "test")
+                is purged, the last chunk (now "val") is not. Defaults to
+                False (standard behaviour, matching every other result).
+            symmetric_purge_diagnostic (bool): Only used when
+                split_mode="longitudinal". A second, distinct diagnostic:
+                purges both post-train chunks against their own start,
+                rather than only the middle chunk against the last chunk's
+                start. Isolates whether the middle vs. last chunk differ for
+                a content reason, independent of which one is normally
+                purged (see CohortSplitter.symmetric_purge_diagnostic).
+                Mutually exclusive with swap_val_test. Defaults to False.
         """
         super().__init__()
         if include_time_features is not None and hasattr(sampler, "include_time_features"):
@@ -429,6 +447,8 @@ class HealthDataModule(LightningDataModule):
             train_val_test_split=self.hparams.train_val_test_split,
             random_state=self.hparams.random_state,
             purge_hours=purge_hours,
+            swap_val_test=self.hparams.swap_val_test,
+            symmetric_purge_diagnostic=self.hparams.symmetric_purge_diagnostic,
         )
         return splitter.split(df)
 
