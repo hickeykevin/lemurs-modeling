@@ -1,0 +1,36 @@
+defaults:
+  - model_checkpoint
+  - early_stopping
+  - model_summary
+  - tqdm_progress_bar
+  - classification_metrics
+  - within_person_auroc
+  - _self_
+
+# Same base callbacks as configs/callbacks/default.yaml, with one change:
+# early_stopping.strict is False here. A walk-forward fold's val split is
+# sized by val_responses (a small fixed count per user, not a fraction of
+# the whole cohort like CVHealthDataModule's), so some folds can end up with
+# an empty val_dataloader (fewer than one batch) after purging -- when that
+# happens, ClassificationMetricsCallback never logs val/auroc at all for
+# that epoch, and a strict EarlyStopping crashes the entire run instead of
+# just skipping early stopping for that fold. wf_cv_train.py already
+# tolerates a missing "best" checkpoint (falls back to current weights with
+# a warning), so relaxing strictness here is a real fix, not a workaround
+# that hides a different problem.
+model_checkpoint:
+  dirpath: ${paths.output_dir}/checkpoints
+  filename: "epoch_{epoch:03d}"
+  monitor: "val/auroc"
+  mode: "max"
+  save_last: True
+  auto_insert_metric_name: False
+
+early_stopping:
+  monitor: "val/auroc"
+  patience: 100
+  mode: "max"
+  strict: False
+
+model_summary:
+  max_depth: -1

@@ -1,0 +1,47 @@
+defaults:
+  - _self_
+  - aggregator: suicide_risk
+  - sampler: interval_aware
+  - scaler: dual
+  - preprocessors: [step, calorie]
+
+_target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
+modalities: ["step", "calorie"]
+
+# Per-user, purged, expanding-window walk-forward CV. Answers "given a
+# user's own history, can the model forecast their near-future risk?" --
+# see WalkForwardHealthDataModule and CohortSplitter.split_walk_forward.
+#
+# Values below are sized from this cohort's actual response-count
+# distribution (44 users after exclusions, median ~45-51 responses/user,
+# p5 ~9.4 among ever-positive users -- see the response-count exploration
+# in the walk-forward-cv branch history). burn_in below p5 for positive
+# users means almost every ever-positive user clears burn-in and
+# contributes at least one fold; step/val sized similarly so early folds
+# aren't wildly smaller than later ones. Re-derive these if the cohort
+# changes materially (more enrolled users, a different survey cadence).
+burn_in_responses: 8
+step_responses: 8
+val_responses: 2
+current_fold: 0
+
+batch_size: 16
+num_workers: 1
+pin_memory: False
+random_state: ${seed}
+os_filter: both # both, ios, android
+
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+include_time_features: true
+
+use_demographics: true
+use_sleep: true
+
+# Purge gap (hours) at every fold's train/val and val/test boundary. null
+# derives it from the sampler's own lookback window, same as
+# split_mode="longitudinal" in configs/data/default.yaml.
+purge_hours: null
+
+exclude_user_ids: null
