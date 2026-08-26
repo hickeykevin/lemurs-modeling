@@ -166,3 +166,6 @@ configs/local/default.yaml
 
 # any slurm files
 slurm*
+
+# macOS Finder metadata
+.DS_Store
