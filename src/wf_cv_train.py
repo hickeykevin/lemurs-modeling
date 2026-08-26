@@ -218,7 +218,7 @@ def _compute_pooled_metrics(pooled_df: pd.DataFrame, log: RankedLogger) -> Dict[
     metrics["pooled/n_users"] = float(pooled_df["app_user_id"].nunique())
     metrics["pooled/n_positive"] = float(y_true.sum())
 
-    ci = _cluster_bootstrap_ci(pooled_df, prob_cols[1], n_bootstraps=1000, seed=0)
+    ci = _cluster_bootstrap_ci(pooled_df, prob_cols[1], n_bootstraps=1000, seed=0, log=log)
     metrics.update(ci)
 
     log.info(
@@ -236,46 +236,104 @@ def _compute_pooled_metrics(pooled_df: pd.DataFrame, log: RankedLogger) -> Dict[
 
 
 def _cluster_bootstrap_ci(
-    pooled_df: pd.DataFrame, prob_col: str, n_bootstraps: int, seed: int
+    pooled_df: pd.DataFrame, prob_col: str, n_bootstraps: int, seed: int, log: RankedLogger
 ) -> Dict[str, float]:
-    """Percentile bootstrap CI for pooled AUROC/AUPRC, resampling whole users with replacement.
+    """BCa (bias-corrected and accelerated) bootstrap CI for pooled AUROC/AUPRC,
+    resampling whole users with replacement.
 
-    Each bootstrap replicate draws a set of users (with replacement, same
-    size as the original user count) and pools every one of their
-    predictions across every fold — matching the "resample the population"
-    logic a cluster bootstrap requires, rather than resampling individual
-    rows independently of which user they came from.
+    Resampling by app_user_id, not by row, matches this cohort's actual
+    source of variance: positives are concentrated in a handful of
+    participants (see CohortSplitter's class docstring), so a row-level
+    bootstrap would understate uncertainty by treating each of one user's
+    many responses as an independent draw.
+
+    Uses scipy.stats.bootstrap(method="BCa") rather than a plain percentile
+    cut. AUROC/AUPRC are bounded in [0, 1] and, at the scores this pipeline
+    typically produces, sit close enough to that ceiling that their
+    bootstrap distribution is skewed rather than symmetric; with as few as
+    ~28-30 independent clusters (users), a naive percentile interval can be
+    visibly biased relative to the true sampling distribution. BCa corrects
+    for that skew (the "bias-corrected" part) and for the statistic's
+    variance changing with its own value (the "accelerated" part), using a
+    jackknife (leave-one-user-out) estimate computed internally by scipy —
+    still a resampling-based, no-normality-assumed interval, just a
+    better-calibrated one than the plain percentile method previously used
+    here.
+
+    ``data=(user_idx,)`` is an array of *indices into the unique-user list*,
+    one entry per user — this is what scipy resamples (with replacement)
+    for every bootstrap replicate and jackknife pass. ``_stat`` expands
+    whichever user indices a given resample drew into their pooled rows
+    and computes the metric, so the actual clustering (resample users, not
+    rows) happens inside the statistic function while scipy handles the
+    resampling loop, the jackknife bias/acceleration correction, and the
+    interval construction.
     """
     from sklearn.metrics import roc_auc_score, average_precision_score
+    from scipy.stats import bootstrap, DegenerateDataWarning
 
     users = pooled_df["app_user_id"].unique()
-    rng = np.random.RandomState(seed)
+    n_users = len(users)
+    # Pre-split rows by user once, so each replicate/jackknife call is a
+    # cheap list lookup + concat rather than a fresh boolean mask over the
+    # full pooled_df.
+    rows_by_user = {u: pooled_df[pooled_df["app_user_id"] == u] for u in users}
 
-    aurocs, auprcs = [], []
-    for _ in range(n_bootstraps):
-        sampled_users = rng.choice(users, size=len(users), replace=True)
-        rows = pd.concat([pooled_df[pooled_df["app_user_id"] == u] for u in sampled_users], ignore_index=True)
+    def _pooled_metric(user_idx: np.ndarray, metric_fn) -> float:
+        sampled_users = users[user_idx.astype(int)]
+        rows = pd.concat([rows_by_user[u] for u in sampled_users], ignore_index=True)
         y_true = rows["y_true"].to_numpy()
         if len(np.unique(y_true)) < 2:
-            continue
-        y_score = rows[prob_col].to_numpy()
-        aurocs.append(roc_auc_score(y_true, y_score))
-        auprcs.append(average_precision_score(y_true, y_score))
+            return float("nan")  # degenerate resample: only one class present
+        return float(metric_fn(y_true, rows[prob_col].to_numpy()))
 
-    def _pct_ci(values: List[float]) -> Tuple[float, float]:
-        if not values:
-            return float("nan"), float("nan")
-        return float(np.percentile(values, 2.5)), float(np.percentile(values, 97.5))
+    def _auroc_stat(user_idx, axis=None):
+        return _pooled_metric(np.asarray(user_idx).reshape(-1), roc_auc_score)
 
-    auroc_lo, auroc_hi = _pct_ci(aurocs)
-    auprc_lo, auprc_hi = _pct_ci(auprcs)
-    return {
-        "pooled/auroc_ci_low": auroc_lo,
-        "pooled/auroc_ci_high": auroc_hi,
-        "pooled/auprc_ci_low": auprc_lo,
-        "pooled/auprc_ci_high": auprc_hi,
-        "pooled/n_bootstraps_used": float(len(aurocs)),
-    }
+    def _auprc_stat(user_idx, axis=None):
+        return _pooled_metric(np.asarray(user_idx).reshape(-1), average_precision_score)
+
+    user_idx_array = np.arange(n_users)
+    results = {}
+    for name, stat_fn in (("auroc", _auroc_stat), ("auprc", _auprc_stat)):
+        # _pooled_metric returns nan for a resample/jackknife sample that
+        # happens to draw only one class (e.g. every positive-holding user
+        # got left out). A handful of nans among thousands of bootstrap
+        # values is normal and fine -- but BCa also needs a jackknife
+        # (leave-one-user-out) pass, and if a SINGLE user holds all the
+        # positives, every leave-one-out sample is degenerate and BCa is
+        # not computable at all, not just noisier. scipy detects this and
+        # emits DegenerateDataWarning; we surface it as a real warning
+        # (not swallow it) and fall back to nan bounds so the caller can
+        # see the CI genuinely could not be constructed for this cohort.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", category=DegenerateDataWarning)
+            try:
+                res = bootstrap(
+                    (user_idx_array,),
+                    stat_fn,
+                    n_resamples=n_bootstraps,
+                    method="BCa",
+                    vectorized=False,
+                    rng=seed,
+                )
+                results[f"pooled/{name}_ci_low"] = float(res.confidence_interval.low)
+                results[f"pooled/{name}_ci_high"] = float(res.confidence_interval.high)
+            except Exception as e:
+                log.warning(
+                    f"BCa bootstrap CI failed for {name} ({e!r}); reporting nan bounds."
+                )
+                results[f"pooled/{name}_ci_low"] = float("nan")
+                results[f"pooled/{name}_ci_high"] = float("nan")
+            for w in caught:
+                log.warning(
+                    f"BCa bootstrap CI for {name}: {w.message} (cohort likely has too "
+                    "few independent positive-holding users for BCa's jackknife "
+                    "correction; bounds may be nan or unreliable)."
+                )
+
+    results["pooled/n_bootstraps_used"] = float(n_bootstraps)
+    return results
 
 
 def _fold_breakdown_table(pooled_df: pd.DataFrame, log: RankedLogger) -> pd.DataFrame:
