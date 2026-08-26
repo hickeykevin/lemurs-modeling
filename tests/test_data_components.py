@@ -755,6 +755,29 @@ def test_cohort_splitter_cyclic_short_user_produces_no_folds():
     assert folds == []
 
 
+def test_cohort_splitter_cyclic_train_is_exact_complement_of_test_when_widths_sum_to_one():
+    """When train_width_pct + step_pct == 1.0 (e.g. 0.75/0.25 -- ordinary
+    4-fold CV with contiguous, wrapped train blocks), every fold's train set
+    should be EXACTLY the rest of the user's data not in that fold's test
+    set: no gap, no overlap, with no purging (purge_hours=0 here isolates
+    this from the purge-driven shrinkage the purge test already covers)."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 40,
+        "record_timestamp": pd.date_range("2026-01-01", periods=40, freq="1h"),
+        "answer": list(range(40)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.75, step_pct=0.25)
+
+    assert len(folds) == 4
+    all_answers = set(range(40))
+    for fold in folds:
+        train_answers = set(fold.train_df["answer"])
+        test_answers = set(fold.test_df["answer"])
+        assert train_answers.isdisjoint(test_answers)
+        assert train_answers | test_answers == all_answers
+
+
 def test_lookback_hours_from_sampler():
     """Derives purge width from window_bounds rather than a type-specific attribute."""
 
