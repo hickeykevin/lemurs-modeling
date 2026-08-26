@@ -418,3 +418,139 @@ class CohortSplitter:
             result.append(WalkForwardFold(train_df, val_df, test_df, fold_index))
 
         return result
+
+    def split_walk_forward_pct(
+        self,
+        df: pd.DataFrame,
+        burn_in_pct: float,
+        step_pct: float,
+        val_pct: float = 0.0,
+    ) -> List[WalkForwardFold]:
+        """Per-user, purged, expanding-window walk-forward split, cut by percentage
+        of each user's own response count rather than a fixed response count.
+
+        Answers the same question as ``split_walk_forward`` ("given a user's own
+        history, can the model forecast their near-future risk?"), with a
+        different tradeoff: ``split_walk_forward`` sizes every fold's test
+        window to the same fixed *count* of responses, so a user runs out of
+        remaining data at a different fold than other users do, and later
+        folds shed users one by one -- the last fold or two can end up with
+        only a handful of users and a near-empty pooled test set. Here every
+        fold's test window is instead a fixed *fraction* of that user's own
+        total response count, so it scales with however much data a user has
+        and every user who clears ``burn_in_pct`` contributes to every fold
+        this method produces. Fold count is therefore uniform (bounded by
+        ``(1.0 - burn_in_pct) / step_pct``, same math for every user) rather
+        than emergent per-user the way ``split_walk_forward``'s is.
+
+        Cuts are computed the same way ``split_mode="longitudinal"`` computes
+        its single train/val/test cut (``int(n * fraction)``), just applied
+        repeatedly instead of once. Purging at every fold's train/test
+        boundary (and train/val, val/test when ``val_pct`` is set) uses the
+        same logic as ``split_walk_forward`` -- see its docstring and the
+        class docstring for why this matters.
+
+        Folds are still aligned by position, not calendar date, with the same
+        caveat as ``split_walk_forward``: fold *k* is "this user's Nth
+        walk-forward step as a fraction of their own history," not a shared
+        time window across users. What changes here is that pooling across
+        users within a fold index is on much steadier footing, since every
+        eligible user actually contributes to every fold rather than only
+        the users with the most absolute data surviving into later folds.
+
+        Args:
+            df: The master linked dataframe to split.
+            burn_in_pct: Fraction (0 < burn_in_pct < 1) of a user's earliest
+                responses reserved for the first fold's training set before
+                any forecasting is evaluated for that user.
+            step_pct: Fraction of a user's total responses each successive
+                fold's test window covers, and by which the train window
+                expands. The loop stops once a fold's test window would
+                extend past 100% of a user's responses.
+            val_pct: Fraction of a user's total responses each fold's
+                validation window covers. Defaults to 0.0: no validation
+                window at all, same behavior and rationale as
+                ``split_walk_forward``'s ``val_responses=0`` default -- see
+                that method's docstring.
+
+        Returns:
+            A list of ``WalkForwardFold`` namedtuples, ordered first by
+            ``fold_index`` then by the order users appear in ``df``. Empty
+            if no user clears burn-in. ``val_df`` is an empty (but correctly
+            columned) DataFrame on every fold when ``val_pct == 0.0``.
+        """
+        if not (0.0 < burn_in_pct < 1.0):
+            raise ValueError(f"burn_in_pct must be in (0, 1); got {burn_in_pct}")
+        if not (0.0 < step_pct < 1.0):
+            raise ValueError(f"step_pct must be in (0, 1); got {step_pct}")
+        if not (0.0 <= val_pct < 1.0):
+            raise ValueError(f"val_pct must be in [0, 1); got {val_pct}")
+
+        purge = pd.Timedelta(hours=self.purge_hours) if self.purge_hours else pd.Timedelta(0)
+
+        folds_by_index: dict = {}
+
+        for _, group in df.groupby("app_user_id"):
+            group = group.sort_values("record_timestamp")
+            n = len(group)
+
+            fold_index = 0
+            cum_pct = burn_in_pct
+            while True:
+                val_pct_end = cum_pct + val_pct
+                test_pct_end = val_pct_end + step_pct
+                if test_pct_end > 1.0:
+                    break
+
+                train_end = int(n * cum_pct)
+                val_end = int(n * val_pct_end)
+                test_end = int(n * test_pct_end)
+
+                # A fold whose cut points round down to the same index (e.g.
+                # a user with very few responses and a small step_pct) has no
+                # test rows -- skip it for this user rather than emitting an
+                # empty test fold that would look identical to "correctly
+                # excluded by rounding" and "a real zero-width window".
+                if test_end <= val_end:
+                    break
+
+                train_part = group.iloc[:train_end]
+                val_part = group.iloc[train_end:val_end]  # empty when val_pct == 0
+                test_part = group.iloc[val_end:test_end]
+
+                if purge > pd.Timedelta(0):
+                    if val_pct > 0.0:
+                        if not val_part.empty:
+                            val_start = val_part["record_timestamp"].iloc[0]
+                            train_part = train_part[
+                                train_part["record_timestamp"] < val_start - purge
+                            ]
+                        if not test_part.empty:
+                            test_start = test_part["record_timestamp"].iloc[0]
+                            val_part = val_part[
+                                val_part["record_timestamp"] < test_start - purge
+                            ]
+                    else:
+                        if not test_part.empty:
+                            test_start = test_part["record_timestamp"].iloc[0]
+                            train_part = train_part[
+                                train_part["record_timestamp"] < test_start - purge
+                            ]
+
+                folds_by_index.setdefault(fold_index, ([], [], []))
+                folds_by_index[fold_index][0].append(train_part)
+                folds_by_index[fold_index][1].append(val_part)
+                folds_by_index[fold_index][2].append(test_part)
+
+                fold_index += 1
+                cum_pct = test_pct_end  # expanding window: next fold's train includes this fold's test
+
+        result: List[WalkForwardFold] = []
+        for fold_index in sorted(folds_by_index.keys()):
+            train_list, val_list, test_list = folds_by_index[fold_index]
+            train_df = pd.concat(train_list) if train_list else df.iloc[0:0]
+            val_df = pd.concat(val_list) if val_list else df.iloc[0:0]
+            test_df = pd.concat(test_list) if test_list else df.iloc[0:0]
+            result.append(WalkForwardFold(train_df, val_df, test_df, fold_index))
+
+        return result

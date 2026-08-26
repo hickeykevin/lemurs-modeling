@@ -241,3 +241,83 @@ def test_val_responses_omitted_defaults_to_zero():
     assert dm_default.hparams.val_responses == 0
     dm_default.setup()
     assert len(dm_default.data_val) == 0
+
+
+def test_fold_sizing_count_requires_count_params():
+    modality_dfs, master_df, demographics_df = _cohort()
+    with pytest.raises(ValueError, match="burn_in_responses"):
+        WalkForwardHealthDataModule(
+            aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
+            sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
+            fold_sizing="count",
+            prebuilt_cohort=(modality_dfs, master_df, demographics_df),
+        )
+
+
+def test_fold_sizing_pct_requires_pct_params():
+    modality_dfs, master_df, demographics_df = _cohort()
+    with pytest.raises(ValueError, match="burn_in_pct"):
+        WalkForwardHealthDataModule(
+            aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
+            sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
+            fold_sizing="pct",
+            prebuilt_cohort=(modality_dfs, master_df, demographics_df),
+        )
+
+
+def test_fold_sizing_invalid_value_raises():
+    modality_dfs, master_df, demographics_df = _cohort()
+    with pytest.raises(ValueError, match="fold_sizing"):
+        WalkForwardHealthDataModule(
+            aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
+            sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
+            fold_sizing="bogus",
+            prebuilt_cohort=(modality_dfs, master_df, demographics_df),
+        )
+
+
+def _make_pct_dm(current_fold=0, **overrides):
+    modality_dfs, master_df, demographics_df = _cohort()
+    kwargs = dict(
+        aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
+        sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
+        fold_sizing="pct",
+        burn_in_pct=0.5,
+        step_pct=0.15,
+        current_fold=current_fold,
+        use_demographics=False,
+        use_sleep=False,
+        use_survey_context=False,
+        require_sensor_data=False,
+        prebuilt_cohort=(modality_dfs, master_df, demographics_df),
+    )
+    kwargs.update(overrides)
+    return WalkForwardHealthDataModule(**kwargs)
+
+
+def test_fold_sizing_pct_builds_datasets_end_to_end():
+    """fold_sizing='pct' drives the real setup()/dataset-construction path,
+    not just CohortSplitter.split_walk_forward_pct in isolation."""
+    dm = _make_pct_dm()
+    n_folds = dm.get_num_folds()
+    assert n_folds > 0
+
+    dm.setup()
+    assert len(dm.data_train) > 0
+    assert len(dm.data_test) > 0
+    assert len(dm.data_val) == 0  # val_pct defaults to 0.0
+
+
+def test_fold_sizing_pct_every_user_reaches_every_fold_end_to_end():
+    """The property that motivated fold_sizing='pct': unlike 'count', every
+    user with enough data to clear burn-in should appear in every fold's
+    test set, checked through the real datamodule (both users in _cohort()
+    have the same response count here, so this also exercises the
+    multi-fold path without needing per-user response-count variation)."""
+    n_folds = _make_pct_dm().get_num_folds()
+    assert n_folds >= 1
+
+    for fold in range(n_folds):
+        dm = _make_pct_dm(current_fold=fold)
+        dm.setup()
+        assert set(dm.data_test.data_links["app_user_id"]) == {1, 2}

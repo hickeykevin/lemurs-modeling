@@ -12,32 +12,35 @@ modalities: ["step", "calorie"]
 # user's own history, can the model forecast their near-future risk?" --
 # see WalkForwardHealthDataModule and CohortSplitter.split_walk_forward.
 #
-# Values below are sized from this cohort's actual response-count
+# fold_sizing="pct": each fold's train/test cut is a FRACTION of each
+# user's own total response count, rather than a fixed absolute count
+# (fold_sizing="count", the earlier approach -- burn_in_responses/
+# step_responses/val_responses below are its params, unused while
+# fold_sizing="pct"). The count-based version's test window is a fixed
+# size for every user, so users with less remaining history stop
+# contributing to later folds one by one, and the last fold or two end up
+# thin (in this cohort: as few as 1 user / 8 predictions / 0 positives).
+# Percentage-based sizing fixes this: every eligible user contributes to
+# every fold, since test size scales with their own total. Against this
+# cohort, burn_in_pct=0.4/step_pct=0.15 gives 4 folds with a near-flat
+# ~28 users each (28,28,28,28) and 733 pooled test predictions, vs. the
+# count-based version's 25->21->19->14->4->1 user decay across 6 folds.
+# See CohortSplitter.split_walk_forward_pct and
+# WalkForwardHealthDataModule's docstring for the full mechanics.
+fold_sizing: pct
+burn_in_pct: 0.4
+step_pct: 0.15
+val_pct: 0.0
+current_fold: 0
+
+# Unused while fold_sizing="pct" above; kept so switching back to
+# fold_sizing="count" (see CohortSplitter.split_walk_forward) doesn't
+# require re-adding these. Sized from this cohort's actual response-count
 # distribution (44 users after exclusions, median ~45-51 responses/user,
-# p5 ~9.4 among ever-positive users -- see the response-count exploration
-# in the walk-forward-cv branch history). Re-derive these if the cohort
-# changes materially (more enrolled users, a different survey cadence).
-#
-# burn_in_responses=16 (raised from an initial 8) trades a small amount of
-# user coverage for a substantially larger per-fold training set: at
-# burn_in=8, fold 0 trains on 43 pooled rows across 27/31 covered users;
-# at burn_in=16, fold 0 trains on 236 pooled rows across 25/31 users --
-# roughly 5.5x more train data for 2 fewer users of coverage. Every later
-# fold's train set is `burn_in + fold_index * step_responses` pooled rows,
-# so this floor lifts every fold, not just fold 0. See
-# WalkForwardHealthDataModule's docstring for why raising burn_in and
-# raising step_responses both grow train size at the cost of fold count /
-# coverage -- there's no lever that grows train size for free.
-#
-# val_responses=0: no validation window at all (every fold is just
-# train | purge | test) -- see WalkForwardHealthDataModule's docstring.
-# Every fold trains for its full configured epoch budget and is tested
-# with the final-epoch weights, since there is no val/* metric for
-# EarlyStopping/ModelCheckpoint to monitor.
+# p5 ~9.4 among ever-positive users) when they were last used directly.
 burn_in_responses: 16
 step_responses: 8
 val_responses: 0
-current_fold: 0
 
 batch_size: 16
 num_workers: 1

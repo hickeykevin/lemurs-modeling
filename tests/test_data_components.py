@@ -445,6 +445,160 @@ def test_cohort_splitter_walk_forward_purge_can_empty_a_folds_train_or_val():
         assert not fold.test_df.empty  # test is never purged against anything after it
 
 
+def test_cohort_splitter_walk_forward_pct_basic_shape():
+    """burn_in=50%, step=15%, no purge: fold cuts scale with each user's own response count.
+
+    User 1: 20 responses. Fold 0: train=[0,50%)=[0,10), test=[50%,65%)=[10,13).
+    Fold 1: train=[0,65%)=[0,13), test=[65%,80%)=[13,16). Fold 2: train=[0,80%)=
+    [0,16), test=[80%,95%)=[16,19). Fold 3 would need test_pct_end=1.10 > 1.0 -> stops.
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 20,
+        "record_timestamp": pd.date_range("2026-01-01", periods=20, freq="1h"),
+        "answer": list(range(20)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+
+    assert [f.fold_index for f in folds] == [0, 1, 2]
+    assert list(folds[0].train_df["answer"]) == list(range(10))
+    assert list(folds[0].test_df["answer"]) == [10, 11, 12]
+    assert list(folds[1].train_df["answer"]) == list(range(13))
+    assert list(folds[1].test_df["answer"]) == [13, 14, 15]
+    assert list(folds[2].train_df["answer"]) == list(range(16))
+    assert list(folds[2].test_df["answer"]) == [16, 17, 18]
+
+
+def test_cohort_splitter_walk_forward_pct_every_user_contributes_to_every_fold():
+    """The whole point of the pct-based split: unlike the fixed-count version,
+    users with different total response counts still all contribute to the
+    same set of folds, since test size scales with each user's own total."""
+    rows = []
+    for uid, n in [(1, 20), (2, 50), (3, 100)]:
+        for i in range(n):
+            rows.append({
+                "app_user_id": uid,
+                "record_timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(hours=i),
+                "answer": i,
+            })
+    df = pd.DataFrame(rows)
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+
+    assert len(folds) > 0
+    for fold in folds:
+        assert set(fold.test_df["app_user_id"]) == {1, 2, 3}
+
+
+def test_cohort_splitter_walk_forward_pct_test_fraction_is_consistent_across_users():
+    """Each fold's test window is ~step_pct of that user's own total, regardless
+    of how many total responses they have -- this is what prevents the tiny
+    tail folds split_walk_forward (fixed-count) can produce."""
+    rows = []
+    for uid, n in [(1, 20), (2, 200)]:
+        for i in range(n):
+            rows.append({
+                "app_user_id": uid,
+                "record_timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(hours=i),
+                "answer": i,
+            })
+    df = pd.DataFrame(rows)
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+
+    fold0 = folds[0]
+    n1 = len(fold0.test_df[fold0.test_df["app_user_id"] == 1])
+    n2 = len(fold0.test_df[fold0.test_df["app_user_id"] == 2])
+    # 15% of 20 ~= 3, 15% of 200 = 30 -- both close to their own 15%, not a
+    # shared absolute count the way split_walk_forward's step_responses is.
+    assert n1 == 3
+    assert n2 == 30
+
+
+def test_cohort_splitter_walk_forward_pct_val_pct_zero_is_default_and_no_val_window():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 20,
+        "record_timestamp": pd.date_range("2026-01-01", periods=20, freq="1h"),
+        "answer": list(range(20)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+
+    folds_default = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+    folds_explicit = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15, val_pct=0.0)
+
+    for folds in (folds_default, folds_explicit):
+        for fold in folds:
+            assert fold.val_df.empty
+
+
+def test_cohort_splitter_walk_forward_pct_purges_train_against_test_start():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 20,
+        "record_timestamp": pd.date_range("2026-01-01", periods=20, freq="1h"),
+        "answer": list(range(20)),
+    })
+    splitter = CohortSplitter(purge_hours=1.5)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+
+    purge = pd.Timedelta(hours=1.5)
+    for fold in folds:
+        if fold.train_df.empty or fold.test_df.empty:
+            continue
+        test_start = fold.test_df["record_timestamp"].min()
+        assert (fold.train_df["record_timestamp"] < test_start - purge).all()
+
+
+def test_cohort_splitter_walk_forward_pct_no_response_is_a_test_example_twice():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 40,
+        "record_timestamp": pd.date_range("2026-01-01", periods=40, freq="1h"),
+        "answer": list(range(40)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.4, step_pct=0.1)
+
+    seen = []
+    for fold in folds:
+        seen.extend(fold.test_df["answer"].tolist())
+    assert len(seen) == len(set(seen))
+
+
+def test_cohort_splitter_walk_forward_pct_invalid_args_raise():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 10,
+        "record_timestamp": pd.date_range("2026-01-01", periods=10, freq="1h"),
+        "answer": list(range(10)),
+    })
+    splitter = CohortSplitter()
+    with pytest.raises(ValueError, match="burn_in_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=0.0, step_pct=0.1)
+    with pytest.raises(ValueError, match="burn_in_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=1.0, step_pct=0.1)
+    with pytest.raises(ValueError, match="step_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.0)
+    with pytest.raises(ValueError, match="step_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=1.0)
+    with pytest.raises(ValueError, match="val_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.1, val_pct=-0.1)
+    with pytest.raises(ValueError, match="val_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.1, val_pct=1.0)
+
+
+def test_cohort_splitter_walk_forward_pct_short_user_produces_no_folds():
+    """A user with too few responses for even one fold's test window to have
+    rounding-nonzero width is skipped (see the test_end <= val_end guard)."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 3,
+        "record_timestamp": pd.date_range("2026-01-01", periods=3, freq="1h"),
+        "answer": list(range(3)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+    assert folds == []
+
+
 def test_lookback_hours_from_sampler():
     """Derives purge width from window_bounds rather than a type-specific attribute."""
 

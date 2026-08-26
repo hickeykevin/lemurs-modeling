@@ -72,9 +72,13 @@ class WalkForwardHealthDataModule(HealthDataModule):
         self,
         aggregator: LabelAggregator,
         sampler: TimeSampler,
-        burn_in_responses: int,
-        step_responses: int,
+        burn_in_responses: Optional[int] = None,
+        step_responses: Optional[int] = None,
         val_responses: int = 0,
+        fold_sizing: Literal["count", "pct"] = "count",
+        burn_in_pct: Optional[float] = None,
+        step_pct: Optional[float] = None,
+        val_pct: float = 0.0,
         current_fold: int = 0,
         scaler: Optional[Any] = None,
         preprocessors: Optional[Dict[str, Any]] = None,
@@ -99,22 +103,46 @@ class WalkForwardHealthDataModule(HealthDataModule):
         """Initializes the WalkForwardHealthDataModule.
 
         Args:
-            burn_in_responses: Minimum number of a user's earliest responses
-                reserved for the first fold's training set before any
-                forecasting is evaluated for that user. See
-                ``CohortSplitter.split_walk_forward``.
-            step_responses: Number of responses each successive fold's test
-                window covers, and by which the train window expands.
-            val_responses: Number of responses each fold's validation window
-                covers. Defaults to 0: no validation window at all -- every
-                fold is just train | purge | test, no rows are set aside for
-                early stopping / checkpoint selection, ``data_val`` is an
-                empty dataset every fold, and (with no ``val/*`` metric ever
+            fold_sizing: Which ``CohortSplitter`` fold-construction method to
+                use. ``"count"`` (default): fixed *response count* per fold
+                (``CohortSplitter.split_walk_forward``, driven by
+                ``burn_in_responses``/``step_responses``/``val_responses``) --
+                every fold's test window is the same absolute size, so users
+                with less remaining history stop contributing to later folds
+                one by one, and the last fold or two can end up with only a
+                handful of users. ``"pct"``: fixed *fraction of each user's
+                own total responses* per fold
+                (``CohortSplitter.split_walk_forward_pct``, driven by
+                ``burn_in_pct``/``step_pct``/``val_pct``) -- every eligible
+                user contributes to every fold this method produces, since
+                test size scales with their own total rather than a shared
+                absolute count.
+            burn_in_responses: ``fold_sizing="count"`` only. Minimum number of
+                a user's earliest responses reserved for the first fold's
+                training set before any forecasting is evaluated for that
+                user. See ``CohortSplitter.split_walk_forward``.
+            step_responses: ``fold_sizing="count"`` only. Number of responses
+                each successive fold's test window covers, and by which the
+                train window expands.
+            val_responses: ``fold_sizing="count"`` only. Number of responses
+                each fold's validation window covers. Defaults to 0.
+            burn_in_pct: ``fold_sizing="pct"`` only. Fraction (0 < x < 1) of a
+                user's earliest responses reserved for the first fold's
+                training set. See ``CohortSplitter.split_walk_forward_pct``.
+            step_pct: ``fold_sizing="pct"`` only. Fraction of a user's total
+                responses each successive fold's test window covers.
+            val_pct: ``fold_sizing="pct"`` only. Fraction of a user's total
+                responses each fold's validation window covers. Defaults to
+                0.0.
+            (``val_responses``/``val_pct``, whichever applies): Defaults to
+                no validation window at all -- every fold is just
+                train | purge | test, no rows are set aside for early
+                stopping / checkpoint selection, ``data_val`` is an empty
+                dataset every fold, and (with no ``val/*`` metric ever
                 logged) ``EarlyStopping``/``ModelCheckpoint`` never have
                 anything to monitor -- a caller should expect every fold to
                 train for its full configured epoch budget and evaluate
-                whatever weights exist at the end of training. See
-                ``CohortSplitter.split_walk_forward``.
+                whatever weights exist at the end of training.
             current_fold: Which walk-forward fold (0-indexed, chronological)
                 to build ``data_train``/``data_val``/``data_test`` for. An
                 orchestration script loops this the way ``cv_train.py`` loops
@@ -122,13 +150,27 @@ class WalkForwardHealthDataModule(HealthDataModule):
                 ``get_num_folds()`` for how many folds exist for this cohort
                 and configuration.
             purge_hours: Width of the gap purged around every fold's
-                train/test boundary (or train/val and val/test, when
-                ``val_responses`` is set). Defaults to the sampler's own
+                train/test boundary (or train/val and val/test, when a val
+                window is configured). Defaults to the sampler's own
                 lookback window when None, same as the base class's
                 "longitudinal" mode — see ``lookback_hours_from_sampler``.
 
         See ``HealthDataModule`` for all other arguments.
         """
+        if fold_sizing == "count":
+            if burn_in_responses is None or step_responses is None:
+                raise ValueError(
+                    "fold_sizing='count' requires burn_in_responses and "
+                    "step_responses to be set."
+                )
+        elif fold_sizing == "pct":
+            if burn_in_pct is None or step_pct is None:
+                raise ValueError(
+                    "fold_sizing='pct' requires burn_in_pct and step_pct to be set."
+                )
+        else:
+            raise ValueError(f"fold_sizing must be 'count' or 'pct'; got {fold_sizing!r}")
+
         super().__init__(
             aggregator=aggregator,
             sampler=sampler,
@@ -158,6 +200,10 @@ class WalkForwardHealthDataModule(HealthDataModule):
         self.hparams.burn_in_responses = burn_in_responses
         self.hparams.step_responses = step_responses
         self.hparams.val_responses = val_responses
+        self.hparams.fold_sizing = fold_sizing
+        self.hparams.burn_in_pct = burn_in_pct
+        self.hparams.step_pct = step_pct
+        self.hparams.val_pct = val_pct
         self.hparams.current_fold = current_fold
         # Re-save hyperparameters to capture the walk-forward-specific fields
         self.save_hyperparameters(logger=False)
@@ -190,24 +236,40 @@ class WalkForwardHealthDataModule(HealthDataModule):
                 purge_hours = lookback_hours_from_sampler(self.hparams.sampler)
 
             splitter = CohortSplitter(purge_hours=purge_hours)
-            self._folds = splitter.split_walk_forward(
-                df,
-                burn_in_responses=self.hparams.burn_in_responses,
-                step_responses=self.hparams.step_responses,
-                val_responses=self.hparams.val_responses,
-            )
+            if self.hparams.fold_sizing == "pct":
+                self._folds = splitter.split_walk_forward_pct(
+                    df,
+                    burn_in_pct=self.hparams.burn_in_pct,
+                    step_pct=self.hparams.step_pct,
+                    val_pct=self.hparams.val_pct,
+                )
+            else:
+                self._folds = splitter.split_walk_forward(
+                    df,
+                    burn_in_responses=self.hparams.burn_in_responses,
+                    step_responses=self.hparams.step_responses,
+                    val_responses=self.hparams.val_responses,
+                )
         return self._folds
 
     def _split_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Returns the (train, val, test) triple for ``self.hparams.current_fold``."""
         folds = self._get_folds(df)
         if not folds:
+            if self.hparams.fold_sizing == "pct":
+                params_msg = (
+                    f"burn_in_pct={self.hparams.burn_in_pct} + "
+                    f"val_pct={self.hparams.val_pct} + step_pct={self.hparams.step_pct}"
+                )
+            else:
+                params_msg = (
+                    f"burn_in_responses={self.hparams.burn_in_responses} + "
+                    f"val_responses={self.hparams.val_responses} + "
+                    f"step_responses={self.hparams.step_responses}"
+                )
             raise MisconfigurationException(
-                "No user in this cohort has enough responses to clear "
-                f"burn_in_responses={self.hparams.burn_in_responses} + "
-                f"val_responses={self.hparams.val_responses} + "
-                f"step_responses={self.hparams.step_responses}. Lower these, "
-                "or check the cohort's response-count distribution."
+                f"No user in this cohort has enough responses to clear {params_msg}. "
+                "Lower these, or check the cohort's response-count distribution."
             )
         fold_idx = self.hparams.current_fold
         if not (0 <= fold_idx < len(folds)):
