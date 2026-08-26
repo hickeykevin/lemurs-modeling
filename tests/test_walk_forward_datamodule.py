@@ -191,3 +191,53 @@ def test_rebuilt_val_test_share_train_fitted_state_with_base_class():
     assert dm.data_test.scaler is dm.hparams.scaler
     assert dm.data_val.demographics_map is dm.demographics_map
     assert dm.data_test.demographics_map is dm.demographics_map
+
+
+def test_val_responses_zero_produces_an_empty_data_val_without_crashing():
+    """val_responses=0 (the new default) yields an empty (but valid) data_val,
+    and setup()/dataloader construction handle that without error."""
+    dm = _make_dm(val_responses=0)
+    dm.setup()
+
+    assert len(dm.data_val) == 0
+    assert len(dm.data_train) > 0
+    assert len(dm.data_test) > 0
+
+    # val_dataloader() on an empty dataset must not raise.
+    val_batches = list(dm.val_dataloader())
+    assert val_batches == []
+
+
+def test_val_responses_zero_gives_more_train_rows_than_with_val():
+    """With no val window, train absorbs what would otherwise be set aside for
+    val -- so for the same fold, val_responses=0 should have >= as many train
+    rows as val_responses>0 (strictly more once purge is accounted for, since
+    there's one fewer purge boundary to lose rows to)."""
+    dm_no_val = _make_dm(current_fold=0, val_responses=0)
+    dm_no_val.setup()
+
+    dm_with_val = _make_dm(current_fold=0, val_responses=2)
+    dm_with_val.setup()
+
+    assert len(dm_no_val.data_train) >= len(dm_with_val.data_train)
+
+
+def test_val_responses_omitted_defaults_to_zero():
+    """Not passing val_responses at all uses the class default (0), matching
+    passing it explicitly."""
+    modality_dfs, master_df, demographics_df = _cohort()
+    dm_default = WalkForwardHealthDataModule(
+        aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
+        sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
+        burn_in_responses=6,
+        step_responses=4,
+        # val_responses omitted entirely
+        use_demographics=False,
+        use_sleep=False,
+        use_survey_context=False,
+        require_sensor_data=False,
+        prebuilt_cohort=(modality_dfs, master_df, demographics_df),
+    )
+    assert dm_default.hparams.val_responses == 0
+    dm_default.setup()
+    assert len(dm_default.data_val) == 0

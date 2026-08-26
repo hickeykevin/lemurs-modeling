@@ -302,7 +302,65 @@ def test_cohort_splitter_walk_forward_invalid_args_raise():
     with pytest.raises(ValueError, match="step_responses"):
         splitter.split_walk_forward(df, burn_in_responses=1, step_responses=0, val_responses=1)
     with pytest.raises(ValueError, match="val_responses"):
-        splitter.split_walk_forward(df, burn_in_responses=1, step_responses=1, val_responses=0)
+        splitter.split_walk_forward(df, burn_in_responses=1, step_responses=1, val_responses=-1)
+
+
+def test_cohort_splitter_walk_forward_val_responses_zero_is_the_default_and_valid():
+    """val_responses=0 (the default) is valid: no error, and produces no val window at all."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 8,
+        "record_timestamp": pd.date_range("2026-01-01", periods=8, freq="1h"),
+        "answer": list(range(8)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+
+    folds_explicit = splitter.split_walk_forward(df, burn_in_responses=4, step_responses=2, val_responses=0)
+    folds_default = splitter.split_walk_forward(df, burn_in_responses=4, step_responses=2)
+
+    for folds in (folds_explicit, folds_default):
+        assert len(folds) > 0
+        for fold in folds:
+            assert fold.val_df.empty
+            assert len(fold.val_df.columns) == len(df.columns)  # still correctly-columned, just empty
+
+
+def test_cohort_splitter_walk_forward_no_val_absorbs_those_rows_into_train():
+    """With val_responses=0, train runs right up to the purge boundary before test --
+    no responses are set aside and unused the way a val window would set them aside."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 12,
+        "record_timestamp": pd.date_range("2026-01-01", periods=12, freq="1h"),
+        "answer": list(range(12)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward(df, burn_in_responses=4, step_responses=2, val_responses=0)
+
+    # fold 0: train=[0:4), test=[4:6) -- train_end starts at burn_in, test right after.
+    assert list(folds[0].train_df["answer"]) == [0, 1, 2, 3]
+    assert list(folds[0].test_df["answer"]) == [4, 5]
+    assert folds[0].val_df.empty
+
+    # fold 1: train expands to [0:6) (absorbing fold 0's test), test=[6:8).
+    assert list(folds[1].train_df["answer"]) == [0, 1, 2, 3, 4, 5]
+    assert list(folds[1].test_df["answer"]) == [6, 7]
+
+
+def test_cohort_splitter_walk_forward_no_val_purges_train_directly_against_test():
+    """With val_responses=0, purge is applied directly at the train/test boundary."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 12,
+        "record_timestamp": pd.date_range("2026-01-01", periods=12, freq="1h"),
+        "answer": list(range(12)),
+    })
+    splitter = CohortSplitter(purge_hours=1.5)
+    folds = splitter.split_walk_forward(df, burn_in_responses=4, step_responses=2, val_responses=0)
+
+    purge = pd.Timedelta(hours=1.5)
+    for fold in folds:
+        if fold.train_df.empty or fold.test_df.empty:
+            continue
+        test_start = fold.test_df["record_timestamp"].min()
+        assert (fold.train_df["record_timestamp"] < test_start - purge).all()
 
 
 def test_cohort_splitter_walk_forward_no_user_clears_burn_in_returns_empty():

@@ -74,7 +74,7 @@ class WalkForwardHealthDataModule(HealthDataModule):
         sampler: TimeSampler,
         burn_in_responses: int,
         step_responses: int,
-        val_responses: int,
+        val_responses: int = 0,
         current_fold: int = 0,
         scaler: Optional[Any] = None,
         preprocessors: Optional[Dict[str, Any]] = None,
@@ -106,7 +106,15 @@ class WalkForwardHealthDataModule(HealthDataModule):
             step_responses: Number of responses each successive fold's test
                 window covers, and by which the train window expands.
             val_responses: Number of responses each fold's validation window
-                covers.
+                covers. Defaults to 0: no validation window at all -- every
+                fold is just train | purge | test, no rows are set aside for
+                early stopping / checkpoint selection, ``data_val`` is an
+                empty dataset every fold, and (with no ``val/*`` metric ever
+                logged) ``EarlyStopping``/``ModelCheckpoint`` never have
+                anything to monitor -- a caller should expect every fold to
+                train for its full configured epoch budget and evaluate
+                whatever weights exist at the end of training. See
+                ``CohortSplitter.split_walk_forward``.
             current_fold: Which walk-forward fold (0-indexed, chronological)
                 to build ``data_train``/``data_val``/``data_test`` for. An
                 orchestration script loops this the way ``cv_train.py`` loops
@@ -114,8 +122,9 @@ class WalkForwardHealthDataModule(HealthDataModule):
                 ``get_num_folds()`` for how many folds exist for this cohort
                 and configuration.
             purge_hours: Width of the gap purged around every fold's
-                train/val and val/test boundary. Defaults to the sampler's
-                own lookback window when None, same as the base class's
+                train/test boundary (or train/val and val/test, when
+                ``val_responses`` is set). Defaults to the sampler's own
+                lookback window when None, same as the base class's
                 "longitudinal" mode — see ``lookback_hours_from_sampler``.
 
         See ``HealthDataModule`` for all other arguments.

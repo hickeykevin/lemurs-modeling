@@ -290,7 +290,7 @@ class CohortSplitter:
         df: pd.DataFrame,
         burn_in_responses: int,
         step_responses: int,
-        val_responses: int,
+        val_responses: int = 0,
     ) -> List[WalkForwardFold]:
         """Per-user, purged, expanding-window walk-forward split.
 
@@ -303,7 +303,8 @@ class CohortSplitter:
         to accumulate history, mirroring how a deployed app would), and folds
         walk forward through the remainder of the user's responses.
 
-        Purging is applied at *every* fold's train/val and val/test boundary
+        Purging is applied at *every* fold's train/test boundary (and, when
+        ``val_responses`` is set, the train/val and val/test boundaries too)
         using the exact same logic as ``split_mode="longitudinal"`` — see the
         class docstring for why this is necessary (a sampler's lookback window
         can otherwise reach across a boundary into data assigned to the other
@@ -335,19 +336,26 @@ class CohortSplitter:
                 window covers, and by which the train window expands.
             val_responses: Number of responses each fold's validation window
                 covers, sliced immediately after that fold's train window and
-                immediately before its test window.
+                immediately before its test window. Defaults to 0: no
+                validation window at all. Every response that would otherwise
+                go to val is absorbed into train instead (each fold is just
+                train | purge | test), so no rows are set aside for early
+                stopping / checkpoint selection — a caller running with no
+                val split trains for its full configured epoch budget and
+                evaluates the final-epoch weights.
 
         Returns:
             A list of ``WalkForwardFold`` namedtuples, ordered first by
             ``fold_index`` then by the order users appear in ``df``. Empty
-            if no user clears burn-in.
+            if no user clears burn-in. ``val_df`` is an empty (but correctly
+            columned) DataFrame on every fold when ``val_responses == 0``.
         """
         if burn_in_responses < 1:
             raise ValueError(f"burn_in_responses must be >= 1; got {burn_in_responses}")
         if step_responses < 1:
             raise ValueError(f"step_responses must be >= 1; got {step_responses}")
-        if val_responses < 1:
-            raise ValueError(f"val_responses must be >= 1; got {val_responses}")
+        if val_responses < 0:
+            raise ValueError(f"val_responses must be >= 0; got {val_responses}")
 
         purge = pd.Timedelta(hours=self.purge_hours) if self.purge_hours else pd.Timedelta(0)
 
@@ -369,20 +377,29 @@ class CohortSplitter:
                     break
 
                 train_part = group.iloc[:train_end]
-                val_part = group.iloc[train_end:val_end]
+                val_part = group.iloc[train_end:val_end]  # empty when val_responses == 0
                 test_part = group.iloc[val_end:test_end]
 
                 if purge > pd.Timedelta(0):
-                    if not val_part.empty:
-                        val_start = val_part["record_timestamp"].iloc[0]
-                        train_part = train_part[
-                            train_part["record_timestamp"] < val_start - purge
-                        ]
-                    if not test_part.empty:
-                        test_start = test_part["record_timestamp"].iloc[0]
-                        val_part = val_part[
-                            val_part["record_timestamp"] < test_start - purge
-                        ]
+                    if val_responses > 0:
+                        if not val_part.empty:
+                            val_start = val_part["record_timestamp"].iloc[0]
+                            train_part = train_part[
+                                train_part["record_timestamp"] < val_start - purge
+                            ]
+                        if not test_part.empty:
+                            test_start = test_part["record_timestamp"].iloc[0]
+                            val_part = val_part[
+                                val_part["record_timestamp"] < test_start - purge
+                            ]
+                    else:
+                        # No val window: purge train directly against test's
+                        # own start, same boundary logic collapsed to one step.
+                        if not test_part.empty:
+                            test_start = test_part["record_timestamp"].iloc[0]
+                            train_part = train_part[
+                                train_part["record_timestamp"] < test_start - purge
+                            ]
 
                 folds_by_index.setdefault(fold_index, ([], [], []))
                 folds_by_index[fold_index][0].append(train_part)

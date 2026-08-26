@@ -15,14 +15,28 @@ modalities: ["step", "calorie"]
 # Values below are sized from this cohort's actual response-count
 # distribution (44 users after exclusions, median ~45-51 responses/user,
 # p5 ~9.4 among ever-positive users -- see the response-count exploration
-# in the walk-forward-cv branch history). burn_in below p5 for positive
-# users means almost every ever-positive user clears burn-in and
-# contributes at least one fold; step/val sized similarly so early folds
-# aren't wildly smaller than later ones. Re-derive these if the cohort
+# in the walk-forward-cv branch history). Re-derive these if the cohort
 # changes materially (more enrolled users, a different survey cadence).
-burn_in_responses: 8
+#
+# burn_in_responses=16 (raised from an initial 8) trades a small amount of
+# user coverage for a substantially larger per-fold training set: at
+# burn_in=8, fold 0 trains on 43 pooled rows across 27/31 covered users;
+# at burn_in=16, fold 0 trains on 236 pooled rows across 25/31 users --
+# roughly 5.5x more train data for 2 fewer users of coverage. Every later
+# fold's train set is `burn_in + fold_index * step_responses` pooled rows,
+# so this floor lifts every fold, not just fold 0. See
+# WalkForwardHealthDataModule's docstring for why raising burn_in and
+# raising step_responses both grow train size at the cost of fold count /
+# coverage -- there's no lever that grows train size for free.
+#
+# val_responses=0: no validation window at all (every fold is just
+# train | purge | test) -- see WalkForwardHealthDataModule's docstring.
+# Every fold trains for its full configured epoch budget and is tested
+# with the final-epoch weights, since there is no val/* metric for
+# EarlyStopping/ModelCheckpoint to monitor.
+burn_in_responses: 16
 step_responses: 8
-val_responses: 2
+val_responses: 0
 current_fold: 0
 
 batch_size: 16
