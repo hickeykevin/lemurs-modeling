@@ -1,0 +1,46 @@
+defaults:
+  - _self_
+  - aggregator: suicide_risk
+  - sampler: offset_48h_6h
+  - scaler: dual
+  - preprocessors: [step, distance]
+
+_target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
+modalities: ["step", "distance"]
+
+# Same cyclic mechanics as configs/data/walk_forward_cyclic_4fold_sweep.yaml
+# (train = the complement of each fold's test window, wrapping around -- see
+# CohortSplitter.split_walk_forward_cyclic), just 5 folds instead of 4:
+# train_width_pct=0.80, step_pct=0.20 -> ceil(1/0.20) = 5 folds, each 20% of
+# a user's data as test and the remaining 80% (wrapped) as train.
+#
+# Data/model settings carried over unchanged from walk_forward_cyclic_4fold_
+# sweep.yaml -- see that file's comment for the sweep umdhgse9 provenance
+# and rationale (dual scaler, collapse_strategy=none, demographics=true,
+# require_sensor_data=true, include_time_features=false, offset_48h_6h
+# sampler, step+distance modalities, os_filter=both).
+fold_sizing: cyclic
+train_width_pct: 0.80
+step_pct: 0.20
+current_fold: 0
+
+batch_size: 16
+num_workers: 1
+pin_memory: False
+random_state: ${seed}
+os_filter: both # both, ios, android
+
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+include_time_features: false
+
+use_demographics: true
+use_sleep: true
+
+# Purge gap (hours) at every fold's train/test boundary. null derives it
+# from the sampler's own lookback window (here, offset_48h_6h's 48h), same
+# as split_mode="longitudinal" in configs/data/default.yaml.
+purge_hours: null
+
+exclude_user_ids: null

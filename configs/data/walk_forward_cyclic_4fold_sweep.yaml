@@ -1,0 +1,64 @@
+defaults:
+  - _self_
+  - aggregator: suicide_risk
+  - sampler: offset_48h_6h
+  - scaler: dual
+  - preprocessors: [step, distance]
+
+_target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
+modalities: ["step", "distance"]
+
+# Same cyclic 4-fold mechanics as configs/data/walk_forward_cyclic_4fold.yaml
+# (train = the complement of each fold's 25% test window, wrapping around --
+# see that file and CohortSplitter.split_walk_forward_cyclic). What changes
+# here is the modeling/data settings: these are carried over from the
+# W&B sweep `umdhgse9` (1291 finished runs, split_mode="longitudinal"),
+# specifically its #1 stable leaderboard run (`6yssfkcp`, mean val AUROC
+# 0.9700) plus the sweep's category-controlled significant findings, to see
+# whether that combination holds up under per-user walk-forward pooled
+# evaluation rather than the single-cut longitudinal split it was tuned on.
+#
+# Carried from the sweep (all p < 0.0001 in its controlled analysis):
+#   scaler=dual (+0.19), collapse_strategy=none (+0.09),
+#   use_demographics=true (+0.05), require_sensor_data=true (+0.05),
+#   include_time_features=false (+0.09, note: inverted from this repo's
+#   other walk_forward_cyclic*.yaml configs, which default it true).
+# Also carried, significant but smaller: sampler=offset (+0.03) with the
+# offset_48h_6h window (rank #1's own -48h/6h setting; the sweep itself
+# found start_offset_hours and resample_freq NOT individually significant,
+# so this is "what rank #1 used," not an independently-validated choice).
+# modalities=["step","distance"] matches rank #1 (the sweep found modality
+# choice not significant overall).
+#
+# Deliberately NOT carried: os_filter="ios" (rank #1's setting, but not
+# significant in the sweep, p=0.35) -- kept at "both" here to avoid
+# confounding the fold-logic comparison with a cohort-size change at the
+# same time. use_survey_context kept at this repo's existing walk-forward
+# default (true) rather than the sweep report's recommended-config block,
+# since the sweep's own significance table shows it NOT significant
+# (p=0.08) with True numerically ahead of False in controlled mean AUROC.
+fold_sizing: cyclic
+train_width_pct: 0.75
+step_pct: 0.25
+current_fold: 0
+
+batch_size: 16
+num_workers: 1
+pin_memory: False
+random_state: ${seed}
+os_filter: both # both, ios, android -- see note above on why not "ios"
+
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+include_time_features: false
+
+use_demographics: true
+use_sleep: true
+
+# Purge gap (hours) at every fold's train/test boundary. null derives it
+# from the sampler's own lookback window (here, offset_48h_6h's 48h), same
+# as split_mode="longitudinal" in configs/data/default.yaml.
+purge_hours: null
+
+exclude_user_ids: null
