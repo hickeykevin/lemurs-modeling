@@ -1,3 +1,4 @@
+import math
 from typing import Tuple, Literal, Any, List, NamedTuple
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -552,5 +553,137 @@ class CohortSplitter:
             val_df = pd.concat(val_list) if val_list else df.iloc[0:0]
             test_df = pd.concat(test_list) if test_list else df.iloc[0:0]
             result.append(WalkForwardFold(train_df, val_df, test_df, fold_index))
+
+        return result
+
+    def split_walk_forward_cyclic(
+        self,
+        df: pd.DataFrame,
+        train_width_pct: float,
+        step_pct: float,
+    ) -> List[WalkForwardFold]:
+        """Per-user, purged, FIXED-width walk-forward split that cycles through
+        a user's full response history, wrapping past the end back to the start.
+
+        Answers the same question as ``split_walk_forward``/``split_walk_forward_pct``
+        ("given a user's own history, can the model forecast their near-future
+        risk?"), but with a different notion of "history" than either: those two
+        methods only ever grow train forward from a user's earliest response, so
+        the earliest test folds are forecast from a short prefix of history and
+        the latest ones from nearly all of it -- fold difficulty is confounded
+        with how much training data was available. Here train is always the same
+        *fixed width* (``train_width_pct`` of the user's total responses)
+        immediately preceding test, and test tiles forward across the user's
+        *entire* response range in ``step_pct``-sized windows -- including
+        wrapping from the end of the response sequence back to the start, so a
+        user's most recent responses can serve as "training history" for a test
+        window sitting at the very beginning of their timeline. Every response
+        in a user's history is tested on exactly once per full cycle, and every
+        fold's train set is the same size, so folds are comparable to each other
+        in a way the expanding-window methods' folds are not.
+
+        This trades away the expanding-window methods' realism (a real deployment
+        never trains on a user's future to predict their past) for uniform,
+        directly-comparable folds and denser reuse of a short response history.
+        Use ``split_walk_forward``/``split_walk_forward_pct`` when the expanding,
+        past-only-training property matters (e.g. reporting a deployment-realistic
+        forecast metric); use this when the goal is a stable per-fold estimate of
+        within-user forecastability that isn't confounded by fold-to-fold history
+        size, and training on cyclically-"future" data relative to a given test
+        window is acceptable for that goal.
+
+        Purging is applied only at the one real adjacency: the boundary where
+        train's near edge touches test's start (same timestamp-based logic as
+        ``split_walk_forward``/``split_walk_forward_pct`` -- see the class
+        docstring for why). When train wraps around the end of the sequence, it
+        is physically two disjoint row-index slices that concatenate into one
+        contiguous *cyclic*-time window; only the slice actually adjacent to
+        test's start is purged against it. The far slice (a wrapped train
+        window's most-recent responses) sits nowhere near test's start as long
+        as ``train_width_pct + step_pct <= 1.0`` (true for any sane parameters --
+        train narrower than a full cycle minus one step), so it is left alone;
+        this method does not attempt to purge a second, far-side boundary.
+
+        Args:
+            df: The master linked dataframe to split.
+            train_width_pct: Fraction (0 < train_width_pct < 1) of a user's
+                total responses in every fold's train window. Fixed across
+                folds, unlike the expanding-window methods.
+            step_pct: Fraction of a user's total responses each fold's test
+                window covers, and by which both train and test slide forward
+                each fold. Folds tile the user's full 0..1 response range,
+                wrapping past 1.0 back to 0.0, until test windows would start
+                repeating (i.e. ``ceil(1.0 / step_pct)`` folds).
+
+        Returns:
+            A list of ``WalkForwardFold`` namedtuples (``val_df`` always empty
+            -- this method has no validation-window concept, matching the
+            ``val_responses=0`` / ``val_pct=0.0`` default elsewhere), ordered
+            first by ``fold_index`` then by the order users appear in ``df``.
+            Empty if no user has enough responses to form a full train window
+            plus test window.
+        """
+        if not (0.0 < train_width_pct < 1.0):
+            raise ValueError(f"train_width_pct must be in (0, 1); got {train_width_pct}")
+        if not (0.0 < step_pct < 1.0):
+            raise ValueError(f"step_pct must be in (0, 1); got {step_pct}")
+
+        purge = pd.Timedelta(hours=self.purge_hours) if self.purge_hours else pd.Timedelta(0)
+        n_folds = math.ceil(1.0 / step_pct)
+
+        folds_by_index: dict = {}
+
+        for _, group in df.groupby("app_user_id"):
+            group = group.sort_values("record_timestamp")
+            n = len(group)
+
+            min_required = round(n * train_width_pct) + 1
+            if n < min_required:
+                continue  # not enough responses for even one fixed-width train window plus one test row
+
+            for fold_index in range(n_folds):
+                # round() before truncating: fold_index * step_pct accumulates
+                # float error (e.g. 6 * 0.15 == 0.8999999999999999, not 0.9),
+                # which int() would floor to one row short and cause a fold's
+                # test window to overlap the previous fold's by one row.
+                test_start_pct = min(round(fold_index * step_pct, 9), 1.0)
+                test_end_pct = min(round(test_start_pct + step_pct, 9), 1.0)
+                train_start_pct = round(test_start_pct - train_width_pct, 9)  # may be negative -> wraps
+
+                test_start = round(n * test_start_pct)
+                test_end = round(n * test_end_pct)
+                if test_end <= test_start:
+                    continue  # rounding collapsed this user's test window to nothing
+
+                test_part = group.iloc[test_start:test_end]
+
+                if train_start_pct < 0:
+                    wrapped_start = round(n * (1.0 + train_start_pct))
+                    far_part = group.iloc[wrapped_start:n]  # user's most-recent responses; not adjacent to test
+                    near_part = group.iloc[0:test_start]  # adjacent to test's start; gets purged
+                else:
+                    train_start = round(n * train_start_pct)
+                    far_part = group.iloc[0:0]
+                    near_part = group.iloc[train_start:test_start]
+
+                if purge > pd.Timedelta(0) and not near_part.empty and not test_part.empty:
+                    test_start_ts = test_part["record_timestamp"].iloc[0]
+                    near_part = near_part[near_part["record_timestamp"] < test_start_ts - purge]
+
+                train_part = pd.concat([far_part, near_part]) if len(far_part) else near_part
+                if train_part.empty:
+                    continue  # purge (or rounding) removed this fold's entire train window for this user
+
+                folds_by_index.setdefault(fold_index, ([], []))
+                folds_by_index[fold_index][0].append(train_part)
+                folds_by_index[fold_index][1].append(test_part)
+
+        empty_val = df.iloc[0:0]
+        result: List[WalkForwardFold] = []
+        for fold_index in sorted(folds_by_index.keys()):
+            train_list, test_list = folds_by_index[fold_index]
+            train_df = pd.concat(train_list) if train_list else df.iloc[0:0]
+            test_df = pd.concat(test_list) if test_list else df.iloc[0:0]
+            result.append(WalkForwardFold(train_df, empty_val, test_df, fold_index))
 
         return result

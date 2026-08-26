@@ -75,10 +75,11 @@ class WalkForwardHealthDataModule(HealthDataModule):
         burn_in_responses: Optional[int] = None,
         step_responses: Optional[int] = None,
         val_responses: int = 0,
-        fold_sizing: Literal["count", "pct"] = "count",
+        fold_sizing: Literal["count", "pct", "cyclic"] = "count",
         burn_in_pct: Optional[float] = None,
         step_pct: Optional[float] = None,
         val_pct: float = 0.0,
+        train_width_pct: Optional[float] = None,
         current_fold: int = 0,
         scaler: Optional[Any] = None,
         preprocessors: Optional[Dict[str, Any]] = None,
@@ -111,12 +112,24 @@ class WalkForwardHealthDataModule(HealthDataModule):
                 with less remaining history stop contributing to later folds
                 one by one, and the last fold or two can end up with only a
                 handful of users. ``"pct"``: fixed *fraction of each user's
-                own total responses* per fold
+                own total responses* per fold, still an EXPANDING train
+                window from the user's earliest response
                 (``CohortSplitter.split_walk_forward_pct``, driven by
                 ``burn_in_pct``/``step_pct``/``val_pct``) -- every eligible
                 user contributes to every fold this method produces, since
                 test size scales with their own total rather than a shared
-                absolute count.
+                absolute count. ``"cyclic"``: fixed *train width* that slides
+                (not expands) through a user's full response range, wrapping
+                past the end back to the start, so every response is tested
+                on exactly once per cycle and a user's most-recent responses
+                can train a fold whose test window sits at the very start of
+                their timeline (``CohortSplitter.split_walk_forward_cyclic``,
+                driven by ``train_width_pct``/``step_pct``; no val-window
+                concept). See that method's docstring for when this differs
+                from ``"pct"`` in a way that matters for what you're
+                measuring -- it trades deployment realism (never training on
+                a user's chronological future) for folds of uniform size and
+                difficulty.
             burn_in_responses: ``fold_sizing="count"`` only. Minimum number of
                 a user's earliest responses reserved for the first fold's
                 training set before any forecasting is evaluated for that
@@ -134,6 +147,9 @@ class WalkForwardHealthDataModule(HealthDataModule):
             val_pct: ``fold_sizing="pct"`` only. Fraction of a user's total
                 responses each fold's validation window covers. Defaults to
                 0.0.
+            train_width_pct: ``fold_sizing="cyclic"`` only. Fraction (0 < x < 1)
+                of a user's total responses in every fold's fixed-width train
+                window. See ``CohortSplitter.split_walk_forward_cyclic``.
             (``val_responses``/``val_pct``, whichever applies): Defaults to
                 no validation window at all -- every fold is just
                 train | purge | test, no rows are set aside for early
@@ -168,8 +184,15 @@ class WalkForwardHealthDataModule(HealthDataModule):
                 raise ValueError(
                     "fold_sizing='pct' requires burn_in_pct and step_pct to be set."
                 )
+        elif fold_sizing == "cyclic":
+            if train_width_pct is None or step_pct is None:
+                raise ValueError(
+                    "fold_sizing='cyclic' requires train_width_pct and step_pct to be set."
+                )
         else:
-            raise ValueError(f"fold_sizing must be 'count' or 'pct'; got {fold_sizing!r}")
+            raise ValueError(
+                f"fold_sizing must be 'count', 'pct', or 'cyclic'; got {fold_sizing!r}"
+            )
 
         super().__init__(
             aggregator=aggregator,
@@ -204,6 +227,7 @@ class WalkForwardHealthDataModule(HealthDataModule):
         self.hparams.burn_in_pct = burn_in_pct
         self.hparams.step_pct = step_pct
         self.hparams.val_pct = val_pct
+        self.hparams.train_width_pct = train_width_pct
         self.hparams.current_fold = current_fold
         # Re-save hyperparameters to capture the walk-forward-specific fields
         self.save_hyperparameters(logger=False)
@@ -243,6 +267,12 @@ class WalkForwardHealthDataModule(HealthDataModule):
                     step_pct=self.hparams.step_pct,
                     val_pct=self.hparams.val_pct,
                 )
+            elif self.hparams.fold_sizing == "cyclic":
+                self._folds = splitter.split_walk_forward_cyclic(
+                    df,
+                    train_width_pct=self.hparams.train_width_pct,
+                    step_pct=self.hparams.step_pct,
+                )
             else:
                 self._folds = splitter.split_walk_forward(
                     df,
@@ -260,6 +290,11 @@ class WalkForwardHealthDataModule(HealthDataModule):
                 params_msg = (
                     f"burn_in_pct={self.hparams.burn_in_pct} + "
                     f"val_pct={self.hparams.val_pct} + step_pct={self.hparams.step_pct}"
+                )
+            elif self.hparams.fold_sizing == "cyclic":
+                params_msg = (
+                    f"train_width_pct={self.hparams.train_width_pct} + "
+                    f"step_pct={self.hparams.step_pct}"
                 )
             else:
                 params_msg = (

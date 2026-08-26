@@ -1,0 +1,57 @@
+defaults:
+  - _self_
+  - aggregator: suicide_risk
+  - sampler: interval_aware
+  - scaler: dual
+  - preprocessors: [step, calorie]
+
+_target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
+modalities: ["step", "calorie"]
+
+# Per-user, purged, FIXED-width walk-forward CV that cycles through a
+# user's full response history, wrapping past the end back to the start.
+# Answers the same "given a user's own history, can the model forecast
+# their near-future risk?" question as configs/data/walk_forward.yaml, but
+# with train held at a constant width and test tiling the user's ENTIRE
+# response range each cycle (including wrapping: a user's most-recent
+# responses can train a fold whose test window sits at the very start of
+# their timeline). Every response is tested on exactly once per cycle, and
+# every fold's train set is the same size -- unlike fold_sizing="pct" (an
+# expanding window from each user's earliest response), fold difficulty
+# here isn't confounded with how much history had accumulated by that
+# fold. This trades away "never train on a user's chronological future"
+# realism for uniform, directly-comparable folds. See
+# CohortSplitter.split_walk_forward_cyclic and
+# WalkForwardHealthDataModule's docstring for the full mechanics and when
+# to prefer this over fold_sizing="pct".
+#
+# train_width_pct=0.40, step_pct=0.15 -> ceil(1/0.15) = 7 folds, each
+# fold's train a fixed ~40%-wide window immediately preceding its test
+# window (wrapping past 100% back to 0% for the first few folds).
+fold_sizing: cyclic
+train_width_pct: 0.40
+step_pct: 0.15
+current_fold: 0
+
+batch_size: 16
+num_workers: 1
+pin_memory: False
+random_state: ${seed}
+os_filter: both # both, ios, android
+
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+include_time_features: true
+
+use_demographics: true
+use_sleep: true
+
+# Purge gap (hours) at every fold's train/test boundary. null derives it
+# from the sampler's own lookback window, same as split_mode="longitudinal"
+# in configs/data/default.yaml. Applied only at the boundary where train's
+# near edge touches test's start -- see split_walk_forward_cyclic's
+# docstring for why the wrapped window's far edge needs no purge here.
+purge_hours: null
+
+exclude_user_ids: null

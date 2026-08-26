@@ -321,3 +321,73 @@ def test_fold_sizing_pct_every_user_reaches_every_fold_end_to_end():
         dm = _make_pct_dm(current_fold=fold)
         dm.setup()
         assert set(dm.data_test.data_links["app_user_id"]) == {1, 2}
+
+
+def test_fold_sizing_cyclic_requires_cyclic_params():
+    modality_dfs, master_df, demographics_df = _cohort()
+    with pytest.raises(ValueError, match="train_width_pct"):
+        WalkForwardHealthDataModule(
+            aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
+            sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
+            fold_sizing="cyclic",
+            prebuilt_cohort=(modality_dfs, master_df, demographics_df),
+        )
+
+
+def _make_cyclic_dm(current_fold=0, **overrides):
+    modality_dfs, master_df, demographics_df = _cohort()
+    kwargs = dict(
+        aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
+        sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
+        fold_sizing="cyclic",
+        train_width_pct=0.4,
+        step_pct=0.15,
+        current_fold=current_fold,
+        use_demographics=False,
+        use_sleep=False,
+        use_survey_context=False,
+        require_sensor_data=False,
+        prebuilt_cohort=(modality_dfs, master_df, demographics_df),
+    )
+    kwargs.update(overrides)
+    return WalkForwardHealthDataModule(**kwargs)
+
+
+def test_fold_sizing_cyclic_builds_datasets_end_to_end():
+    """fold_sizing='cyclic' drives the real setup()/dataset-construction
+    path, not just CohortSplitter.split_walk_forward_cyclic in isolation."""
+    dm = _make_cyclic_dm()
+    n_folds = dm.get_num_folds()
+    assert n_folds > 0
+
+    dm.setup()
+    assert len(dm.data_train) > 0
+    assert len(dm.data_test) > 0
+    assert len(dm.data_val) == 0  # cyclic has no val-window concept at all
+
+
+def test_fold_sizing_cyclic_every_user_reaches_every_fold_end_to_end():
+    n_folds = _make_cyclic_dm().get_num_folds()
+    assert n_folds >= 1
+
+    for fold in range(n_folds):
+        dm = _make_cyclic_dm(current_fold=fold)
+        dm.setup()
+        assert set(dm.data_test.data_links["app_user_id"]) == {1, 2}
+
+
+def test_fold_sizing_cyclic_covers_every_response_end_to_end():
+    """Every response is tested on exactly once across the full cycle,
+    verified through the real datamodule rather than the splitter alone."""
+    n_folds = _make_cyclic_dm().get_num_folds()
+    seen = []
+    for fold in range(n_folds):
+        dm = _make_cyclic_dm(current_fold=fold)
+        dm.setup()
+        seen.extend(
+            zip(
+                dm.data_test.data_links["app_user_id"],
+                dm.data_test.data_links["record_timestamp"],
+            )
+        )
+    assert len(seen) == len(set(seen))

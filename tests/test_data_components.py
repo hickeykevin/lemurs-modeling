@@ -599,6 +599,162 @@ def test_cohort_splitter_walk_forward_pct_short_user_produces_no_folds():
     assert folds == []
 
 
+def test_cohort_splitter_cyclic_basic_shape():
+    """train_width=40%, step=15%, no purge: fold 0's test is the user's earliest
+    15% and its train is the FIXED-width 40% immediately preceding it, WRAPPING
+    from the end of the sequence back to the start (index 30..49 for n=50).
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+
+    assert [f.fold_index for f in folds] == list(range(7))  # ceil(1/0.15) = 7
+
+    fold0 = folds[0]
+    assert list(fold0.test_df["answer"]) == [0, 1, 2, 3, 4, 5, 6, 7]
+    assert sorted(fold0.train_df["answer"]) == list(range(30, 50))  # wraps
+
+    # A later, non-wrapping fold behaves like an ordinary fixed-width slide.
+    fold3 = folds[3]
+    assert list(fold3.test_df["answer"]) == [22, 23, 24, 25, 26, 27, 28, 29]
+    assert sorted(fold3.train_df["answer"]) == list(range(2, 22))
+
+
+def test_cohort_splitter_cyclic_covers_every_response_exactly_once_per_cycle():
+    """The whole point: test windows tile the user's full response range with
+    no gaps and no response tested on twice within one cycle."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+
+    seen = []
+    for fold in folds:
+        seen.extend(fold.test_df["answer"].tolist())
+    assert sorted(seen) == list(range(50))
+
+
+def test_cohort_splitter_cyclic_every_fold_train_is_fixed_width():
+    """Unlike the expanding-window methods, every fold's train set is the
+    SAME size (modulo rounding) -- it slides, it does not grow."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+
+    sizes = [len(f.train_df) for f in folds]
+    assert max(sizes) - min(sizes) <= 1  # rounding-only variation, no growth trend
+
+
+def test_cohort_splitter_cyclic_every_user_contributes_to_every_fold():
+    rows = []
+    for uid, n in [(1, 20), (2, 50), (3, 100)]:
+        for i in range(n):
+            rows.append({
+                "app_user_id": uid,
+                "record_timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(hours=i),
+                "answer": i,
+            })
+    df = pd.DataFrame(rows)
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+
+    assert len(folds) > 0
+    for fold in folds:
+        assert set(fold.test_df["app_user_id"]) == {1, 2, 3}
+
+
+def test_cohort_splitter_cyclic_no_val_window_ever():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+    assert len(folds) > 0
+    for fold in folds:
+        assert fold.val_df.empty
+
+
+def test_cohort_splitter_cyclic_purges_train_against_test_start():
+    """Only the physically-adjacent slice of a (possibly wrapped) train window
+    is purged against test's start -- verified here on a wrapping fold, where
+    naive purging by raw index position (rather than the slice adjacent to
+    test) would purge the wrong end."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=1.5)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+
+    purge = pd.Timedelta(hours=1.5)
+    for fold in folds:
+        if fold.train_df.empty or fold.test_df.empty:
+            continue
+        test_start = fold.test_df["record_timestamp"].min()
+        # Every retained train row must be far enough from test's start --
+        # true regardless of which side of a wrap it physically sits on,
+        # since a wrapped train window's far slice is many hours away either way.
+        gaps = (test_start - fold.train_df["record_timestamp"]).abs()
+        assert (gaps >= purge).all() or (fold.train_df["record_timestamp"] < test_start - purge).all()
+
+
+def test_cohort_splitter_cyclic_no_duplicate_test_role_within_a_fold():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+    for fold in folds:
+        assert not fold.test_df.duplicated(subset=["app_user_id", "answer"]).any()
+
+
+def test_cohort_splitter_cyclic_invalid_args_raise():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 10,
+        "record_timestamp": pd.date_range("2026-01-01", periods=10, freq="1h"),
+        "answer": list(range(10)),
+    })
+    splitter = CohortSplitter()
+    with pytest.raises(ValueError, match="train_width_pct"):
+        splitter.split_walk_forward_cyclic(df, train_width_pct=0.0, step_pct=0.1)
+    with pytest.raises(ValueError, match="train_width_pct"):
+        splitter.split_walk_forward_cyclic(df, train_width_pct=1.0, step_pct=0.1)
+    with pytest.raises(ValueError, match="step_pct"):
+        splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.0)
+    with pytest.raises(ValueError, match="step_pct"):
+        splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=1.0)
+
+
+def test_cohort_splitter_cyclic_short_user_produces_no_folds():
+    """A single-response user has no room for both a train row and a test
+    row in any fold, and is excluded."""
+    df = pd.DataFrame({
+        "app_user_id": [1],
+        "record_timestamp": pd.date_range("2026-01-01", periods=1, freq="1h"),
+        "answer": [0],
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+    assert folds == []
+
+
 def test_lookback_hours_from_sampler():
     """Derives purge width from window_bounds rather than a type-specific attribute."""
 
