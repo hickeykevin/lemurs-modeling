@@ -160,7 +160,7 @@ def wf_cv_train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
                 l.log_metrics(run_row, step=WF_LOG_STEP_OFFSET + fold)
 
     pooled_df = pd.concat(pooled_predictions, ignore_index=True) if pooled_predictions else pd.DataFrame()
-    pooled_metrics = _compute_pooled_metrics(pooled_df, log)
+    pooled_metrics = _compute_pooled_metrics(pooled_df, log, cfg=cfg)
     fold_breakdown = _fold_breakdown_table(pooled_df, log)
 
     for l in logger:
@@ -180,15 +180,105 @@ def wf_cv_train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return pooled_metrics, object_dict_for_logging
 
 
-def _compute_pooled_metrics(pooled_df: pd.DataFrame, log: RankedLogger) -> Dict[str, float]:
-    """Pooled AUROC/AUPRC over every fold's out-of-fold test predictions, with a
-    participant-cluster bootstrap CI.
+def _classification_metrics_params(cfg: Optional[DictConfig]) -> Dict[str, Any]:
+    """Reads the averaging/threshold params ClassificationMetricsCallback was
+    configured with for this run (see configs/callbacks/classification_metrics.yaml),
+    so the pooled bootstrap metrics use the exact same settings rather than a
+    second, possibly-drifted set of defaults. Falls back to that callback's own
+    __init__ defaults when cfg is None or the callback isn't in this run's config.
+    """
+    defaults = {
+        "f1_average": "macro",
+        "auroc_average": "macro",
+        "precision_average": "macro",
+        "recall_average": "macro",
+        "specificity_average": "macro",
+        "sensitivity_at_specificity_average": "macro",
+        "min_specificity": 0.9,
+    }
+    if cfg is None:
+        return defaults
+    node = cfg.get("callbacks", {}).get("classification_metrics") if hasattr(cfg.get("callbacks", {}), "get") else None
+    if node is None:
+        return defaults
+    return {k: node.get(k, v) for k, v in defaults.items()}
+
+
+def _pooled_classification_metrics(
+    y_true: np.ndarray, probs: np.ndarray, params: Dict[str, Any]
+) -> Dict[str, float]:
+    """Computes the same 7 metrics ClassificationMetricsCallback logs at test
+    time (F1, AUROC, precision, recall, specificity, sensitivity_at_specificity,
+    balanced_accuracy — all "task=multiclass, num_classes=2, average=macro" by
+    that callback's defaults), using the same torchmetrics classes it uses,
+    over one pooled set of predictions rather than per-fold-then-averaged.
+
+    ``probs`` (softmax-normalized per-class probabilities, what
+    PredictionCollectorCallback stores) stands in for the raw logits that
+    callback passes these metrics — verified to produce identical values,
+    since every metric here depends only on rank order / argmax, both of
+    which softmax preserves exactly.
+    """
+    import torch
+    from src.utils.evaluation_callbacks import SensitivityAtSpecificityScalar
+    from torchmetrics.classification import F1Score, AUROC, Precision, Recall, Specificity, Accuracy
+
+    # np.asarray(..., copy=True) rather than as_tensor(...) directly: probs
+    # (a DataFrame .to_numpy() slice) may not be writable, which torch warns
+    # about since it can't guarantee tensor writes stay safe otherwise.
+    probs_t = torch.from_numpy(np.asarray(probs, dtype=np.float32).copy())
+    targets_t = torch.from_numpy(np.asarray(y_true, dtype=np.int64).copy())
+
+    f1 = F1Score(task="multiclass", num_classes=2, average=params["f1_average"])
+    auroc = AUROC(task="multiclass", num_classes=2, average=params["auroc_average"])
+    precision = Precision(task="multiclass", num_classes=2, average=params["precision_average"])
+    recall = Recall(task="multiclass", num_classes=2, average=params["recall_average"])
+    specificity = Specificity(task="multiclass", num_classes=2, average=params["specificity_average"])
+    sens_at_spec = SensitivityAtSpecificityScalar(
+        task="multiclass", num_classes=2,
+        min_specificity=params["min_specificity"],
+        average=params["sensitivity_at_specificity_average"],
+    )
+    balanced_accuracy = Accuracy(task="multiclass", num_classes=2, average="macro")
+
+    return {
+        "f1": float(f1(probs_t, targets_t)),
+        "auroc": float(auroc(probs_t, targets_t)),
+        "precision": float(precision(probs_t, targets_t)),
+        "recall": float(recall(probs_t, targets_t)),
+        "specificity": float(specificity(probs_t, targets_t)),
+        "sensitivity_at_specificity": float(sens_at_spec(probs_t, targets_t)),
+        "balanced_accuracy": float(balanced_accuracy(probs_t, targets_t)),
+    }
+
+
+def _compute_pooled_metrics(
+    pooled_df: pd.DataFrame,
+    log: RankedLogger,
+    cfg: Optional[DictConfig] = None,
+    n_bootstraps: int = 1000,
+) -> Dict[str, float]:
+    """Pooled classification metrics over every fold's out-of-fold test
+    predictions, with a participant-cluster bootstrap CI on each.
+
+    Reports the same 7 metrics ClassificationMetricsCallback logs per-fold at
+    test time (F1, AUROC, precision, recall, specificity,
+    sensitivity_at_specificity, balanced_accuracy — see
+    _pooled_classification_metrics), plus AUPRC (not in that callback, kept
+    from this function's original scope since PR-AUC is the more informative
+    curve at this cohort's prevalence).
 
     Resampling by app_user_id, not by row, matches this cohort's actual
     source of variance: positives are concentrated in a handful of
     participants (see CohortSplitter's class docstring), so a row-level
     bootstrap would understate uncertainty by treating each of one user's
     many responses as an independent draw.
+
+    n_bootstraps defaults to 1000 (production quality); lower it in tests
+    that only need to check structure/correctness, not CI precision -- 8
+    metrics x n_bootstraps BCa resamples is the dominant cost of this
+    function (each resample rebuilds every torchmetrics object from
+    scratch), so a full 1000 takes tens of seconds.
     """
     metrics: Dict[str, float] = {}
     if pooled_df.empty:
@@ -199,26 +289,29 @@ def _compute_pooled_metrics(pooled_df: pd.DataFrame, log: RankedLogger) -> Dict[
     if len(prob_cols) != 2:
         log.warning(
             f"wf_cv_train's pooled metrics currently assume binary classification "
-            f"(found {len(prob_cols)} probability columns); skipping AUROC/AUPRC."
+            f"(found {len(prob_cols)} probability columns); skipping metrics."
         )
         return metrics
 
     y_true = pooled_df["y_true"].to_numpy()
-    y_score = pooled_df[prob_cols[1]].to_numpy()  # P(class 1)
+    probs = pooled_df[prob_cols].to_numpy()  # [N, 2], columns already prob_class_0/1 order
 
     if len(np.unique(y_true)) < 2:
-        log.warning("Pooled test predictions contain only one class; AUROC/AUPRC undefined.")
+        log.warning("Pooled test predictions contain only one class; metrics undefined.")
         return metrics
 
-    from sklearn.metrics import roc_auc_score, average_precision_score
+    from sklearn.metrics import average_precision_score
 
-    metrics["pooled/auroc"] = float(roc_auc_score(y_true, y_score))
-    metrics["pooled/auprc"] = float(average_precision_score(y_true, y_score))
+    params = _classification_metrics_params(cfg)
+    point = _pooled_classification_metrics(y_true, probs, params)
+    for name, value in point.items():
+        metrics[f"pooled/{name}"] = value
+    metrics["pooled/auprc"] = float(average_precision_score(y_true, probs[:, 1]))
     metrics["pooled/n_predictions"] = float(len(pooled_df))
     metrics["pooled/n_users"] = float(pooled_df["app_user_id"].nunique())
     metrics["pooled/n_positive"] = float(y_true.sum())
 
-    ci = _cluster_bootstrap_ci(pooled_df, prob_cols[1], n_bootstraps=1000, seed=0, log=log)
+    ci = _cluster_bootstrap_ci(pooled_df, prob_cols, params, n_bootstraps=n_bootstraps, seed=0, log=log)
     metrics.update(ci)
 
     log.info(
@@ -232,14 +325,27 @@ def _compute_pooled_metrics(pooled_df: pd.DataFrame, log: RankedLogger) -> Dict[
         f"(95% user-cluster bootstrap CI [{ci['pooled/auprc_ci_low']:.4f}, "
         f"{ci['pooled/auprc_ci_high']:.4f}])"
     )
+    for name in ("f1", "precision", "recall", "specificity", "sensitivity_at_specificity", "balanced_accuracy"):
+        log.info(
+            f"Pooled {name}: {metrics[f'pooled/{name}']:.4f}  "
+            f"(95% user-cluster bootstrap CI [{ci[f'pooled/{name}_ci_low']:.4f}, "
+            f"{ci[f'pooled/{name}_ci_high']:.4f}])"
+        )
     return metrics
 
 
 def _cluster_bootstrap_ci(
-    pooled_df: pd.DataFrame, prob_col: str, n_bootstraps: int, seed: int, log: RankedLogger
+    pooled_df: pd.DataFrame,
+    prob_cols: List[str],
+    params: Dict[str, Any],
+    n_bootstraps: int,
+    seed: int,
+    log: RankedLogger,
 ) -> Dict[str, float]:
-    """BCa (bias-corrected and accelerated) bootstrap CI for pooled AUROC/AUPRC,
-    resampling whole users with replacement.
+    """BCa (bias-corrected and accelerated) bootstrap CI for every pooled metric
+    _compute_pooled_metrics reports (AUROC, AUPRC, F1, precision, recall,
+    specificity, sensitivity_at_specificity, balanced_accuracy), resampling
+    whole users with replacement.
 
     Resampling by app_user_id, not by row, matches this cohort's actual
     source of variance: positives are concentrated in a handful of
@@ -248,7 +354,7 @@ def _cluster_bootstrap_ci(
     many responses as an independent draw.
 
     Uses scipy.stats.bootstrap(method="BCa") rather than a plain percentile
-    cut. AUROC/AUPRC are bounded in [0, 1] and, at the scores this pipeline
+    cut. These metrics are bounded in [0, 1] and, at the scores this pipeline
     typically produces, sit close enough to that ceiling that their
     bootstrap distribution is skewed rather than symmetric; with as few as
     ~28-30 independent clusters (users), a naive percentile interval can be
@@ -257,17 +363,20 @@ def _cluster_bootstrap_ci(
     variance changing with its own value (the "accelerated" part), using a
     jackknife (leave-one-user-out) estimate computed internally by scipy —
     still a resampling-based, no-normality-assumed interval, just a
-    better-calibrated one than the plain percentile method previously used
-    here.
+    better-calibrated one than a plain percentile method.
 
     ``data=(user_idx,)`` is an array of *indices into the unique-user list*,
     one entry per user — this is what scipy resamples (with replacement)
-    for every bootstrap replicate and jackknife pass. ``_stat`` expands
-    whichever user indices a given resample drew into their pooled rows
-    and computes the metric, so the actual clustering (resample users, not
-    rows) happens inside the statistic function while scipy handles the
-    resampling loop, the jackknife bias/acceleration correction, and the
-    interval construction.
+    for every bootstrap replicate and jackknife pass. Each metric's stat
+    function expands whichever user indices a given resample drew into
+    their pooled rows and computes that one metric, so the actual
+    clustering (resample users, not rows) happens inside the statistic
+    function while scipy handles the resampling loop, the jackknife
+    bias/acceleration correction, and the interval construction. All metrics
+    share one resample-user-index sequence per bootstrap replicate (looped
+    per-metric, each a fresh scipy.stats.bootstrap call with the same seed),
+    so a given replicate's "which users got drawn" is consistent across
+    metrics even though scipy computes each metric's interval independently.
     """
     from sklearn.metrics import roc_auc_score, average_precision_score
     from scipy.stats import bootstrap, DegenerateDataWarning
@@ -279,26 +388,44 @@ def _cluster_bootstrap_ci(
     # full pooled_df.
     rows_by_user = {u: pooled_df[pooled_df["app_user_id"] == u] for u in users}
 
-    def _pooled_metric(user_idx: np.ndarray, metric_fn) -> float:
+    def _resample_rows(user_idx: np.ndarray) -> Optional[pd.DataFrame]:
         sampled_users = users[user_idx.astype(int)]
         rows = pd.concat([rows_by_user[u] for u in sampled_users], ignore_index=True)
-        y_true = rows["y_true"].to_numpy()
-        if len(np.unique(y_true)) < 2:
-            return float("nan")  # degenerate resample: only one class present
-        return float(metric_fn(y_true, rows[prob_col].to_numpy()))
+        if len(np.unique(rows["y_true"])) < 2:
+            return None  # degenerate resample: only one class present
+        return rows
 
-    def _auroc_stat(user_idx, axis=None):
-        return _pooled_metric(np.asarray(user_idx).reshape(-1), roc_auc_score)
+    def _sklearn_stat(user_idx, metric_fn, prob_col):
+        rows = _resample_rows(np.asarray(user_idx).reshape(-1))
+        if rows is None:
+            return float("nan")
+        return float(metric_fn(rows["y_true"].to_numpy(), rows[prob_col].to_numpy()))
 
-    def _auprc_stat(user_idx, axis=None):
-        return _pooled_metric(np.asarray(user_idx).reshape(-1), average_precision_score)
+    def _classification_stat(user_idx, metric_name):
+        rows = _resample_rows(np.asarray(user_idx).reshape(-1))
+        if rows is None:
+            return float("nan")
+        values = _pooled_classification_metrics(
+            rows["y_true"].to_numpy(), rows[prob_cols].to_numpy(), params
+        )
+        return values[metric_name]
+
+    stat_fns = {
+        "auroc": lambda idx, axis=None: _sklearn_stat(idx, roc_auc_score, prob_cols[1]),
+        "auprc": lambda idx, axis=None: _sklearn_stat(idx, average_precision_score, prob_cols[1]),
+        "f1": lambda idx, axis=None: _classification_stat(idx, "f1"),
+        "precision": lambda idx, axis=None: _classification_stat(idx, "precision"),
+        "recall": lambda idx, axis=None: _classification_stat(idx, "recall"),
+        "specificity": lambda idx, axis=None: _classification_stat(idx, "specificity"),
+        "sensitivity_at_specificity": lambda idx, axis=None: _classification_stat(idx, "sensitivity_at_specificity"),
+        "balanced_accuracy": lambda idx, axis=None: _classification_stat(idx, "balanced_accuracy"),
+    }
 
     user_idx_array = np.arange(n_users)
     results = {}
-    for name, stat_fn in (("auroc", _auroc_stat), ("auprc", _auprc_stat)):
-        # _pooled_metric returns nan for a resample/jackknife sample that
-        # happens to draw only one class (e.g. every positive-holding user
-        # got left out). A handful of nans among thousands of bootstrap
+    for name, stat_fn in stat_fns.items():
+        # A resample/jackknife sample that happens to draw only one class
+        # returns nan above. A handful of nans among thousands of bootstrap
         # values is normal and fine -- but BCa also needs a jackknife
         # (leave-one-user-out) pass, and if a SINGLE user holds all the
         # positives, every leave-one-out sample is degenerate and BCa is
