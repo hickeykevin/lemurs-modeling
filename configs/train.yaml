@@ -7,6 +7,11 @@ defaults:
   - data: default
   - model: default
   - callbacks: default
+  # Evaluation strategy: single (default), grouped_cv, or walk_forward. Must come
+  # AFTER callbacks so a plan that requires particular callbacks can override
+  # them; an explicit `callbacks=...` on the command line still wins over both.
+  # See docs/eval_schemes.md for which data config pairs with which plan.
+  - eval_plan: single
   - logger: csv # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
   - trainer: cpu
   - paths: default

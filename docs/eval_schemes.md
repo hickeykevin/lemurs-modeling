@@ -24,6 +24,12 @@ HealthDataModule                     (base: cohort building, scaling, one split)
 └── CVHealthDataModule                (separate question — see below)
 ```
 
+Orthogonal to this hierarchy is the **eval plan** (`eval_plan=` on the command
+line), which decides how many times a datamodule is run and how the results
+combine — see *Entry points* below. The datamodule decides which rows land in
+train/val/test for a given fold; the plan decides which folds exist. A config
+pairs one of each.
+
 Three separate axes compose to answer "which rows go in train/val/test, and
 does the run produce an index I can pool predictions across":
 
@@ -155,44 +161,80 @@ pre-sweep exploratory configs (`walk_forward.yaml`,
 `walk_forward_cyclic_4fold_sweep.yaml`, `longitudinal_sweep.yaml`), deleted
 once the sweep-derived hyperparameters and 5-fold cyclic were settled on.
 
-| Config | `_target_` | Scheme | Command |
-|---|---|---|---|
-| [`configs/data/longitudinal_sweep_indexed.yaml`](../configs/data/longitudinal_sweep_indexed.yaml) | `IndexedHealthDataModule` | `split_mode="longitudinal"`, single cut | `python src/train.py data=longitudinal_sweep_indexed callbacks=pooled_eval test=True` |
-| [`configs/data/walk_forward_pct_sweep.yaml`](../configs/data/walk_forward_pct_sweep.yaml) | `WalkForwardHealthDataModule` | `fold_sizing="pct"`, 4 folds, expanding | `python src/wf_cv_train.py data=walk_forward_pct_sweep` |
-| [`configs/data/walk_forward_cyclic_5fold_sweep.yaml`](../configs/data/walk_forward_cyclic_5fold_sweep.yaml) | `WalkForwardHealthDataModule` | `fold_sizing="cyclic"`, 5 folds, wraparound | `python src/wf_cv_train.py data=walk_forward_cyclic_5fold_sweep` |
+Every strategy runs through `src/train.py`, selected by `eval_plan=`:
 
-All three share the same data/model hyperparameters, carried from W&B
-sweep `umdhgse9` (see the `walk_forward_cyclic_5fold_sweep.yaml` comment
-for the full provenance) — the point of holding these fixed is to compare
-the three *evaluation schemes* against each other, not confound that
-comparison with a hyperparameter difference.
+| Strategy | Command |
+|---|---|
+| Single split | `python src/train.py data=longitudinal_sweep_indexed callbacks=pooled_eval test=True` |
+| Subject-wise (grouped) CV | `python src/train.py eval_plan=grouped_cv data=cv_default test=True` |
+| Walk-forward, expanding | `python src/train.py eval_plan=walk_forward data=walk_forward_pct_sweep` |
+| Walk-forward, cyclic | `python src/train.py eval_plan=walk_forward data=walk_forward_cyclic_5fold_sweep` |
+
+Note the last two share one plan: **cyclic is not a separate strategy** at the
+orchestration level, only a different `fold_sizing` on the same datamodule, so
+it needs no plan of its own — just a different `data=`.
+
+The three sweep-derived data configs
+([`longitudinal_sweep_indexed`](../configs/data/longitudinal_sweep_indexed.yaml),
+[`walk_forward_pct_sweep`](../configs/data/walk_forward_pct_sweep.yaml),
+[`walk_forward_cyclic_5fold_sweep`](../configs/data/walk_forward_cyclic_5fold_sweep.yaml))
+share the same data/model hyperparameters, carried from W&B sweep `umdhgse9`
+(see the cyclic config's comment for full provenance) — the point of holding
+these fixed is to compare the *evaluation schemes* against each other, not
+confound that comparison with a hyperparameter difference.
+
+See git history for superseded pre-sweep exploratory configs
+(`walk_forward.yaml`, `walk_forward_cyclic.yaml`,
+`walk_forward_cyclic_4fold.yaml`, `walk_forward_cyclic_4fold_sweep.yaml`,
+`longitudinal_sweep.yaml`), deleted once the sweep hyperparameters and 5-fold
+cyclic were settled on.
 
 ## Entry points
 
-- **`src/wf_cv_train.py`** — loops `current_fold` over a
-  `WalkForwardHealthDataModule`'s folds, trains+tests each, pools every
-  fold's test predictions, computes pooled metrics + user-cluster BCa CIs.
-  Its own script, not `train.py`, because it needs to pool across *multiple*
-  `trainer.test()` calls (one per fold) into a single evaluation set — no
-  single `Callback` instance's `on_test_end` can do that, since it only
-  ever sees one trainer's one test run.
-- **`src/train.py` + `callbacks=pooled_eval`** — the single-split case
-  (`split_mode="longitudinal"` via `IndexedHealthDataModule`, or
-  `split_mode="user"`) needs no fold loop, so it doesn't need its own
-  script the way the CV case does: `train.py`/`train.yaml` are unmodified,
-  and `PooledMetricsCallback`
-  ([`src/utils/pooled_metrics_callback.py`](../src/utils/pooled_metrics_callback.py))
-  supplies the collection + pooled-metrics/CI step as an ordinary Lightning
-  callback, attached via
-  [`configs/callbacks/pooled_eval.yaml`](../configs/callbacks/pooled_eval.yaml).
-  Requires `test=True` (off by default in `train.yaml`) since the callback's
-  work happens in `on_test_end`. A prior version of this repo had a
-  dedicated `single_split_eval.py` script for this; it's gone now that the
-  callback covers the same ground without a second entry point.
-- **`src/utils/pooled_metrics.py`** — the pure functions both of the above
-  share (`compute_pooled_metrics`, `_cluster_bootstrap_ci`,
-  `_pooled_classification_metrics`, `fold_breakdown_table`), so neither is
-  "the real owner" the other imports sideways from.
+**`src/train.py` is the entry point for every strategy.** It instantiates
+`cfg.eval_plan` and hands it to one generic runner; it contains no
+strategy-specific branching at all.
+
+- **[`src/eval_plans/`](../src/eval_plans/)** — an `EvalPlan` describes a
+  strategy as *data*: which units of work exist (`units()`) and how their
+  results combine (`aggregate()`). The runner
+  ([`runner.py`](../src/eval_plans/runner.py)) executes every plan through the
+  same loop — instantiate datamodule/model/callbacks/trainer, fit, test,
+  record — so adding a strategy means writing a small `units()`/`aggregate()`
+  pair, not a new orchestration script. Read
+  [`base.py`](../src/eval_plans/base.py) first; it documents the protocol and
+  its **known boundary** (units are fixed before the first one runs, so nested
+  CV or adaptive stopping would need a different protocol).
+- **`eval_plan=walk_forward`** pools every fold's out-of-fold predictions into
+  one evaluation set. It also *requires* `callbacks=walk_forward`
+  (`early_stopping.strict: False`, since a fold's val split can end up empty
+  after purging), which its plan config pulls in automatically — an explicit
+  `callbacks=...` on the command line still wins.
+- **`callbacks=pooled_eval`** adds pooled, user-cluster BCa CIs to a
+  *single-split* run via `PooledMetricsCallback`
+  ([`src/utils/pooled_metrics_callback.py`](../src/utils/pooled_metrics_callback.py)).
+  That is a per-trainer concern, independent of the eval plan; it needs
+  `test=True` (off by default in `train.yaml`) since its work happens in
+  `on_test_end`.
+- **`src/utils/pooled_metrics.py`** — the pure metric/bootstrap functions
+  shared by the walk-forward plan and `PooledMetricsCallback`, so neither owns
+  logic the other imports sideways.
+
+### The older scripts
+
+`src/cv_train.py` and `src/wf_cv_train.py` still exist and still work
+unchanged. They are the reference implementations the `eval_plan` path is
+verified for numerical parity against, and a few things still depend on them
+directly (`src/app.py`'s Cross Validate mode shells out to `cv_train.py`; the
+`suicide_risk_cv.yaml` W&B sweep targets it). Retiring them is a separate
+decision, deliberately not bundled with introducing the new path.
+
+While both exist, `src/utils/fold_identity.py` and
+`src/utils/cv_aggregation.py` are **duplicates** of helpers inside
+`cv_train.py` (which cannot be imported from — it runs `rootutils.setup_root()`
+and other side effects at module scope). Their module docstrings say so, and
+`tests/test_fold_identity.py`/`tests/test_cv_aggregation.py` assert the copies
+agree, as a tripwire against silent drift.
 
 ## Known sharp edge: Hydra output-directory collisions
 

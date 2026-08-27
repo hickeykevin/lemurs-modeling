@@ -1,0 +1,26 @@
+# @package _global_
+
+# Per-user walk-forward CV: "given a user's own history, can the model forecast
+# their near-future risk?" Every fold's out-of-fold test predictions are pooled
+# into one evaluation set (fold index is a per-user position, not a shared
+# calendar window, so pooling -- not fold-averaging -- is the valid aggregation).
+#
+# This one plan covers every WalkForwardHealthDataModule fold-construction mode;
+# the strategy is chosen by the data config, not by a separate plan:
+#   data=walk_forward_pct_sweep            -> expanding window
+#   data=walk_forward_cyclic_5fold_sweep   -> cyclic, fixed-width, wraparound
+#
+# Overriding callbacks is required rather than cosmetic: a walk-forward fold's
+# val split can end up empty after purging, and configs/callbacks/default.yaml
+# sets early_stopping.strict=True, which crashes the whole run when val/auroc is
+# never logged for that fold. callbacks=walk_forward relaxes that. An explicit
+# `callbacks=...` on the command line still wins over this default.
+defaults:
+  - override /callbacks: walk_forward
+
+eval_plan:
+  _target_: src.eval_plans.walk_forward.WalkForwardPlan
+  # BCa bootstrap resamples per pooled metric. 1000 is production quality;
+  # lowering it speeds up the (dominant) aggregation cost at the price of a
+  # noisier interval estimate. See src/utils/pooled_metrics.py.
+  n_bootstraps: 1000

@@ -1,0 +1,11 @@
+# @package _global_
+
+# One train/val/test split, evaluated once -- the baseline strategy, and what
+# train.py did before the eval_plan layer existed. Whether a test pass runs is
+# left to `test` (False by default in train.yaml), same as before.
+#
+# For pooled, user-cluster BCa bootstrap CIs on a single split, add
+# `callbacks=pooled_eval` (see docs/eval_schemes.md) -- that is a per-trainer
+# concern handled by PooledMetricsCallback, independent of the eval plan.
+eval_plan:
+  _target_: src.eval_plans.single.SingleSplitPlan

@@ -1,0 +1,10 @@
+# @package _global_
+
+# Repeated, user-grouped k-fold: "does this generalize to a NEW user with no
+# history?" Folds are grouped on app_user_id so no participant appears on both
+# sides. Results are reported as mean +/- sd with a 95% interval across folds.
+#
+# Pair with a data config that supports fold selection (e.g. data=cv_default).
+# data.num_folds=-1 means leave-one-user-out, resolved from the cohort.
+eval_plan:
+  _target_: src.eval_plans.grouped_cv.GroupedCVPlan
