@@ -1,0 +1,48 @@
+defaults:
+  - _self_
+  - aggregator: suicide_risk
+  - sampler: offset_48h_6h
+  - scaler: dual
+  - preprocessors: [step, distance]
+
+_target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
+modalities: ["step", "distance"]
+
+# fold_sizing="pct": EXPANDING window, each fold's train is everything
+# before its test window (all of a user's own past, growing fold to fold),
+# test cut by percentage of that user's own total responses -- see
+# CohortSplitter.split_walk_forward_pct and configs/data/walk_forward.yaml.
+# This is the middle point of the three-way comparison: split_mode=
+# "longitudinal" (longitudinal_sweep.yaml) samples the forecast question
+# once per user; this samples it multiple times, walking forward, but
+# never trains on a user's chronological future; fold_sizing="cyclic"
+# (walk_forward_cyclic_5fold_sweep.yaml) also samples it multiple times
+# but with a fixed-width, wrapping train window instead of an expanding
+# one. Same data/model settings as those two, carried from sweep umdhgse9
+# (see walk_forward_cyclic_4fold_sweep.yaml's comment).
+#
+# burn_in_pct=0.4, step_pct=0.15 -> 4 folds (matches the pct config
+# validated earlier: near-flat user coverage across folds).
+fold_sizing: pct
+burn_in_pct: 0.4
+step_pct: 0.15
+val_pct: 0.0
+current_fold: 0
+
+batch_size: 16
+num_workers: 1
+pin_memory: False
+random_state: ${seed}
+os_filter: both
+
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+include_time_features: false
+
+use_demographics: true
+use_sleep: true
+
+purge_hours: null
+
+exclude_user_ids: null

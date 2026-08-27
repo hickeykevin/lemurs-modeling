@@ -1,0 +1,47 @@
+# @package _global_
+
+# specify here default configuration
+# order of defaults determines the order in which configs override each other
+defaults:
+  - _self_
+  - data: longitudinal_sweep_indexed
+  - model: default
+  - callbacks: default
+  - logger: csv # set logger here or use command line (e.g. `python single_split_eval.py logger=tensorboard`)
+  - trainer: cpu
+  - paths: default
+  - extras: default
+  - hydra: default
+
+  # experiment configs allow for version control of specific hyperparameters
+  # e.g. best hyperparameters for given model and datamodule
+  - experiment: null
+
+  # config for hyperparameter optimization
+  - hparams_search: null
+
+  # optional local config for machine/user specific settings
+  # it's optional since it doesn't need to exist and is excluded from version control
+  - optional local: default
+
+  # debugging config (enable through command line, e.g. `python single_split_eval.py debug=default)
+  - debug: null
+
+# task name, determines output directory path
+task_name: "single_split_eval"
+
+# tags to help you identify your experiments
+tags: ["single_split", "dev"]
+
+# set False to skip model training
+train: True
+
+# testing is not gated behind a flag here (unlike train.py's `test`): pooled
+# test predictions with a user-cluster bootstrap CI are this script's whole
+# purpose -- see single_split_eval.py's module docstring.
+
+# simply provide checkpoint path to resume training
+ckpt_path: null
+
+# seed for random number generators in pytorch, numpy and python.random
+seed: 7

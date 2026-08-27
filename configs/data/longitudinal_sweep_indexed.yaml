@@ -1,0 +1,41 @@
+defaults:
+  - _self_
+  - aggregator: suicide_risk
+  - sampler: offset_48h_6h
+  - scaler: dual
+  - preprocessors: [step, distance]
+
+_target_: src.data.indexed_health_datamodule.IndexedHealthDataModule
+modalities: ["step", "distance"]
+
+# Identical to configs/data/longitudinal_sweep.yaml (same split_mode="longitudinal"
+# single cut, same sweep umdhgse9 hparams), except _target_ builds data_val/
+# data_test with return_index=True (see IndexedHealthDataModule), so
+# PredictionCollectorCallback can collect this run's test predictions and a
+# pooled, user-cluster BCa bootstrap CI can be computed for them -- the same
+# treatment walk_forward_pct_sweep.yaml / walk_forward_cyclic_5fold_sweep.yaml
+# get, rather than ClassificationMetricsCallback's row-level BootStrapper CI
+# (which understates uncertainty here for the same reason a row-level
+# bootstrap is wrong everywhere else in this pipeline -- see CohortSplitter's
+# class docstring).
+split_mode: longitudinal
+train_val_test_split: [0.7, 0.15, 0.15]
+purge_hours: null
+swap_val_test: false
+symmetric_purge_diagnostic: false
+
+batch_size: 16
+num_workers: 1
+pin_memory: False
+random_state: ${seed}
+os_filter: both
+
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+include_time_features: false
+
+use_demographics: true
+use_sleep: true
+
+exclude_user_ids: null

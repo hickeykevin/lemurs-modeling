@@ -1,0 +1,38 @@
+defaults:
+  - _self_
+  - aggregator: suicide_risk
+  - sampler: offset_48h_6h
+  - scaler: dual
+  - preprocessors: [step, distance]
+
+_target_: src.data.health_datamodule.HealthDataModule
+modalities: ["step", "distance"]
+
+# split_mode="longitudinal": ONE train/val/test cut per user, by chronological
+# position (see CohortSplitter._split_longitudinally) -- the single-cut
+# baseline being compared against walk_forward_sweep.yaml (expanding-window,
+# multiple folds) and walk_forward_cyclic_5fold_sweep.yaml (cyclic, fixed-
+# width, wraparound). Same data/model settings as those two, carried from
+# sweep umdhgse9 (see walk_forward_cyclic_4fold_sweep.yaml's comment), so
+# the three evaluation schemes are compared holding hparams fixed.
+split_mode: longitudinal
+train_val_test_split: [0.7, 0.15, 0.15]
+purge_hours: null
+swap_val_test: false
+symmetric_purge_diagnostic: false
+
+batch_size: 16
+num_workers: 1
+pin_memory: False
+random_state: ${seed}
+os_filter: both
+
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+include_time_features: false
+
+use_demographics: true
+use_sleep: true
+
+exclude_user_ids: null
