@@ -11,18 +11,19 @@ modalities: ["step", "distance"]
 # fold_sizing="pct": EXPANDING window, each fold's train is everything
 # before its test window (all of a user's own past, growing fold to fold),
 # test cut by percentage of that user's own total responses -- see
-# CohortSplitter.split_walk_forward_pct and configs/data/walk_forward.yaml.
-# This is the middle point of the three-way comparison: split_mode=
-# "longitudinal" (longitudinal_sweep.yaml) samples the forecast question
-# once per user; this samples it multiple times, walking forward, but
-# never trains on a user's chronological future; fold_sizing="cyclic"
+# CohortSplitter.split_walk_forward_pct. This is the middle point of the
+# three-way comparison: split_mode="longitudinal"
+# (longitudinal_sweep_indexed.yaml) samples the forecast question once per
+# user; this samples it multiple times, walking forward, but never trains
+# on a user's chronological future; fold_sizing="cyclic"
 # (walk_forward_cyclic_5fold_sweep.yaml) also samples it multiple times
 # but with a fixed-width, wrapping train window instead of an expanding
 # one. Same data/model settings as those two, carried from sweep umdhgse9
-# (see walk_forward_cyclic_4fold_sweep.yaml's comment).
+# (see walk_forward_cyclic_5fold_sweep.yaml's comment for the full
+# provenance and rationale).
 #
-# burn_in_pct=0.4, step_pct=0.15 -> 4 folds (matches the pct config
-# validated earlier: near-flat user coverage across folds).
+# burn_in_pct=0.4, step_pct=0.15 -> 4 folds (near-flat user coverage across
+# folds, vs. fold_sizing="count"'s test-window-size-driven user decay).
 fold_sizing: pct
 burn_in_pct: 0.4
 step_pct: 0.15

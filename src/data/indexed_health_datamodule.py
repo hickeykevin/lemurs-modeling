@@ -18,20 +18,22 @@ class IndexedHealthDataModule(HealthDataModule):
     uncertainty by treating each of one user's many responses as an
     independent draw, rather than resampling whole participants.
 
-    This is exactly the rebuild step ``WalkForwardHealthDataModule.setup()``
-    performs on top of its own fold-selecting ``_split_data`` override --
-    see that class's docstring for the full rationale. Here there is no fold
-    logic at all: every ``HealthDataModule`` split_mode ("user" or
-    "longitudinal") is supported unchanged, and this class only adds the
-    return_index=True rebuild on top of whichever one the base class ran.
+    ``WalkForwardHealthDataModule`` subclasses this rather than duplicating
+    the rebuild step: it needs the exact same "run the normal setup, then
+    rebuild data_val/data_test with return_index=True, reusing the fitted
+    scaler/demographics state" behavior on top of its own fold-selecting
+    ``_split_data`` override, so it inherits this class's ``setup()``
+    outright and only adds fold selection before calling it (see that
+    class's docstring). Here there is no fold logic at all: every
+    ``HealthDataModule`` split_mode ("user" or "longitudinal") is supported
+    unchanged, and this class only adds the return_index=True rebuild on
+    top of whichever one the base class ran.
     """
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Runs the base class's normal setup, then rebuilds ``data_val``/
         ``data_test`` with ``return_index=True``, reusing the scaler/
-        demographics state the base class already fit -- identical in
-        mechanics to ``WalkForwardHealthDataModule.setup()``, minus the
-        fold selection.
+        demographics state the base class already fit.
         """
         already_built = self.data_train is not None or self.data_val is not None or self.data_test is not None
         super().setup(stage)

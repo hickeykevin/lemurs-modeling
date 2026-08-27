@@ -8,13 +8,12 @@ from src.data.components.cohort_splitter import (
     WalkForwardFold,
     lookback_hours_from_sampler,
 )
-from src.data.components.health_dataset import HealthDataset
 from src.data.components.label_aggregators import LabelAggregator
 from src.data.components.samplers import TimeSampler
-from src.data.health_datamodule import HealthDataModule
+from src.data.indexed_health_datamodule import IndexedHealthDataModule
 
 
-class WalkForwardHealthDataModule(HealthDataModule):
+class WalkForwardHealthDataModule(IndexedHealthDataModule):
     """Per-user, purged, expanding-window walk-forward cross-validation.
 
     Answers "given a user's own history, can the model forecast their
@@ -39,9 +38,13 @@ class WalkForwardHealthDataModule(HealthDataModule):
     ``burn_in_responses``; short-history users contribute fewer folds, or
     none, and this is expected rather than an error (see
     ``CohortSplitter.split_walk_forward``). Set ``burn_in_responses`` from
-    the cohort's actual response-count distribution, not a fixed guess — see
-    the ``configs/data/walk_forward.yaml`` comment for the numbers this
-    cohort's distribution supports.
+    the cohort's actual response-count distribution, not a fixed guess.
+    ``fold_sizing="count"`` (this docstring's concern) has been superseded
+    in this repo's own configs by ``fold_sizing="pct"``/``"cyclic"`` (see
+    ``configs/data/walk_forward_pct_sweep.yaml`` and
+    ``configs/data/walk_forward_cyclic_5fold_sweep.yaml``), which don't
+    suffer count-based sizing's per-fold user-count decay; it remains
+    supported as a third option below.
 
     ``current_fold`` selects which of the precomputed folds ``setup()``
     builds datasets for, in the same style as ``CVHealthDataModule``. Unlike
@@ -55,17 +58,14 @@ class WalkForwardHealthDataModule(HealthDataModule):
     ``data_val`` and ``data_test`` are built with ``return_index=True`` so a
     ``PredictionCollectorCallback`` can join predictions back to
     ``data_links`` (``app_user_id``, ``record_timestamp``) — needed to pool
-    predictions across folds and users into one evaluation set. This is the
-    one respect in which this module cannot simply override ``_split_data``
-    the way ``CVHealthDataModule`` does and leave the rest of ``setup()``
-    untouched: the base ``setup()`` never passes ``return_index`` to
-    ``HealthDataset``. Rather than duplicating all of ``setup()``, this
-    module calls ``super().setup(stage)`` first — building ``data_train``
-    with the fold's data exactly as the base class would — then rebuilds
-    only ``data_val``/``data_test`` with ``return_index=True``, reusing the
-    scaler, ``demographics_map``, and ``user_to_idx`` the base class already
-    fit, so nothing about the fitted state is redone or diverges from what
-    ``_split_data`` selected.
+    predictions across folds and users into one evaluation set. This is why
+    this class subclasses ``IndexedHealthDataModule`` rather than
+    ``HealthDataModule`` directly: ``IndexedHealthDataModule.setup()``
+    already does exactly the "run the normal setup, then rebuild
+    data_val/data_test with return_index=True, reusing the fitted
+    scaler/demographics state" work this module also needs, so this class
+    inherits that ``setup()`` unchanged and only overrides ``_split_data``
+    to select ``current_fold``'s rows before the inherited ``setup()`` runs.
     """
 
     def __init__(
@@ -315,37 +315,8 @@ class WalkForwardHealthDataModule(HealthDataModule):
         fold = folds[fold_idx]
         return fold.train_df, fold.val_df, fold.test_df
 
-    def setup(self, stage: Optional[str] = None) -> None:
-        """Builds datasets for ``current_fold``, with index-returning val/test sets.
-
-        Delegates to the base class for the entire cohort-extraction, split,
-        scaler-fitting and dataset-construction pipeline (identical to
-        ``split_mode="longitudinal"`` in every respect except which rows
-        ``_split_data`` selects), then rebuilds ``data_val``/``data_test``
-        only, with ``return_index=True``, reusing the scaler/demographics
-        state the base class already fit. See the class docstring for why
-        this is necessary rather than overriding ``_split_data`` alone.
-        """
-        already_built = self.data_train is not None or self.data_val is not None or self.data_test is not None
-        super().setup(stage)
-        if already_built:
-            return  # base class no-ops on repeat calls; so do we
-
-        is_regression = getattr(self.hparams.aggregator, "is_regression", False)
-        modality_dfs = self.modality_dfs
-
-        for attr, df in (("data_val", self.data_val.data_links), ("data_test", self.data_test.data_links)):
-            setattr(
-                self,
-                attr,
-                HealthDataset(
-                    df, modality_dfs, self.hparams.modality_cols,
-                    self.hparams.sampler, self.hparams.scaler, user_to_idx=self.user_to_idx,
-                    is_regression=is_regression,
-                    demographics_map=self.demographics_map,
-                    default_demographics=self.default_demographics,
-                    use_sleep=self.hparams.use_sleep,
-                    use_survey_context=self.hparams.use_survey_context,
-                    return_index=True,
-                ),
-            )
+    # setup() is inherited unchanged from IndexedHealthDataModule: it calls
+    # super().setup(stage), which (via HealthDataModule.setup()) dispatches
+    # to THIS class's _split_data override above to select current_fold's
+    # rows, then rebuilds data_val/data_test with return_index=True. No
+    # override needed here -- see the class docstring.

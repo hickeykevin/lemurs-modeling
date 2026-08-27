@@ -8,16 +8,24 @@ defaults:
 _target_: src.data.indexed_health_datamodule.IndexedHealthDataModule
 modalities: ["step", "distance"]
 
-# Identical to configs/data/longitudinal_sweep.yaml (same split_mode="longitudinal"
-# single cut, same sweep umdhgse9 hparams), except _target_ builds data_val/
-# data_test with return_index=True (see IndexedHealthDataModule), so
-# PredictionCollectorCallback can collect this run's test predictions and a
-# pooled, user-cluster BCa bootstrap CI can be computed for them -- the same
-# treatment walk_forward_pct_sweep.yaml / walk_forward_cyclic_5fold_sweep.yaml
-# get, rather than ClassificationMetricsCallback's row-level BootStrapper CI
-# (which understates uncertainty here for the same reason a row-level
-# bootstrap is wrong everywhere else in this pipeline -- see CohortSplitter's
-# class docstring).
+# split_mode="longitudinal": ONE train/val/test cut per user, by
+# chronological position (see CohortSplitter._split_longitudinally) -- the
+# single-cut baseline being compared against walk_forward_pct_sweep.yaml
+# (expanding-window, multiple folds) and
+# walk_forward_cyclic_5fold_sweep.yaml (cyclic, fixed-width, wraparound).
+# Same data/model settings as those two, carried from sweep umdhgse9 (see
+# walk_forward_cyclic_5fold_sweep.yaml's comment), so the three evaluation
+# schemes are compared holding hparams fixed.
+#
+# _target_ is IndexedHealthDataModule rather than plain HealthDataModule so
+# data_val/data_test are built with return_index=True (see
+# IndexedHealthDataModule), letting PredictionCollectorCallback collect this
+# run's test predictions and a pooled, user-cluster BCa bootstrap CI be
+# computed for them -- the same treatment the two walk-forward configs
+# above get, rather than ClassificationMetricsCallback's row-level
+# BootStrapper CI (which understates uncertainty here for the same reason a
+# row-level bootstrap is wrong everywhere else in this pipeline -- see
+# CohortSplitter's class docstring).
 split_mode: longitudinal
 train_val_test_split: [0.7, 0.15, 0.15]
 purge_hours: null
