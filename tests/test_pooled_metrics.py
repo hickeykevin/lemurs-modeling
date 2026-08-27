@@ -1,6 +1,8 @@
-"""Unit tests for wf_cv_train.py's pooled-metric helpers (no DB, no Trainer --
-pure functions over a synthetic pooled-predictions DataFrame). See
-tests/test_wf_cv_train.py for the real-DB, full-pipeline integration tests.
+"""Unit tests for src/utils/pooled_metrics.py's pure functions (no DB, no
+Trainer -- pure functions over a synthetic pooled-predictions DataFrame).
+See tests/test_wf_cv_train.py for the real-DB, full-pipeline integration
+tests, and tests/test_pooled_metrics_callback.py for the Callback that
+wraps these for a single trainer.test() run.
 """
 
 import numpy as np
@@ -10,11 +12,12 @@ import torch
 
 from src.utils import RankedLogger
 from src.utils.evaluation_callbacks import ClassificationMetricsCallback
-from src.wf_cv_train import (
+from src.utils.pooled_metrics import (
     _classification_metrics_params,
     _cluster_bootstrap_ci,
-    _compute_pooled_metrics,
     _pooled_classification_metrics,
+    compute_pooled_metrics,
+    fold_breakdown_table,
 )
 
 log = RankedLogger(__name__, rank_zero_only=True)
@@ -65,19 +68,15 @@ def test_pooled_classification_metrics_matches_the_callback_exactly():
         assert ours[name] == pytest.approx(theirs[name], abs=1e-6), name
 
 
-def test_classification_metrics_params_reads_from_cfg():
-    from omegaconf import OmegaConf
-
-    cfg = OmegaConf.create({
-        "callbacks": {"classification_metrics": {"min_specificity": 0.75, "f1_average": "micro"}}
-    })
-    params = _classification_metrics_params(cfg)
+def test_classification_metrics_params_reads_from_callback():
+    cb = ClassificationMetricsCallback(min_specificity=0.75, f1_average="micro")
+    params = _classification_metrics_params(cb)
     assert params["min_specificity"] == 0.75
     assert params["f1_average"] == "micro"
     assert params["recall_average"] == "macro"  # untouched keys keep their default
 
 
-def test_classification_metrics_params_falls_back_without_cfg():
+def test_classification_metrics_params_falls_back_without_callback():
     assert _classification_metrics_params(None) == DEFAULT_PARAMS
 
 
@@ -134,7 +133,7 @@ def test_cluster_bootstrap_ci_single_positive_user_is_degenerate_not_crashing():
 
 def test_compute_pooled_metrics_end_to_end_includes_all_metrics_and_cis():
     df = _synthetic_pool()
-    metrics = _compute_pooled_metrics(df, log, n_bootstraps=100)
+    metrics = compute_pooled_metrics(df, log, n_bootstraps=100)
 
     for name in ALL_METRICS:
         assert f"pooled/{name}" in metrics
@@ -148,10 +147,10 @@ def test_compute_pooled_metrics_end_to_end_includes_all_metrics_and_cis():
 
 
 def test_compute_pooled_metrics_matches_callback_point_estimates():
-    """End-to-end: _compute_pooled_metrics's point estimates (not just
+    """End-to-end: compute_pooled_metrics's point estimates (not just
     _pooled_classification_metrics in isolation) match the callback."""
     df = _synthetic_pool()
-    metrics = _compute_pooled_metrics(df, log, n_bootstraps=100)
+    metrics = compute_pooled_metrics(df, log, n_bootstraps=100)
 
     cb = ClassificationMetricsCallback()
     collection = cb._init_metrics(num_classes=2, device=torch.device("cpu"), bootstrap=False)
@@ -166,17 +165,18 @@ def test_compute_pooled_metrics_matches_callback_point_estimates():
         assert metrics[f"pooled/{name}"] == pytest.approx(theirs[name], abs=1e-6), name
 
 
-def test_compute_pooled_metrics_respects_cfg_params():
-    """A different min_specificity in cfg should change sensitivity_at_specificity's
-    point estimate relative to the default-params run (proves cfg actually flows
-    through, not just accepted and ignored)."""
-    from omegaconf import OmegaConf
-
+def test_compute_pooled_metrics_respects_classification_metrics_callback_params():
+    """A different min_specificity on the ClassificationMetricsCallback instance
+    should change sensitivity_at_specificity's point estimate relative to the
+    default-params run (proves the callback's params actually flow through,
+    not just accepted and ignored)."""
     df = _synthetic_pool()
-    metrics_default = _compute_pooled_metrics(df, log, n_bootstraps=50)
+    metrics_default = compute_pooled_metrics(df, log, n_bootstraps=50)
 
-    cfg = OmegaConf.create({"callbacks": {"classification_metrics": {"min_specificity": 0.5}}})
-    metrics_custom = _compute_pooled_metrics(df, log, cfg=cfg, n_bootstraps=50)
+    custom_cb = ClassificationMetricsCallback(min_specificity=0.5)
+    metrics_custom = compute_pooled_metrics(
+        df, log, classification_metrics_callback=custom_cb, n_bootstraps=50
+    )
 
     assert metrics_default["pooled/sensitivity_at_specificity"] != pytest.approx(
         metrics_custom["pooled/sensitivity_at_specificity"]
@@ -185,7 +185,7 @@ def test_compute_pooled_metrics_respects_cfg_params():
 
 def test_compute_pooled_metrics_empty_pool_returns_empty_dict():
     df = pd.DataFrame(columns=["app_user_id", "y_true", "prob_class_0", "prob_class_1"])
-    metrics = _compute_pooled_metrics(df, log)
+    metrics = compute_pooled_metrics(df, log)
     assert metrics == {}
 
 
@@ -196,5 +196,24 @@ def test_compute_pooled_metrics_single_class_returns_empty_dict():
         "prob_class_0": [0.6, 0.7, 0.5, 0.9],
         "prob_class_1": [0.4, 0.3, 0.5, 0.1],
     })
-    metrics = _compute_pooled_metrics(df, log)
+    metrics = compute_pooled_metrics(df, log)
     assert metrics == {}
+
+
+def test_fold_breakdown_table_empty_pool_returns_empty_dataframe():
+    df = pd.DataFrame(columns=["app_user_id", "y_true", "prob_class_0", "prob_class_1", "fold_index"])
+    table = fold_breakdown_table(df, log)
+    assert table.empty
+
+
+def test_fold_breakdown_table_one_row_per_fold():
+    df1 = _synthetic_pool(seed=1)
+    df1["fold_index"] = 0
+    df2 = _synthetic_pool(seed=2)
+    df2["fold_index"] = 1
+    df = pd.concat([df1, df2], ignore_index=True)
+
+    table = fold_breakdown_table(df, log)
+    assert sorted(table["fold_index"].tolist()) == [0, 1]
+    for col in ("n_predictions", "n_users", "n_positive", "auroc"):
+        assert col in table.columns

@@ -34,10 +34,11 @@ does the run produce an index I can pool predictions across":
    train/test boundary is sized.
 3. **`return_index`** (`IndexedHealthDataModule` / inherited by
    `WalkForwardHealthDataModule`) — whether `data_val`/`data_test` carry
-   enough to join predictions back to source rows, which is what lets
-   `PredictionCollectorCallback` pool predictions across folds/users into
-   one evaluation set with a user-cluster bootstrap CI, instead of relying
-   on `ClassificationMetricsCallback`'s per-batch, row-level
+   enough to join predictions back to source rows, which is what a
+   pooled-metrics callback (`PooledMetricsCallback` for a single run,
+   `wf_cv_train.py`'s own orchestration for CV) needs to pool predictions
+   into one evaluation set with a user-cluster bootstrap CI, instead of
+   relying on `ClassificationMetricsCallback`'s per-batch, row-level
    `torchmetrics.BootStrapper` CI (which understates uncertainty — see
    *Why user-cluster, not row-level* below).
 
@@ -56,9 +57,10 @@ contributes exactly one test window, at a fixed late-timeline position.
 Pure addition on top of `HealthDataModule`, no new split logic. Rebuilds
 `data_val`/`data_test` (after the base class's normal `setup()`) with
 `return_index=True`, reusing the already-fitted scaler/demographics state.
-Exists so a single-split (`split_mode="longitudinal"`) run can use
-`PredictionCollectorCallback` and get the same pooled, user-cluster BCa
-bootstrap CI the CV schemes below get, instead of a row-level CI.
+Exists so a single-split (`split_mode="longitudinal"`) run can attach
+`PooledMetricsCallback` (see *Entry points* below) and get the same
+pooled, user-cluster BCa bootstrap CI the CV schemes below get, instead of
+a row-level CI.
 
 Use this directly (not through `WalkForwardHealthDataModule`) whenever you
 want `split_mode="user"` or `"longitudinal"` with pooled-CI evaluation and
@@ -140,10 +142,10 @@ user-cluster bootstrap resamples whole `app_user_id`s with replacement
 instead, so the CI reflects "how much would this score change with a
 different draw of *people*," the actual source of uncertainty at this
 cohort size. `_cluster_bootstrap_ci` in
-[`wf_cv_train.py`](../src/wf_cv_train.py) implements this via
-`scipy.stats.bootstrap(method="BCa")` over user indices;
-`IndexedHealthDataModule` and `PredictionCollectorCallback` exist
-specifically to make this possible for single-split runs too, not just CV.
+[`src/utils/pooled_metrics.py`](../src/utils/pooled_metrics.py) implements
+this via `scipy.stats.bootstrap(method="BCa")` over user indices;
+`IndexedHealthDataModule` and `PooledMetricsCallback` exist specifically to
+make this possible for single-split `train.py` runs too, not just CV.
 
 ## Config file → scheme map
 
@@ -153,11 +155,11 @@ pre-sweep exploratory configs (`walk_forward.yaml`,
 `walk_forward_cyclic_4fold_sweep.yaml`, `longitudinal_sweep.yaml`), deleted
 once the sweep-derived hyperparameters and 5-fold cyclic were settled on.
 
-| Config | `_target_` | Scheme | Entry script |
+| Config | `_target_` | Scheme | Command |
 |---|---|---|---|
-| [`configs/data/longitudinal_sweep_indexed.yaml`](../configs/data/longitudinal_sweep_indexed.yaml) | `IndexedHealthDataModule` | `split_mode="longitudinal"`, single cut | `src/single_split_eval.py` |
-| [`configs/data/walk_forward_pct_sweep.yaml`](../configs/data/walk_forward_pct_sweep.yaml) | `WalkForwardHealthDataModule` | `fold_sizing="pct"`, 4 folds, expanding | `src/wf_cv_train.py` |
-| [`configs/data/walk_forward_cyclic_5fold_sweep.yaml`](../configs/data/walk_forward_cyclic_5fold_sweep.yaml) | `WalkForwardHealthDataModule` | `fold_sizing="cyclic"`, 5 folds, wraparound | `src/wf_cv_train.py` |
+| [`configs/data/longitudinal_sweep_indexed.yaml`](../configs/data/longitudinal_sweep_indexed.yaml) | `IndexedHealthDataModule` | `split_mode="longitudinal"`, single cut | `python src/train.py data=longitudinal_sweep_indexed callbacks=pooled_eval test=True` |
+| [`configs/data/walk_forward_pct_sweep.yaml`](../configs/data/walk_forward_pct_sweep.yaml) | `WalkForwardHealthDataModule` | `fold_sizing="pct"`, 4 folds, expanding | `python src/wf_cv_train.py data=walk_forward_pct_sweep` |
+| [`configs/data/walk_forward_cyclic_5fold_sweep.yaml`](../configs/data/walk_forward_cyclic_5fold_sweep.yaml) | `WalkForwardHealthDataModule` | `fold_sizing="cyclic"`, 5 folds, wraparound | `python src/wf_cv_train.py data=walk_forward_cyclic_5fold_sweep` |
 
 All three share the same data/model hyperparameters, carried from W&B
 sweep `umdhgse9` (see the `walk_forward_cyclic_5fold_sweep.yaml` comment
@@ -165,15 +167,32 @@ for the full provenance) — the point of holding these fixed is to compare
 the three *evaluation schemes* against each other, not confound that
 comparison with a hyperparameter difference.
 
-## Entry scripts
+## Entry points
 
 - **`src/wf_cv_train.py`** — loops `current_fold` over a
   `WalkForwardHealthDataModule`'s folds, trains+tests each, pools every
   fold's test predictions, computes pooled metrics + user-cluster BCa CIs.
-- **`src/single_split_eval.py`** — same pooled-metrics/CI treatment, for a
-  single `IndexedHealthDataModule` split (no fold loop). Imports
-  `_compute_pooled_metrics`/`_save_pooled_predictions` from
-  `wf_cv_train.py` rather than duplicating them.
+  Its own script, not `train.py`, because it needs to pool across *multiple*
+  `trainer.test()` calls (one per fold) into a single evaluation set — no
+  single `Callback` instance's `on_test_end` can do that, since it only
+  ever sees one trainer's one test run.
+- **`src/train.py` + `callbacks=pooled_eval`** — the single-split case
+  (`split_mode="longitudinal"` via `IndexedHealthDataModule`, or
+  `split_mode="user"`) needs no fold loop, so it doesn't need its own
+  script the way the CV case does: `train.py`/`train.yaml` are unmodified,
+  and `PooledMetricsCallback`
+  ([`src/utils/pooled_metrics_callback.py`](../src/utils/pooled_metrics_callback.py))
+  supplies the collection + pooled-metrics/CI step as an ordinary Lightning
+  callback, attached via
+  [`configs/callbacks/pooled_eval.yaml`](../configs/callbacks/pooled_eval.yaml).
+  Requires `test=True` (off by default in `train.yaml`) since the callback's
+  work happens in `on_test_end`. A prior version of this repo had a
+  dedicated `single_split_eval.py` script for this; it's gone now that the
+  callback covers the same ground without a second entry point.
+- **`src/utils/pooled_metrics.py`** — the pure functions both of the above
+  share (`compute_pooled_metrics`, `_cluster_bootstrap_ci`,
+  `_pooled_classification_metrics`, `fold_breakdown_table`), so neither is
+  "the real owner" the other imports sideways from.
 
 ## Known sharp edge: Hydra output-directory collisions
 
