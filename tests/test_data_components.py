@@ -713,6 +713,40 @@ def test_cohort_splitter_cyclic_purges_train_against_test_start():
         assert (gaps >= purge).all() or (fold.train_df["record_timestamp"] < test_start - purge).all()
 
 
+def test_cohort_splitter_cyclic_purges_wrapped_train_against_test_end():
+    """The far slice of a wrapped train window (the user's most-recent rows,
+    concatenated onto the near slice) is ALSO adjacent to test -- to test's
+    end, cyclically -- and must be purged against that boundary too, not just
+    the near slice against test's start.
+
+    train_width_pct + step_pct == 1.0 here (0.4 + 0.6, one wrapping fold),
+    the exact configuration where the far slice sits with ZERO gap to test's
+    end absent this purge: fold 0's test is rows [0, 30) and the far slice
+    would otherwise start at row 30, the row immediately after test ends.
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=1.5)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.6)
+
+    purge = pd.Timedelta(hours=1.5)
+    saw_a_wrapping_fold = False
+    for fold in folds:
+        if fold.train_df.empty or fold.test_df.empty:
+            continue
+        test_end = fold.test_df["record_timestamp"].max()
+        # Any retained train row that sits AFTER test (the far/wrapped slice)
+        # must be far enough past test's end -- not merely "not inside test".
+        after_test = fold.train_df[fold.train_df["record_timestamp"] > test_end]
+        if not after_test.empty:
+            saw_a_wrapping_fold = True
+            assert (after_test["record_timestamp"] > test_end + purge).all()
+    assert saw_a_wrapping_fold  # sanity: the scenario this test targets actually occurred
+
+
 def test_cohort_splitter_cyclic_no_duplicate_test_role_within_a_fold():
     df = pd.DataFrame({
         "app_user_id": [1] * 50,

@@ -592,17 +592,27 @@ class CohortSplitter:
         size, and training on cyclically-"future" data relative to a given test
         window is acceptable for that goal.
 
-        Purging is applied only at the one real adjacency: the boundary where
-        train's near edge touches test's start (same timestamp-based logic as
+        Purging is applied at both adjacencies a wrapped fold can have with
+        test. The near slice (train's tail, immediately before test's start)
+        is purged against test's start, same timestamp-based logic as
         ``split_walk_forward``/``split_walk_forward_pct`` -- see the class
-        docstring for why). When train wraps around the end of the sequence, it
+        docstring for why. When train wraps around the end of the sequence, it
         is physically two disjoint row-index slices that concatenate into one
-        contiguous *cyclic*-time window; only the slice actually adjacent to
-        test's start is purged against it. The far slice (a wrapped train
-        window's most-recent responses) sits nowhere near test's start as long
-        as ``train_width_pct + step_pct <= 1.0`` (true for any sane parameters --
-        train narrower than a full cycle minus one step), so it is left alone;
-        this method does not attempt to purge a second, far-side boundary.
+        contiguous *cyclic*-time window, and the far slice (a wrapped train
+        window's most-recent responses, sitting at the end of the user's raw
+        timeline) is *also* adjacent to test -- to test's *end*, cyclically --
+        so it is purged against that boundary the same way. This adjacency
+        isn't a distant edge case: at parameters like
+        ``train_width_pct + step_pct == 1.0`` (e.g. the 5-fold sweep default,
+        0.80 + 0.20) the far slice's first row sits at the exact row test's
+        last row precedes, zero gap, on every wrapping fold. Purging only the
+        near side there would leave the model training on rows immediately
+        adjacent to its own test window in time. Both purges only ever shrink
+        their slice (drop rows falling inside the gap); they don't reflow train
+        to backfill what purging removed, so a purged fold's effective train
+        width can fall below ``train_width_pct`` -- consistent with how purge
+        already behaves on the near side and in the other walk-forward
+        methods.
 
         Args:
             df: The master linked dataframe to split.
@@ -666,9 +676,17 @@ class CohortSplitter:
                     far_part = group.iloc[0:0]
                     near_part = group.iloc[train_start:test_start]
 
-                if purge > pd.Timedelta(0) and not near_part.empty and not test_part.empty:
-                    test_start_ts = test_part["record_timestamp"].iloc[0]
-                    near_part = near_part[near_part["record_timestamp"] < test_start_ts - purge]
+                if purge > pd.Timedelta(0) and not test_part.empty:
+                    if not near_part.empty:
+                        test_start_ts = test_part["record_timestamp"].iloc[0]
+                        near_part = near_part[near_part["record_timestamp"] < test_start_ts - purge]
+                    if not far_part.empty:
+                        # far_part is only ever populated on a wrapping fold, where it sits
+                        # cyclically adjacent to test's *end* (see docstring) -- purge it
+                        # against that boundary the same way near_part is purged against
+                        # test's start.
+                        test_end_ts = test_part["record_timestamp"].iloc[-1]
+                        far_part = far_part[far_part["record_timestamp"] > test_end_ts + purge]
 
                 train_part = pd.concat([far_part, near_part]) if len(far_part) else near_part
                 if train_part.empty:
