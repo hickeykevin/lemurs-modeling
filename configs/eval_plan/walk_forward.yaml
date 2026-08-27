@@ -1,14 +1,18 @@
 # @package _global_
 
-# Per-user walk-forward CV: "given a user's own history, can the model forecast
-# their near-future risk?" Every fold's out-of-fold test predictions are pooled
-# into one evaluation set (fold index is a per-user position, not a shared
-# calendar window, so pooling -- not fold-averaging -- is the valid aggregation).
+# Per-user walk-forward CV with an EXPANDING window: "given a user's own
+# history, can the model forecast their near-future risk?" Every fold's
+# out-of-fold test predictions are pooled into one evaluation set (fold index is
+# a per-user position, not a shared calendar window, so pooling -- not
+# fold-averaging -- is the valid aggregation).
 #
-# This one plan covers every WalkForwardHealthDataModule fold-construction mode;
-# the strategy is chosen by the data config, not by a separate plan:
-#   data=walk_forward_pct_sweep            -> expanding window
-#   data=walk_forward_cyclic_5fold_sweep   -> cyclic, fixed-width, wraparound
+# For the fixed-width, wraparound variant use `eval_plan=cyclical`, which
+# instantiates this same plan class against the cyclic data config.
+#
+# No `data` override here, unlike cyclical.yaml: the expanding-window mode is
+# already the default sweep's, and leaving it unset keeps this plan usable with
+# any WalkForwardHealthDataModule config (including fold_sizing="count"). Pair
+# it with data=walk_forward_pct_sweep explicitly for the tuned expanding sweep.
 #
 # Overriding callbacks is required rather than cosmetic: a walk-forward fold's
 # val split can end up empty after purging, and configs/callbacks/default.yaml

@@ -1,0 +1,30 @@
+# @package _global_
+
+# Cyclic per-user CV: fixed-width train windows that slide and wrap around a
+# user's timeline (past 100% -> back to 0%), so every fold trains on the same
+# amount of history rather than an ever-growing one. Contrast eval_plan=
+# walk_forward, whose window expands.
+#
+# There is deliberately no CyclicalPlan class. Cyclic differs from walk-forward
+# only in how CohortSplitter cuts fold boundaries -- the units, the fit/test
+# loop, and the pooled aggregation are identical -- so this config instantiates
+# WalkForwardPlan and swaps the data config. See src/eval_plans/base.py.
+#
+# Because a wrapping fold's train window is cyclically adjacent to the test
+# window on BOTH sides, the splitter purges both boundaries; the expanding
+# (walk_forward) case only ever has a near boundary to purge. See
+# src/data/components/cohort_splitter.py:split_walk_forward_cyclic.
+#
+# The data override is the whole point of this config, so overriding `data=` on
+# the command line defeats it -- use eval_plan=walk_forward with an explicit
+# data config if you want a different pairing.
+defaults:
+  - override /callbacks: walk_forward
+  - override /data: walk_forward_cyclic_5fold_sweep
+
+eval_plan:
+  _target_: src.eval_plans.walk_forward.WalkForwardPlan
+  # BCa bootstrap resamples per pooled metric. 1000 is production quality;
+  # lowering it speeds up the (dominant) aggregation cost at the price of a
+  # noisier interval estimate. See src/utils/pooled_metrics.py.
+  n_bootstraps: 1000

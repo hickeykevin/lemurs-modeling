@@ -14,7 +14,7 @@ from src.eval_plans.runner import LOG_STEP_OFFSET
 from src.utils.cv_aggregation import aggregate_cv_metrics
 
 
-class GroupedCVPlan:
+class UserCVPlan:
     """Repeated, user-grouped k-fold -- "does this generalize to a NEW user?".
 
     Every split is grouped on ``app_user_id`` so no participant appears on both
@@ -37,7 +37,7 @@ class GroupedCVPlan:
     from unit 0 instead.
     """
 
-    name = "grouped_cv"
+    name = "user_cv"
     log_step_offset = LOG_STEP_OFFSET
     requires_test = False  # honours cfg.test, matching cv_train.py
     collect_predictions = False

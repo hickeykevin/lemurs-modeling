@@ -15,10 +15,11 @@ class WalkForwardPlan:
 
     Covers every ``WalkForwardHealthDataModule`` fold-construction mode, since
     they differ only in how ``CohortSplitter`` cuts folds, not in how the folds
-    are run or combined. In particular **cyclic needs no plan of its own**:
-    ``eval_plan=walk_forward data=walk_forward_cyclic_5fold_sweep`` is the
-    cyclic strategy, and ``data=walk_forward_pct_sweep`` is the expanding-window
-    one. See ``docs/eval_schemes.md``.
+    are run or combined. In particular **cyclic needs no plan class of its own**:
+    ``eval_plan=cyclical`` is a config that instantiates *this* class and swaps
+    the data config to the cyclic sweep, and ``eval_plan=walk_forward`` is the
+    expanding-window one. See ``configs/eval_plan/cyclical.yaml`` and
+    ``docs/eval_schemes.md``.
 
     Results are combined by pooling every fold's out-of-fold test predictions
     into one evaluation set and computing metrics once, rather than averaging
@@ -37,7 +38,7 @@ class WalkForwardPlan:
     ``PredictionCollectorCallback`` per unit, tagged with the fold index, so
     pooled rows can be traced back to (participant, timestamp).
 
-    There is no repeat axis, unlike ``GroupedCVPlan``. A walk-forward fold
+    There is no repeat axis, unlike ``UserCVPlan``. A walk-forward fold
     sequence is not an independently-reshuffled draw the way a grouped k-fold's
     assignment is, so re-running it under a different seed would not answer a
     new question.

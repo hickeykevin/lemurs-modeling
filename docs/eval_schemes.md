@@ -25,10 +25,12 @@ HealthDataModule                     (base: cohort building, scaling, one split)
 ```
 
 Orthogonal to this hierarchy is the **eval plan** (`eval_plan=` on the command
-line), which decides how many times a datamodule is run and how the results
-combine — see *Entry points* below. The datamodule decides which rows land in
-train/val/test for a given fold; the plan decides which folds exist. A config
-pairs one of each.
+line: `single`, `user_cv`, `walk_forward`, or `cyclical`), which decides how
+many times a datamodule is run and how the results combine — see *Entry points*
+below. The datamodule decides which rows land in train/val/test for a given
+fold; the plan decides which folds exist. A config pairs one of each; see
+[*How `eval_plan` and `split_mode` relate*](#how-eval_plan-and-split_mode-relate)
+for which axis actually owns which knob.
 
 Three separate axes compose to answer "which rows go in train/val/test, and
 does the run produce an index I can pool predictions across":
@@ -166,13 +168,58 @@ Every strategy runs through `src/train.py`, selected by `eval_plan=`:
 | Strategy | Command |
 |---|---|
 | Single split | `python src/train.py data=longitudinal_sweep_indexed callbacks=pooled_eval test=True` |
-| Subject-wise (grouped) CV | `python src/train.py eval_plan=grouped_cv data=cv_default test=True` |
+| Subject-wise CV | `python src/train.py eval_plan=user_cv data=cv_default test=True` |
 | Walk-forward, expanding | `python src/train.py eval_plan=walk_forward data=walk_forward_pct_sweep` |
-| Walk-forward, cyclic | `python src/train.py eval_plan=walk_forward data=walk_forward_cyclic_5fold_sweep` |
+| Walk-forward, cyclic | `python src/train.py eval_plan=cyclical` |
 
-Note the last two share one plan: **cyclic is not a separate strategy** at the
-orchestration level, only a different `fold_sizing` on the same datamodule, so
-it needs no plan of its own — just a different `data=`.
+Note the last two share one plan *class*: **cyclic is not a separate strategy**
+at the orchestration level, only a different `fold_sizing` on the same
+datamodule. `eval_plan=cyclical` is therefore a config that instantiates
+`WalkForwardPlan` and overrides `data=walk_forward_cyclic_5fold_sweep` — a
+name on the command line, not a new code path. Because that data override *is*
+the config, passing your own `data=` alongside `eval_plan=cyclical` defeats it;
+use `eval_plan=walk_forward data=<your cyclic config>` for a different pairing.
+
+### How `eval_plan` and `split_mode` relate
+
+They are separate axes, and `eval_plan` does **not** set `split_mode` — the
+data config does. What an eval plan controls is how many times the datamodule
+is instantiated and what varies between those runs:
+
+| `eval_plan` | Instantiates | Varies per unit | Datamodule it needs |
+|---|---|---|---|
+| `single` | once | nothing | any — `split_mode` is whatever the data config says |
+| `user_cv` | repeats × folds | `data.current_fold`, `data.current_repeat` | `CVHealthDataModule` (its own grouped k-fold; ignores `split_mode`) |
+| `walk_forward` | one per fold | `data.current_fold` | `WalkForwardHealthDataModule` (`_split_data` override; `split_mode` unused) |
+| `cyclical` | one per fold | `data.current_fold` | same, pinned to `fold_sizing="cyclic"` |
+
+So `split_mode` is only load-bearing for `eval_plan=single`, where
+`HealthDataModule._split_data` actually runs: `"longitudinal"` gives the
+chronological per-user cut, `"user"` the grouped random one.
+
+The two CV datamodules don't just ignore it — neither **accepts** it. Both
+hardcode the value in their own `super().__init__()` call and expose no
+`split_mode` constructor argument:
+`WalkForwardHealthDataModule` passes `"longitudinal"` as an explicitly-unused
+placeholder ([datamodule:208](../src/data/walk_forward_health_datamodule.py#L208))
+because its `_split_data` override never consults it, and `CVHealthDataModule`
+passes `"user"` ([datamodule:95](../src/data/cv_health_datamodule.py#L95)) to
+match the grouped k-fold it performs itself.
+
+The practical consequence, verified: `data.split_mode=user` on a `cyclical` or
+`user_cv` run is not a silent no-op — Hydra rejects it outright, since those
+data configs don't declare the key:
+
+```
+Could not override 'data.split_mode'.
+Key 'split_mode' is not in struct
+```
+
+That failure is the useful behaviour, so resist the `+data.split_mode=user`
+that Hydra suggests in the same message: it would force the key in, and
+instantiation would then fail on a datamodule that takes no such argument. If
+you want to vary how folds are cut under a walk-forward plan, the knob is
+`fold_sizing` (or `eval_plan=cyclical` vs. `walk_forward`), not `split_mode`.
 
 The three sweep-derived data configs
 ([`longitudinal_sweep_indexed`](../configs/data/longitudinal_sweep_indexed.yaml),
@@ -205,7 +252,8 @@ strategy-specific branching at all.
   [`base.py`](../src/eval_plans/base.py) first; it documents the protocol and
   its **known boundary** (units are fixed before the first one runs, so nested
   CV or adaptive stopping would need a different protocol).
-- **`eval_plan=walk_forward`** pools every fold's out-of-fold predictions into
+- **`eval_plan=walk_forward`** (and `cyclical`, the same class) pools every
+  fold's out-of-fold predictions into
   one evaluation set. It also *requires* `callbacks=walk_forward`
   (`early_stopping.strict: False`, since a fold's val split can end up empty
   after purging), which its plan config pulls in automatically — an explicit

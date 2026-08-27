@@ -11,7 +11,7 @@ orchestration script.
 The strategies this replaces differ along only a few axes:
 
 ===================  ==========  =====================  ====================
-axis                 single      grouped CV             walk-forward
+axis                 single      user_cv                walk_forward
 ===================  ==========  =====================  ====================
 varies per unit      nothing     current_fold+repeat    current_fold
 unit count           1           repeats x folds        get_num_folds()
@@ -19,11 +19,13 @@ combine results      identity    mean +/- sd, 95% CI    pool, then metrics
 testing              cfg.test    cfg.test               always (needs preds)
 ===================  ==========  =====================  ====================
 
-Note that "cyclic" is deliberately absent: it is a ``fold_sizing`` value on
-``WalkForwardHealthDataModule``, not a distinct loop shape, so it needs no plan
-of its own -- ``eval_plan=walk_forward data=walk_forward_cyclic_5fold_sweep``
-already expresses it. A plan is warranted only when ``units()`` or
-``aggregate()`` genuinely differs.
+Note there is no ``CyclicalPlan`` class, even though ``eval_plan=cyclical``
+exists on the command line. Cyclic is a ``fold_sizing`` value on
+``WalkForwardHealthDataModule`` -- a different way of cutting fold boundaries,
+not a different loop shape -- so ``configs/eval_plan/cyclical.yaml``
+instantiates ``WalkForwardPlan`` and overrides the data config instead. A plan
+*class* is warranted only when ``units()`` or ``aggregate()`` genuinely
+differs; a plan *config* is warranted whenever a strategy deserves a name.
 
 KNOWN BOUNDARY OF THIS ABSTRACTION
 ----------------------------------

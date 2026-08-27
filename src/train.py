@@ -54,10 +54,10 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Runs this config's evaluation strategy end to end.
 
     Which strategy runs is chosen by ``cfg.eval_plan`` (a Hydra config group --
-    ``eval_plan=single``, ``grouped_cv``, or ``walk_forward``), not by picking a
-    different entry script. The plan decides what units of work exist and how
-    their results combine; ``run_plan`` executes every plan through one identical
-    loop. See ``src/eval_plans/base.py`` and ``docs/eval_schemes.md``.
+    ``eval_plan=single``, ``user_cv``, ``walk_forward``, or ``cyclical``), not by
+    picking a different entry script. The plan decides what units of work exist
+    and how their results combine; ``run_plan`` executes every plan through one
+    identical loop. See ``src/eval_plans/base.py`` and ``docs/eval_schemes.md``.
 
     ``eval_plan=single`` (the default) is the plain single train/val/test split
     this function ran before the eval_plan layer existed.

@@ -11,20 +11,20 @@ from src.eval_plans.base import (
     UnitResult,
     default_step_for,
 )
-from src.eval_plans.grouped_cv import GroupedCVPlan
 from src.eval_plans.runner import LOG_STEP_OFFSET, apply_overrides, run_plan, run_unit
 from src.eval_plans.single import SingleSplitPlan
+from src.eval_plans.user_cv import UserCVPlan
 from src.eval_plans.walk_forward import WalkForwardPlan
 
 __all__ = [
     "CohortCache",
     "EvalPlan",
-    "GroupedCVPlan",
     "LOG_STEP_OFFSET",
     "RunContext",
     "RunUnit",
     "SingleSplitPlan",
     "UnitResult",
+    "UserCVPlan",
     "WalkForwardPlan",
     "apply_overrides",
     "default_step_for",

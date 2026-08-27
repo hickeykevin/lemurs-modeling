@@ -15,7 +15,7 @@ from lightning.pytorch.loggers import CSVLogger
 from omegaconf import OmegaConf
 
 import src.eval_plans.runner as runner_mod
-from src.eval_plans import GroupedCVPlan, RunUnit, UnitResult, apply_overrides, run_plan
+from src.eval_plans import UserCVPlan, RunUnit, UnitResult, apply_overrides, run_plan
 from src.eval_plans.runner import CohortCache
 
 
@@ -155,7 +155,7 @@ def test_run_plan_emits_exactly_one_row_per_unit(monkeypatch):
     monkeypatch.setattr(runner_mod, "instantiate_loggers", lambda _cfg: [rec])
 
     cfg = OmegaConf.create({"data": {"num_folds": 2, "num_repeats": 1}, "seed": None})
-    run_plan(cfg, GroupedCVPlan())
+    run_plan(cfg, UserCVPlan())
 
     per_unit = [c for c in rec.calls if "cv/fold" in c[0]]
     assert len(per_unit) == 2
@@ -177,7 +177,7 @@ def test_run_plan_rows_are_parseable_by_compare_cv_runs(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_mod, "instantiate_loggers", lambda _cfg: [csv_logger])
 
     cfg = OmegaConf.create({"data": {"num_folds": 2, "num_repeats": 2}, "seed": None})
-    run_plan(cfg, GroupedCVPlan())
+    run_plan(cfg, UserCVPlan())
 
     rows = load_per_run_rows(Path(csv_logger.log_dir))
     assert len(rows) == 4
@@ -195,7 +195,7 @@ def test_run_plan_logs_hyperparameters_only_for_the_first_unit(monkeypatch):
 
     _patch(monkeypatch, _fake)
     cfg = OmegaConf.create({"data": {"num_folds": 3, "num_repeats": 1}, "seed": None})
-    run_plan(cfg, GroupedCVPlan())
+    run_plan(cfg, UserCVPlan())
 
     assert seen == [(0, True), (1, False), (2, False)]
 
@@ -210,7 +210,7 @@ def test_run_plan_passes_each_units_overrides_through_to_run_unit(monkeypatch):
     _patch(monkeypatch, _fake)
     cfg = OmegaConf.create({"data": {"num_folds": 3, "num_repeats": 1, "current_fold": 0}, "seed": None})
     OmegaConf.set_struct(cfg, True)
-    run_plan(cfg, GroupedCVPlan())
+    run_plan(cfg, UserCVPlan())
 
     assert seen_folds == [0, 1, 2]
 
@@ -230,7 +230,7 @@ def test_run_plan_warns_when_the_cohort_changes_between_units(monkeypatch, caplo
     _patch(monkeypatch, _fake)
     cfg = OmegaConf.create({"data": {"num_folds": 2, "num_repeats": 1}, "seed": None})
     with caplog.at_level("WARNING"):
-        run_plan(cfg, GroupedCVPlan())
+        run_plan(cfg, UserCVPlan())
 
     assert any("Cohort changed between units" in r.message for r in caplog.records)
 
@@ -261,8 +261,8 @@ def test_run_plan_returns_the_plans_aggregate_and_the_unit_results(monkeypatch):
     _patch(monkeypatch, _canned_run_unit(metrics))
 
     cfg = OmegaConf.create({"data": {"num_folds": 2, "num_repeats": 1}, "seed": None})
-    agg, obj = run_plan(cfg, GroupedCVPlan())
+    agg, obj = run_plan(cfg, UserCVPlan())
 
     assert agg["test/auroc_mean"] == pytest.approx(0.7)
     assert len(obj["results"]) == 2
-    assert obj["plan"].name == "grouped_cv"
+    assert obj["plan"].name == "user_cv"

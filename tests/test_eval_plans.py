@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from omegaconf import OmegaConf
 
-from src.eval_plans import GroupedCVPlan, RunContext, SingleSplitPlan, UnitResult, WalkForwardPlan
+from src.eval_plans import UserCVPlan, RunContext, SingleSplitPlan, UnitResult, WalkForwardPlan
 from src.utils import RankedLogger
 
 log = RankedLogger(__name__, rank_zero_only=True)
@@ -106,9 +106,9 @@ def test_single_plan_does_not_force_testing():
 
 # ------------------------------------------------------------- grouped CV ---
 
-def test_grouped_cv_yields_repeats_times_folds_units():
+def test_user_cv_yields_repeats_times_folds_units():
     cache = _FakeCohortCache()
-    units = list(GroupedCVPlan().units(_cfg(num_folds=3, num_repeats=2), cache))
+    units = list(UserCVPlan().units(_cfg(num_folds=3, num_repeats=2), cache))
 
     assert len(units) == 6
     assert [(u.tag["cv/repeat"], u.tag["cv/fold"]) for u in units] == [
@@ -119,24 +119,24 @@ def test_grouped_cv_yields_repeats_times_folds_units():
     assert [u.index for u in units] == [0, 1, 2, 3, 4, 5]
 
 
-def test_grouped_cv_overrides_select_the_fold_and_repeat():
-    units = list(GroupedCVPlan().units(_cfg(num_folds=2, num_repeats=1), _FakeCohortCache()))
+def test_user_cv_overrides_select_the_fold_and_repeat():
+    units = list(UserCVPlan().units(_cfg(num_folds=2, num_repeats=1), _FakeCohortCache()))
     assert units[1].overrides == {
         "data.current_fold": 1, "data.current_repeat": 0, "data.num_folds": 2,
     }
 
 
-def test_grouped_cv_does_not_probe_for_a_fixed_fold_count():
+def test_user_cv_does_not_probe_for_a_fixed_fold_count():
     """Only leave-one-user-out needs the cohort up front; a fixed count must
     not pay for a probe build."""
     cache = _FakeCohortCache()
-    list(GroupedCVPlan().units(_cfg(num_folds=5, num_repeats=1), cache))
+    list(UserCVPlan().units(_cfg(num_folds=5, num_repeats=1), cache))
     assert cache.probe_calls == 0
 
 
-def test_grouped_cv_probes_once_to_resolve_leave_one_user_out():
+def test_user_cv_probes_once_to_resolve_leave_one_user_out():
     cache = _FakeCohortCache(_StubProbe(num_folds=7))
-    units = list(GroupedCVPlan().units(_cfg(num_folds=-1, num_repeats=1), cache))
+    units = list(UserCVPlan().units(_cfg(num_folds=-1, num_repeats=1), cache))
 
     assert cache.probe_calls == 1
     assert len(units) == 7
@@ -144,19 +144,19 @@ def test_grouped_cv_probes_once_to_resolve_leave_one_user_out():
     assert all(u.overrides["data.num_folds"] == 7 for u in units)
 
 
-def test_grouped_cv_raises_when_the_datamodule_cannot_count_folds():
+def test_user_cv_raises_when_the_datamodule_cannot_count_folds():
     cache = _FakeCohortCache(_ProbeWithoutFoldCounting())
     with pytest.raises(ValueError, match="dynamic fold counting"):
-        list(GroupedCVPlan().units(_cfg(num_folds=-1), cache))
+        list(UserCVPlan().units(_cfg(num_folds=-1), cache))
 
 
-def test_grouped_cv_defaults_to_five_folds_and_one_repeat():
-    units = list(GroupedCVPlan().units(_cfg(), _FakeCohortCache()))
+def test_user_cv_defaults_to_five_folds_and_one_repeat():
+    units = list(UserCVPlan().units(_cfg(), _FakeCohortCache()))
     assert len(units) == 5
 
 
-def test_grouped_cv_aggregate_reports_mean_spread_and_interval():
-    plan = GroupedCVPlan()
+def test_user_cv_aggregate_reports_mean_spread_and_interval():
+    plan = UserCVPlan()
     units = list(plan.units(_cfg(num_folds=3, num_repeats=1), _FakeCohortCache()))
     results = [
         _result(units[0], {"test/auroc": 0.8}),
@@ -220,9 +220,9 @@ def test_walk_forward_steps_are_zero_based_within_the_offset():
     ]
 
 
-def test_grouped_cv_steps_are_one_based_within_the_offset():
+def test_user_cv_steps_are_one_based_within_the_offset():
     """Matches cv_train.py, which increments `run` before logging."""
-    plan = GroupedCVPlan()
+    plan = UserCVPlan()
     units = list(plan.units(_cfg(num_folds=3, num_repeats=1), _FakeCohortCache()))
     assert [plan.step_for(u) for u in units] == [
         plan.log_step_offset + i + 1 for i in range(3)
