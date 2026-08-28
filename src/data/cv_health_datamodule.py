@@ -92,7 +92,6 @@ class CVHealthDataModule(HealthDataModule):
             pin_memory=pin_memory,
             train_val_test_split=train_val_test_split,
             random_state=random_state,
-            split_mode="user",
             os_filter=os_filter,
             collapse_strategy=collapse_strategy,
             use_demographics=use_demographics,

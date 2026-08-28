@@ -29,8 +29,6 @@ modalities: ["step", "distance"]
 split_mode: longitudinal
 train_val_test_split: [0.7, 0.15, 0.15]
 purge_hours: null
-swap_val_test: false
-symmetric_purge_diagnostic: false
 
 batch_size: 16
 num_workers: 1

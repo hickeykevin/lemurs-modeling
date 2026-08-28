@@ -24,18 +24,10 @@ split_mode: longitudinal # user, longitudinal
 # lookback (data/sampler's window_bounds span) automatically; set explicitly to
 # hold purge width fixed across a sweep over multiple sampler configs.
 purge_hours: null
-# Diagnostic only, longitudinal mode: relabels which post-train chunk is val
-# vs. test (middle chunk -> test, last chunk -> val) without changing how
-# either is cut or purged. Isolates whether a val/test gap tracks split role
-# or chunk content. See CohortSplitter.swap_val_test. Leave False for every
-# normal run.
-swap_val_test: false
-# Diagnostic only, longitudinal mode: purges both post-train chunks against
-# their own start (instead of only the middle chunk against the last
-# chunk's start), so both get identical purge treatment. Isolates whether a
-# score gap between chunks is content-driven or purge-driven. Mutually
-# exclusive with swap_val_test. Leave False for every normal run.
-symmetric_purge_diagnostic: false
+# Two longitudinal-mode purge diagnostics -- swap_val_test and
+# symmetric_purge_diagnostic -- are omitted here rather than pinned to their
+# False defaults. Both are off unless explicitly set; add them on the command
+# line for a one-off investigation. See CohortSplitter for what each isolates.
 os_filter: both # both, ios, android
 # none = one sample per survey response. The morning and afternoon surveys ask
 # about different periods ("since your last prompt"), so collapsing them to a

@@ -203,10 +203,7 @@ class WalkForwardHealthDataModule(IndexedHealthDataModule):
             batch_size=batch_size,
             num_workers=num_workers,
             pin_memory=pin_memory,
-            train_val_test_split=(0.0, 0.0, 0.0),  # unused: walk-forward derives its own cuts
             random_state=random_state,
-            split_mode="longitudinal",  # unused by this module's _split_data override, but
-            # must be a value HealthDataModule.__init__ accepts.
             os_filter=os_filter,
             collapse_strategy=collapse_strategy,
             use_demographics=use_demographics,
