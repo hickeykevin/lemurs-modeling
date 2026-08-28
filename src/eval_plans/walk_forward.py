@@ -76,10 +76,18 @@ class WalkForwardPlan:
             )
         num_folds = probe.get_num_folds()
         if num_folds == 0:
+            # Which knobs to lower depends on fold_sizing, so name the ones this
+            # config actually has rather than count-mode's (which the configs in
+            # this repo don't set -- see configs/data/walk_forward_*.yaml).
+            sizing = getattr(getattr(probe, "hparams", None), "fold_sizing", None)
+            knobs = {
+                "pct": "burn_in_pct/val_pct/step_pct",
+                "cyclic": "train_width_pct/step_pct",
+            }.get(sizing, "burn_in_responses/val_responses/step_responses")
             raise ValueError(
-                "This cohort/config produces zero walk-forward folds -- lower "
-                "burn_in_responses/val_responses/step_responses, or check the "
-                "cohort's response-count distribution."
+                f"This cohort/config produces zero walk-forward folds (fold_sizing="
+                f"{sizing!r}) -- lower {knobs}, or check the cohort's "
+                "response-count distribution."
             )
 
         for fold in range(num_folds):

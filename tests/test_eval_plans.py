@@ -3,6 +3,8 @@ no Trainer and no database -- a fake CohortCache stands in for the datamodule
 probe, so these run in milliseconds.
 """
 
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -15,8 +17,13 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 
 class _StubProbe:
-    def __init__(self, num_folds=4):
+    def __init__(self, num_folds=4, fold_sizing=None):
         self._num_folds = num_folds
+        # Mirrors the datamodule's Lightning hparams namespace, which the
+        # walk-forward plan reads to name the right knobs in its zero-fold
+        # error. fold_sizing=None stands for a probe with no hparams at all.
+        if fold_sizing is not None:
+            self.hparams = SimpleNamespace(fold_sizing=fold_sizing)
 
     def get_num_folds(self):
         return self._num_folds
@@ -201,6 +208,37 @@ def test_walk_forward_raises_when_the_cohort_supports_zero_folds():
     cache = _FakeCohortCache(_StubProbe(num_folds=0))
     with pytest.raises(ValueError, match="zero walk-forward folds"):
         list(WalkForwardPlan().units(_cfg(), cache))
+
+
+@pytest.mark.parametrize(
+    "fold_sizing, expected_knobs",
+    [
+        ("cyclic", "train_width_pct/step_pct"),
+        ("pct", "burn_in_pct/val_pct/step_pct"),
+        # No hparams at all -> fall back to count mode's names.
+        (None, "burn_in_responses/val_responses/step_responses"),
+    ],
+)
+def test_walk_forward_zero_fold_error_names_this_configs_own_knobs(
+    fold_sizing, expected_knobs
+):
+    """The remedy must name keys the running config actually has.
+
+    Every walk-forward data config in this repo sets fold_sizing to "pct" or
+    "cyclic", so an error telling the user to lower burn_in_responses points
+    at a key their config does not define -- which is what this used to do
+    unconditionally.
+    """
+    cache = _FakeCohortCache(_StubProbe(num_folds=0, fold_sizing=fold_sizing))
+    with pytest.raises(ValueError) as excinfo:
+        list(WalkForwardPlan().units(_cfg(), cache))
+
+    message = str(excinfo.value)
+    assert expected_knobs in message
+    for other in ("train_width_pct/step_pct", "burn_in_pct/val_pct/step_pct",
+                  "burn_in_responses/val_responses/step_responses"):
+        if other != expected_knobs:
+            assert other not in message
 
 
 def test_walk_forward_requires_testing_and_prediction_collection():
