@@ -1,6 +1,9 @@
-# W&B Sweep Configuration: Sampler x Model Sweep
+# W&B Sweep Configuration: Sampler x Model x Modality Sweep
 #
-# Two axes, crossed:
+# Grid search (method: grid) -- exhaustive, not sampled. Every combination of
+# every parameter below runs exactly once (40 x 3 x 7 = 840 runs).
+#
+# Three swept axes, crossed:
 #   sampler_pkg -- rolling_<lookback>h_<window>h and offset_<lookback>h_<window>h,
 #     lookback in [24, 48, 72, 96, 120], window (resample_freq) in [4, 6, 8, 12].
 #     Every value here is a self-contained config in
@@ -13,11 +16,23 @@
 #     self-contained config; no cross-model arg is set from this file, since
 #     e.g. automl_config only exists on FLAMLHealthModule and would error
 #     under default/transformer.
+#   modalities_choice -- all 7 non-empty subsets of {step, calorie, distance}.
+#     data.modalities and data/preprocessors are set from the SAME value
+#     (data/preprocessors=${modalities_choice} is a genuine Hydra multi-select
+#     -- verified [step,calorie] resolves to exactly those two preprocessors,
+#     not a group named "[step,calorie]"), so the preprocessor set can never
+#     drift out of sync with the requested modalities. Setting only
+#     data.modalities and leaving preprocessors at its [step, calorie] default
+#     would silently build a modality with no preprocessor -- confirmed this
+#     composes without error but drops the missing modality entirely.
+#
+# Fixed, not swept: use_demographics=true (already default.yaml's value;
+# pinned explicitly here so the sweep is self-documenting).
 
 name: sampler_model_sweep
 project: lemurs-modeling
 program: src/train.py
-method: bayes
+method: grid
 metric:
   name: val/f1_best
   goal: maximize
@@ -72,9 +87,22 @@ parameters:
       - transformer
       - flaml_xgboost   # FLAML AutoML, pinned to XGBoost
 
+  modalities_choice:
+    values:
+      - ["step"]
+      - ["calorie"]
+      - ["distance"]
+      - ["step", "calorie"]
+      - ["step", "distance"]
+      - ["calorie", "distance"]
+      - ["step", "calorie", "distance"]
+
 command:
   - ${env}
   - python
   - ${program}
   - "data/sampler=sweep_configs/${sampler_pkg}"
   - "model=${model_pkg}"
+  - "data.modalities=${modalities_choice}"
+  - "data/preprocessors=${modalities_choice}"
+  - "data.use_demographics=true"
