@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - aggregator: suicide_risk
-  - sampler: offset_48h_6h
+  - sampler: sweep_configs/offset_48h_6h
   - scaler: dual
   - preprocessors: [step, distance]
 

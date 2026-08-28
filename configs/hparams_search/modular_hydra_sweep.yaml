@@ -19,51 +19,51 @@ parameters:
   sampler_pkg:
     values:
       # Offset Samplers (20 options)
-      - offset_24h_4h
-      - offset_24h_6h
-      - offset_24h_8h
-      - offset_24h_12h
-      - offset_48h_4h
-      - offset_48h_6h
-      - offset_48h_8h
-      - offset_48h_12h
-      - offset_72h_4h
-      - offset_72h_6h
-      - offset_72h_8h
-      - offset_72h_12h
-      - offset_96h_4h
-      - offset_96h_6h
-      - offset_96h_8h
-      - offset_96h_12h
-      - offset_120h_4h
-      - offset_120h_6h
-      - offset_120h_8h
-      - offset_120h_12h
+      - sweep_configs/offset_24h_4h
+      - sweep_configs/offset_24h_6h
+      - sweep_configs/offset_24h_8h
+      - sweep_configs/offset_24h_12h
+      - sweep_configs/offset_48h_4h
+      - sweep_configs/offset_48h_6h
+      - sweep_configs/offset_48h_8h
+      - sweep_configs/offset_48h_12h
+      - sweep_configs/offset_72h_4h
+      - sweep_configs/offset_72h_6h
+      - sweep_configs/offset_72h_8h
+      - sweep_configs/offset_72h_12h
+      - sweep_configs/offset_96h_4h
+      - sweep_configs/offset_96h_6h
+      - sweep_configs/offset_96h_8h
+      - sweep_configs/offset_96h_12h
+      - sweep_configs/offset_120h_4h
+      - sweep_configs/offset_120h_6h
+      - sweep_configs/offset_120h_8h
+      - sweep_configs/offset_120h_12h
       # Rolling Samplers (20 options)
-      - rolling_24h_4h
-      - rolling_24h_6h
-      - rolling_24h_8h
-      - rolling_24h_12h
-      - rolling_48h_4h
-      - rolling_48h_6h
-      - rolling_48h_8h
-      - rolling_48h_12h
-      - rolling_72h_4h
-      - rolling_72h_6h
-      - rolling_72h_8h
-      - rolling_72h_12h
-      - rolling_96h_4h
-      - rolling_96h_6h
-      - rolling_96h_8h
-      - rolling_96h_12h
-      - rolling_120h_4h
-      - rolling_120h_6h
-      - rolling_120h_8h
-      - rolling_120h_12h
+      - sweep_configs/rolling_24h_4h
+      - sweep_configs/rolling_24h_6h
+      - sweep_configs/rolling_24h_8h
+      - sweep_configs/rolling_24h_12h
+      - sweep_configs/rolling_48h_4h
+      - sweep_configs/rolling_48h_6h
+      - sweep_configs/rolling_48h_8h
+      - sweep_configs/rolling_48h_12h
+      - sweep_configs/rolling_72h_4h
+      - sweep_configs/rolling_72h_6h
+      - sweep_configs/rolling_72h_8h
+      - sweep_configs/rolling_72h_12h
+      - sweep_configs/rolling_96h_4h
+      - sweep_configs/rolling_96h_6h
+      - sweep_configs/rolling_96h_8h
+      - sweep_configs/rolling_96h_12h
+      - sweep_configs/rolling_120h_4h
+      - sweep_configs/rolling_120h_6h
+      - sweep_configs/rolling_120h_8h
+      - sweep_configs/rolling_120h_12h
       # Interval-Aware Samplers (3 options)
-      - interval_72h
-      - interval_96h
-      - interval_120h
+      - sweep_configs/interval_72h
+      - sweep_configs/interval_96h
+      - sweep_configs/interval_120h
 
   # --- Modalities Choices (ALL 7 options) ---
   modalities_choice:
