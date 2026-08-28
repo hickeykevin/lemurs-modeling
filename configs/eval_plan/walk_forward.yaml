@@ -1,31 +1,12 @@
 # @package _global_
 
-# Per-user walk-forward CV with an EXPANDING window: "given a user's own
-# history, can the model forecast their near-future risk?" Every fold's
-# out-of-fold test predictions are pooled into one evaluation set (fold index is
-# a per-user position, not a shared calendar window, so pooling -- not
-# fold-averaging -- is the valid aggregation).
-#
-# For the fixed-width, wraparound variant use `eval_plan=cyclical`, which
-# instantiates this same plan class against the cyclic data config.
-#
-# data=walk_forward_expanding (WalkForwardHealthDataModule, fold_sizing=pct) is
-# the default so this plan runs out of the box; a normal Hydra default, so an
-# explicit `data=...` on the command line still wins -- pass any other
-# WalkForwardHealthDataModule config to use this plan with it.
-#
-# Overriding callbacks is required rather than cosmetic: a walk-forward fold's
-# val split can end up empty after purging, and configs/callbacks/default.yaml
-# sets early_stopping.strict=True, which crashes the whole run when val/auroc is
-# never logged for that fold. callbacks=walk_forward relaxes that. An explicit
-# `callbacks=...` on the command line still wins over this default.
+# Per-user walk-forward CV, expanding window. See eval_schemes.md.
+# callbacks=walk_forward relaxes early_stopping.strict, since a fold's val
+# split can end up empty after purging.
 defaults:
   - override /callbacks: walk_forward
   - override /data: walk_forward_expanding
 
 eval_plan:
   _target_: src.eval_plans.walk_forward.WalkForwardPlan
-  # BCa bootstrap resamples per pooled metric. 1000 is production quality;
-  # lowering it speeds up the (dominant) aggregation cost at the price of a
-  # noisier interval estimate. See src/utils/pooled_metrics.py.
-  n_bootstraps: 1000
+  n_bootstraps: 1000 # BCa bootstrap resamples per pooled metric

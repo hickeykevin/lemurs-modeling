@@ -1,17 +1,6 @@
 # @package _global_
 
-# One train/val/test split, evaluated once -- the baseline strategy, and what
-# train.py did before the eval_plan layer existed. Whether a test pass runs is
-# left to `test` (False by default in train.yaml), same as before.
-#
-# data=single_split (IndexedHealthDataModule, split_mode=longitudinal) is the
-# default so this plan runs out of the box; a normal Hydra default, so an
-# explicit `data=...` on the command line still wins, e.g. data=default for
-# plain HealthDataModule or data.split_mode=user for the grouped random split.
-#
-# For pooled, user-cluster BCa bootstrap CIs on a single split, add
-# `callbacks=pooled_eval` (see eval_schemes.md) -- that is a per-trainer
-# concern handled by PooledMetricsCallback, independent of the eval plan.
+# One train/val/test split, evaluated once. See eval_schemes.md.
 defaults:
   - override /data: single_split
 

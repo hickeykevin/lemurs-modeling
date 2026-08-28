@@ -1,14 +1,6 @@
 # @package _global_
 
-# Repeated, user-grouped k-fold: "does this generalize to a NEW user with no
-# history?" Folds are grouped on app_user_id -- hence "user_cv" -- so no
-# participant appears on both sides of a split. Results are reported as
-# mean +/- sd with a 95% interval across folds.
-#
-# data=user_cv (CVHealthDataModule) is the default so this plan runs out of
-# the box; a normal Hydra default, so an explicit `data=...` on the command
-# line still wins. data.num_folds=-1 means leave-one-user-out, resolved from
-# the cohort.
+# Repeated, user-grouped k-fold. See eval_schemes.md.
 defaults:
   - override /data: user_cv
 
