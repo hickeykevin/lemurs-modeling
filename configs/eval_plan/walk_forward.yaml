@@ -9,10 +9,10 @@
 # For the fixed-width, wraparound variant use `eval_plan=cyclical`, which
 # instantiates this same plan class against the cyclic data config.
 #
-# No `data` override here, unlike cyclical.yaml: the expanding-window mode is
-# already the default sweep's, and leaving it unset keeps this plan usable with
-# any WalkForwardHealthDataModule config. Pair it with
-# data=walk_forward_expanding explicitly for the tuned expanding sweep.
+# data=walk_forward_expanding (WalkForwardHealthDataModule, fold_sizing=pct) is
+# the default so this plan runs out of the box; a normal Hydra default, so an
+# explicit `data=...` on the command line still wins -- pass any other
+# WalkForwardHealthDataModule config to use this plan with it.
 #
 # Overriding callbacks is required rather than cosmetic: a walk-forward fold's
 # val split can end up empty after purging, and configs/callbacks/default.yaml
@@ -21,6 +21,7 @@
 # `callbacks=...` on the command line still wins over this default.
 defaults:
   - override /callbacks: walk_forward
+  - override /data: walk_forward_expanding
 
 eval_plan:
   _target_: src.eval_plans.walk_forward.WalkForwardPlan

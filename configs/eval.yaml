@@ -1,8 +1,13 @@
 # @package _global_
 
+# data default must match whatever produced the checkpoint being loaded --
+# single_split.yaml is train.yaml's own default (via eval_plan=single) as of
+# the eval_plan architecture, so this tracks it for the common bare
+# `train.py` -> `eval.py` case. Pass data=... explicitly when evaluating a
+# checkpoint trained under a different data config.
 defaults:
   - _self_
-  - data: default
+  - data: single_split
   - model: default
   - logger: csv
   - trainer: cpu

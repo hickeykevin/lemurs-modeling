@@ -48,22 +48,24 @@ against test's end); `"pct"` has only the one edge.
 
 ## `eval_plan` → datamodule → command
 
-`single`, `user_cv`, and `walk_forward` do **not** set a default data config —
-you must pass a matching `data=` or the run either uses the wrong datamodule
-or errors at instantiation. `cyclical` is the one exception: it sets `data=`
-for you, and passing your own overrides it back to nothing.
+Every `eval_plan` config sets its own `data=` default (an `override /data:`
+Hydra default, same mechanism each plan uses), so `eval_plan=<name>` alone is
+a complete, runnable command. An explicit `data=...` on the command line
+always wins over the default — verified for every plan below, including
+`cyclical`.
 
-| `eval_plan` | `data=` needed? | Datamodule required | Command |
+| `eval_plan` | Default `data=` | Datamodule | Bare command |
 |---|---|---|---|
-| `single` | yes, explicit | any | `python src/train.py data=single_split callbacks=pooled_eval test=True` |
-| `user_cv` | yes, explicit | `CVHealthDataModule` | `python src/train.py eval_plan=user_cv data=cv_default test=True` |
-| `walk_forward` | yes, explicit | `WalkForwardHealthDataModule` | `python src/train.py eval_plan=walk_forward data=walk_forward_expanding` |
-| `cyclical` | set automatically (`walk_forward_cyclic`) | `WalkForwardHealthDataModule`, `fold_sizing=cyclic` | `python src/train.py eval_plan=cyclical` |
+| `single` | `single_split` | `IndexedHealthDataModule`, `split_mode=longitudinal` | `python src/train.py` |
+| `user_cv` | `user_cv` | `CVHealthDataModule` | `python src/train.py eval_plan=user_cv test=True` |
+| `walk_forward` | `walk_forward_expanding` | `WalkForwardHealthDataModule`, `fold_sizing=pct` | `python src/train.py eval_plan=walk_forward` |
+| `cyclical` | `walk_forward_cyclic` | `WalkForwardHealthDataModule`, `fold_sizing=cyclic` | `python src/train.py eval_plan=cyclical` |
 
-`cyclical` is a config, not a separate plan class: it instantiates
-`WalkForwardPlan` and overrides `data=walk_forward_cyclic`. Passing your own
-`data=` alongside `eval_plan=cyclical` defeats that override — use
-`eval_plan=walk_forward data=<your cyclic config>` instead.
+`cyclical` is a config, not a separate plan class: it instantiates the same
+`WalkForwardPlan` as `walk_forward.yaml`, just defaulted to the cyclic data
+config instead of the expanding one. `eval_plan=cyclical data=walk_forward_expanding`
+runs the expanding scheme through `cyclical`'s config — same result as
+`eval_plan=walk_forward` with no `data=` — since only the default differs.
 
 `walk_forward`/`cyclical` also pull in `callbacks=walk_forward`
 (`early_stopping.strict: False`, since a fold's val split can be empty after
@@ -92,7 +94,7 @@ Live configs only:
 |---|---|
 | `default.yaml` | `HealthDataModule` |
 | `single_split.yaml` | `IndexedHealthDataModule` |
-| `cv_default.yaml` | `CVHealthDataModule` |
+| `user_cv.yaml` | `CVHealthDataModule` |
 | `walk_forward_expanding.yaml` | `WalkForwardHealthDataModule`, `fold_sizing=pct` |
 | `walk_forward_cyclic.yaml` | `WalkForwardHealthDataModule`, `fold_sizing=cyclic` |
 

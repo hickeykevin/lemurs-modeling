@@ -15,9 +15,12 @@
 # (walk_forward) case only ever has a near boundary to purge. See
 # src/data/components/cohort_splitter.py:split_walk_forward_cyclic.
 #
-# The data override is the whole point of this config, so overriding `data=` on
-# the command line defeats it -- use eval_plan=walk_forward with an explicit
-# data config if you want a different pairing.
+# data=walk_forward_cyclic is the default so this plan runs out of the box; a
+# normal Hydra default, so an explicit `data=...` on the command line still
+# wins (verified) -- e.g. `eval_plan=cyclical data=walk_forward_expanding`
+# runs WalkForwardPlan against the expanding config instead, same class either
+# way. This config differs from walk_forward.yaml only in which
+# WalkForwardHealthDataModule config it defaults to.
 defaults:
   - override /callbacks: walk_forward
   - override /data: walk_forward_cyclic
