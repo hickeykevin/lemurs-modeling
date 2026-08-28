@@ -26,8 +26,15 @@
 #     would silently build a modality with no preprocessor -- confirmed this
 #     composes without error but drops the missing modality entirely.
 #
-# Fixed, not swept: use_demographics=true (already default.yaml's value;
-# pinned explicitly here so the sweep is self-documenting).
+# Fixed, not swept (see command: below): scaler=dual; os_filter=both;
+# collapse_strategy=none; use_demographics=true; use_sleep=false;
+# use_survey_context=false; require_sensor_data=true.
+#
+# scaler=dual and require_sensor_data=true both DIFFER from
+# configs/data/default.yaml (robust and false respectively) and must be
+# overridden here. The other four already match default.yaml's values --
+# pinned explicitly anyway so the sweep states its own assumptions rather
+# than depending on defaults that could silently change later.
 
 name: sampler_model_sweep
 project: lemurs-modeling
@@ -105,4 +112,10 @@ command:
   - "model=${model_pkg}"
   - "data.modalities=${modalities_choice}"
   - "data/preprocessors=${modalities_choice}"
+  - "data/scaler=dual"
+  - "data.os_filter=both"
+  - "data.collapse_strategy=none"
   - "data.use_demographics=true"
+  - "data.use_sleep=false"
+  - "data.use_survey_context=false"
+  - "data.require_sensor_data=true"
