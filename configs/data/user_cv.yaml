@@ -8,17 +8,10 @@ defaults:
 _target_: src.data.cv_health_datamodule.CVHealthDataModule
 modalities: ["step", "calorie"]
 
-# Folds are grouped on app_user_id and stratified on whether a user is ever
-# positive, so no participant spans train and test and no fold ends up with
-# zero positive test users.
-num_folds: 5
+num_folds: 5 # grouped on app_user_id, stratified so every fold has positive test users
 current_fold: 0
 
-# The whole K-fold procedure is repeated with different shuffles. With ~31
-# users, which users land together drives the result more than most modelling
-# choices; repeats convert that into a reported interval instead of hidden
-# noise. 20 repeats x 5 folds = 100 runs — drop to 3-5 while iterating.
-num_repeats: 10
+num_repeats: 10 # repeats the k-fold with different shuffles to report a spread across draws
 current_repeat: 0
 
 batch_size: 16
@@ -28,8 +21,7 @@ pin_memory: False
 random_state: ${seed}
 os_filter: both # both, ios, android
 
-# One sample per survey response; see configs/data/default.yaml
-collapse_strategy: null
+collapse_strategy: null # one sample per survey response; see configs/data/default.yaml
 require_sensor_data: true
 use_survey_context: true
 include_time_features: true

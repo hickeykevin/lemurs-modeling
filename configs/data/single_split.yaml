@@ -5,30 +5,15 @@ defaults:
   - scaler: dual
   - preprocessors: [step, distance]
 
+# IndexedHealthDataModule (not plain HealthDataModule) so data_val/data_test
+# carry return_index=True, letting PredictionCollectorCallback pool
+# predictions into a user-cluster bootstrap CI. See eval_schemes.md.
 _target_: src.data.indexed_health_datamodule.IndexedHealthDataModule
 modalities: ["step", "distance"]
 
-# split_mode="longitudinal": ONE train/val/test cut per user, by
-# chronological position (see CohortSplitter._split_longitudinally) -- the
-# single-cut baseline being compared against walk_forward_expanding.yaml
-# (expanding-window, multiple folds) and
-# walk_forward_cyclic.yaml (cyclic, fixed-width, wraparound).
-# Same data/model settings as those two, carried from sweep umdhgse9 (see
-# walk_forward_cyclic.yaml's comment), so the three evaluation
-# schemes are compared holding hparams fixed.
-#
-# _target_ is IndexedHealthDataModule rather than plain HealthDataModule so
-# data_val/data_test are built with return_index=True (see
-# IndexedHealthDataModule), letting PredictionCollectorCallback collect this
-# run's test predictions and a pooled, user-cluster BCa bootstrap CI be
-# computed for them -- the same treatment the two walk-forward configs
-# above get, rather than ClassificationMetricsCallback's row-level
-# BootStrapper CI (which understates uncertainty here for the same reason a
-# row-level bootstrap is wrong everywhere else in this pipeline -- see
-# CohortSplitter's class docstring).
-split_mode: longitudinal
+split_mode: longitudinal # single chronological train/val/test cut per user
 train_val_test_split: [0.7, 0.15, 0.15]
-purge_hours: null
+purge_hours: null # gap (hours) purged at each split boundary; null derives it from the sampler's lookback
 
 batch_size: 16
 num_workers: 1

@@ -8,49 +8,13 @@ defaults:
 _target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
 modalities: ["step", "distance"]
 
-# Cyclic walk-forward CV, sized so train is the exact COMPLEMENT of test
-# each fold (train_width_pct + step_pct == 1.0): "all of this user's data
-# except this fold's test window," wrapping around -- ordinary 5-fold
-# cross-validation, except each fold's train window is a contiguous
-# (wrapped) chronological block rather than a random subset. See
-# CohortSplitter.split_walk_forward_cyclic for the full mechanics,
-# including how BOTH boundaries of a wrapped train window are purged
-# (near edge against test's start, far/wrapped edge against test's end --
-# the far purge matters a lot here specifically, since
-# train_width_pct + step_pct == 1.0 means the far edge would otherwise
-# sit with ZERO gap to test's end on every wrapping fold).
-#
-# train_width_pct=0.80, step_pct=0.20 -> ceil(1/0.20) = 5 folds, each 20% of
-# a user's data as test and the remaining 80% (wrapped) as train.
-#
-# Data/model settings carried over from W&B sweep `umdhgse9` (1291 finished
-# runs, split_mode="longitudinal"), specifically its #1 stable leaderboard
-# run (`6yssfkcp`, mean val AUROC 0.9700) plus the sweep's category-
-# controlled significant findings, to see whether that combination holds up
-# under per-user walk-forward pooled evaluation rather than the single-cut
-# longitudinal split it was tuned on.
-#
-# Carried from the sweep (all p < 0.0001 in its controlled analysis):
-#   scaler=dual (+0.19), collapse_strategy=none (+0.09),
-#   use_demographics=true (+0.05), require_sensor_data=true (+0.05),
-#   include_time_features=false (+0.09). Also carried, significant but
-#   smaller: sampler=offset (+0.03) with the offset_48h_6h window (rank #1's
-#   own -48h/6h setting; the sweep itself found start_offset_hours and
-#   resample_freq NOT individually significant, so this is "what rank #1
-#   used," not an independently-validated choice). modalities=["step",
-#   "distance"] matches rank #1 (the sweep found modality choice not
-#   significant overall).
-#
-# Deliberately NOT carried: os_filter="ios" (rank #1's setting, but not
-# significant in the sweep, p=0.35) -- kept at "both" here to avoid
-# confounding the fold-logic comparison with a cohort-size change at the
-# same time. use_survey_context kept at this repo's pre-sweep default
-# (true) rather than the sweep report's recommended-config block, since the
-# sweep's own significance table shows it NOT significant (p=0.08) with
-# True numerically ahead of False in controlled mean AUROC.
+# fold_sizing=cyclic: fixed-width train window that SLIDES and WRAPS past
+# 100% back to 0%. train_width_pct + step_pct == 1.0 makes train the exact
+# complement of test each fold. See eval_schemes.md and
+# CohortSplitter.split_walk_forward_cyclic (both wrap boundaries are purged).
 fold_sizing: cyclic
 train_width_pct: 0.80
-step_pct: 0.20
+step_pct: 0.20 # -> 5 folds, each 20% of a user's data as test
 current_fold: 0
 
 batch_size: 16
@@ -67,10 +31,14 @@ include_time_features: false
 use_demographics: true
 use_sleep: true
 
-# Purge gap (hours) at every fold's train/test boundary -- BOTH boundaries
-# of a wrapped train window, see the fold_sizing comment above. null
-# derives it from the sampler's own lookback window (here, offset_48h_6h's
-# 48h), same as split_mode="longitudinal" in configs/data/default.yaml.
-purge_hours: null
+purge_hours: null # gap (hours) purged at each fold boundary; null derives it from the sampler's lookback
 
 exclude_user_ids: null
+
+# Hyperparameters carried from W&B sweep umdhgse9 (1291 runs, split_mode=
+# longitudinal), specifically its #1 leaderboard run (6yssfkcp, mean val
+# AUROC 0.9700), to test whether that combination holds up under per-user
+# walk-forward pooled evaluation. Shared with single_split.yaml and
+# walk_forward_expanding.yaml so the three schemes compare without a
+# hyperparameter confound. Full sweep rationale (per-flag significance,
+# what was and wasn't carried): see git history for this file.
