@@ -17,7 +17,6 @@ HealthDataModule                     (base: cohort building, scaling, one split)
 ├── IndexedHealthDataModule           (+ return_index=True on data_val/data_test)
 │   │
 │   └── WalkForwardHealthDataModule   (+ fold_sizing: repeated per-user splits)
-│       ├── fold_sizing="count"         fixed response COUNT per fold (legacy)
 │       ├── fold_sizing="pct"           fixed % of user's history, EXPANDING train
 │       └── fold_sizing="cyclic"        fixed-width train, SLIDES + wraps
 │
@@ -90,7 +89,6 @@ not per-fold averaging, is what makes cross-user comparison valid).
 
 | `fold_sizing` | Train window | Test window | Every user in every fold? |
 |---|---|---|---|
-| `"count"` | Expands from user's earliest response, fixed absolute response *count* per step | Fixed absolute count | No — short-history users drop out of later folds one by one; legacy, superseded by `"pct"` in this repo's own configs |
 | `"pct"` | Expands from user's earliest response | Fixed *fraction* of that user's own total responses | Yes — every eligible user contributes to every fold |
 | `"cyclic"` | Fixed *width* (fraction of user's total), slides forward, **wraps** past 100% back to 0% | Fixed fraction, tiles the user's entire history each cycle | Yes |
 
@@ -113,7 +111,7 @@ train window (see [`CohortSplitter.split_walk_forward_cyclic`](../src/data/compo
 ### `CVHealthDataModule` — a different question
 
 Not part of the forecasting-question family above.
-`split_mode="user"`-style grouped, stratified, *repeated* k-fold — measures
+Grouped, stratified, *repeated* k-fold — measures
 generalization to a brand-new user with zero prior history (a zero-shot
 deployment-day question), not within-user forecasting. Documented in its
 own docstring in [`cv_health_datamodule.py`](../src/data/cv_health_datamodule.py);
@@ -197,14 +195,13 @@ So `split_mode` is only load-bearing for `eval_plan=single`, where
 `HealthDataModule._split_data` actually runs: `"longitudinal"` gives the
 chronological per-user cut, `"user"` the grouped random one.
 
-The two CV datamodules don't just ignore it — neither **accepts** it. Both
-hardcode the value in their own `super().__init__()` call and expose no
-`split_mode` constructor argument:
-`WalkForwardHealthDataModule` passes `"longitudinal"` as an explicitly-unused
-placeholder ([datamodule:208](../src/data/walk_forward_health_datamodule.py#L208))
-because its `_split_data` override never consults it, and `CVHealthDataModule`
-passes `"user"` ([datamodule:95](../src/data/cv_health_datamodule.py#L95)) to
-match the grouped k-fold it performs itself.
+The two CV datamodules don't just ignore it — neither **accepts** it, and
+neither passes it to the base class either. Both override `_split_data`, and
+every read of `hparams.split_mode` lives inside the `HealthDataModule._split_data`
+those overrides replace, so the setting could never have reached them.
+
+`CVHealthDataModule`'s user-grouping guarantee comes from `_grouped_split` on
+`app_user_id`, not from `split_mode`.
 
 The practical consequence, verified: `data.split_mode=user` on a `cyclical` or
 `user_cv` run is not a silent no-op — Hydra rejects it outright, since those

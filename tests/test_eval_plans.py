@@ -215,8 +215,9 @@ def test_walk_forward_raises_when_the_cohort_supports_zero_folds():
     [
         ("cyclic", "train_width_pct/step_pct"),
         ("pct", "burn_in_pct/val_pct/step_pct"),
-        # No hparams at all -> fall back to count mode's names.
-        (None, "burn_in_responses/val_responses/step_responses"),
+        # No hparams at all -> a generic phrase, since there is no third mode
+        # whose knobs we could name.
+        (None, "this config's fold-sizing parameters"),
     ],
 )
 def test_walk_forward_zero_fold_error_names_this_configs_own_knobs(
@@ -224,10 +225,8 @@ def test_walk_forward_zero_fold_error_names_this_configs_own_knobs(
 ):
     """The remedy must name keys the running config actually has.
 
-    Every walk-forward data config in this repo sets fold_sizing to "pct" or
-    "cyclic", so an error telling the user to lower burn_in_responses points
-    at a key their config does not define -- which is what this used to do
-    unconditionally.
+    This used to name a removed count mode's parameters unconditionally,
+    pointing at keys no config in this repo defines.
     """
     cache = _FakeCohortCache(_StubProbe(num_folds=0, fold_sizing=fold_sizing))
     with pytest.raises(ValueError) as excinfo:
@@ -236,7 +235,7 @@ def test_walk_forward_zero_fold_error_names_this_configs_own_knobs(
     message = str(excinfo.value)
     assert expected_knobs in message
     for other in ("train_width_pct/step_pct", "burn_in_pct/val_pct/step_pct",
-                  "burn_in_responses/val_responses/step_responses"):
+                  "this config's fold-sizing parameters"):
         if other != expected_knobs:
             assert other not in message
 

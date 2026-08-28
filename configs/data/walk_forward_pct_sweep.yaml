@@ -23,7 +23,7 @@ modalities: ["step", "distance"]
 # provenance and rationale).
 #
 # burn_in_pct=0.4, step_pct=0.15 -> 4 folds (near-flat user coverage across
-# folds, vs. fold_sizing="count"'s test-window-size-driven user decay).
+# folds -- every eligible user contributes to every fold).
 fold_sizing: pct
 burn_in_pct: 0.4
 step_pct: 0.15

@@ -286,140 +286,6 @@ class CohortSplitter:
             return train_df, last_df, middle_df
         return train_df, middle_df, last_df
 
-    def split_walk_forward(
-        self,
-        df: pd.DataFrame,
-        burn_in_responses: int,
-        step_responses: int,
-        val_responses: int = 0,
-    ) -> List[WalkForwardFold]:
-        """Per-user, purged, expanding-window walk-forward split.
-
-        Answers "given a user's own history, can the model forecast their
-        near-future risk?" — as distinct from ``split_mode="longitudinal"``'s
-        single train/val/test cut, which only samples this question once per
-        user. Here each user contributes multiple sequential forecast folds:
-        fold *k*'s train set is everything before its test window (all of the
-        user's own past, not a fixed-size trailing slice — the model is meant
-        to accumulate history, mirroring how a deployed app would), and folds
-        walk forward through the remainder of the user's responses.
-
-        Purging is applied at *every* fold's train/test boundary (and, when
-        ``val_responses`` is set, the train/val and val/test boundaries too)
-        using the exact same logic as ``split_mode="longitudinal"`` — see the
-        class docstring for why this is necessary (a sampler's lookback window
-        can otherwise reach across a boundary into data assigned to the other
-        side of it). ``self.purge_hours`` sets the width, same as elsewhere.
-
-        A user contributes as many folds as their response count supports
-        after ``burn_in_responses``; a user with fewer than
-        ``burn_in_responses + val_responses + 1`` responses contributes none.
-        This is expected, not an error — short-history users simply cannot
-        be forecast-evaluated yet, and are reported as excluded rather than
-        silently padded or dropped from the cohort entirely (they still
-        appear in every fold's train set once they clear burn-in).
-
-        Folds are aligned by position (fold 0, fold 1, ...) across users, not
-        by calendar date — a user with more responses contributes more folds,
-        a user with fewer contributes fewer, and the ``fold_index`` for a
-        given user's Nth walk-forward step does not necessarily correspond to
-        the same calendar period as another user's Nth step. Pool predictions
-        across users within a fold index with this in mind: it is "the Nth
-        forecast step for each user who has one", not "the same time window
-        for everyone".
-
-        Args:
-            df: The master linked dataframe to split.
-            burn_in_responses: Minimum number of a user's earliest responses
-                reserved for the first fold's training set before any
-                forecasting is evaluated for that user.
-            step_responses: Number of responses each successive fold's test
-                window covers, and by which the train window expands.
-            val_responses: Number of responses each fold's validation window
-                covers, sliced immediately after that fold's train window and
-                immediately before its test window. Defaults to 0: no
-                validation window at all. Every response that would otherwise
-                go to val is absorbed into train instead (each fold is just
-                train | purge | test), so no rows are set aside for early
-                stopping / checkpoint selection — a caller running with no
-                val split trains for its full configured epoch budget and
-                evaluates the final-epoch weights.
-
-        Returns:
-            A list of ``WalkForwardFold`` namedtuples, ordered first by
-            ``fold_index`` then by the order users appear in ``df``. Empty
-            if no user clears burn-in. ``val_df`` is an empty (but correctly
-            columned) DataFrame on every fold when ``val_responses == 0``.
-        """
-        if burn_in_responses < 1:
-            raise ValueError(f"burn_in_responses must be >= 1; got {burn_in_responses}")
-        if step_responses < 1:
-            raise ValueError(f"step_responses must be >= 1; got {step_responses}")
-        if val_responses < 0:
-            raise ValueError(f"val_responses must be >= 0; got {val_responses}")
-
-        purge = pd.Timedelta(hours=self.purge_hours) if self.purge_hours else pd.Timedelta(0)
-
-        # Collect this user's folds as (train, val, test) triples, keyed by
-        # fold_index, so folds can be regrouped and concatenated across users
-        # by index afterward rather than by user.
-        folds_by_index: dict = {}
-
-        for _, group in df.groupby("app_user_id"):
-            group = group.sort_values("record_timestamp")
-            n = len(group)
-
-            fold_index = 0
-            train_end = burn_in_responses
-            while True:
-                val_end = train_end + val_responses
-                test_end = val_end + step_responses
-                if test_end > n:
-                    break
-
-                train_part = group.iloc[:train_end]
-                val_part = group.iloc[train_end:val_end]  # empty when val_responses == 0
-                test_part = group.iloc[val_end:test_end]
-
-                if purge > pd.Timedelta(0):
-                    if val_responses > 0:
-                        if not val_part.empty:
-                            val_start = val_part["record_timestamp"].iloc[0]
-                            train_part = train_part[
-                                train_part["record_timestamp"] < val_start - purge
-                            ]
-                        if not test_part.empty:
-                            test_start = test_part["record_timestamp"].iloc[0]
-                            val_part = val_part[
-                                val_part["record_timestamp"] < test_start - purge
-                            ]
-                    else:
-                        # No val window: purge train directly against test's
-                        # own start, same boundary logic collapsed to one step.
-                        if not test_part.empty:
-                            test_start = test_part["record_timestamp"].iloc[0]
-                            train_part = train_part[
-                                train_part["record_timestamp"] < test_start - purge
-                            ]
-
-                folds_by_index.setdefault(fold_index, ([], [], []))
-                folds_by_index[fold_index][0].append(train_part)
-                folds_by_index[fold_index][1].append(val_part)
-                folds_by_index[fold_index][2].append(test_part)
-
-                fold_index += 1
-                train_end = test_end  # expanding window: next fold's train includes this fold's test
-
-        result: List[WalkForwardFold] = []
-        for fold_index in sorted(folds_by_index.keys()):
-            train_list, val_list, test_list = folds_by_index[fold_index]
-            train_df = pd.concat(train_list) if train_list else df.iloc[0:0]
-            val_df = pd.concat(val_list) if val_list else df.iloc[0:0]
-            test_df = pd.concat(test_list) if test_list else df.iloc[0:0]
-            result.append(WalkForwardFold(train_df, val_df, test_df, fold_index))
-
-        return result
-
     def split_walk_forward_pct(
         self,
         df: pd.DataFrame,
@@ -430,9 +296,10 @@ class CohortSplitter:
         """Per-user, purged, expanding-window walk-forward split, cut by percentage
         of each user's own response count rather than a fixed response count.
 
-        Answers the same question as ``split_walk_forward`` ("given a user's own
+        Answers the forecasting question ("given a user's own
         history, can the model forecast their near-future risk?"), with a
-        different tradeoff: ``split_walk_forward`` sizes every fold's test
+        different tradeoff from ``split_walk_forward_cyclic``. A removed
+        count-based mode sized every fold's test
         window to the same fixed *count* of responses, so a user runs out of
         remaining data at a different fold than other users do, and later
         folds shed users one by one -- the last fold or two can end up with
@@ -442,17 +309,17 @@ class CohortSplitter:
         and every user who clears ``burn_in_pct`` contributes to every fold
         this method produces. Fold count is therefore uniform (bounded by
         ``(1.0 - burn_in_pct) / step_pct``, same math for every user) rather
-        than emergent per-user the way ``split_walk_forward``'s is.
+        than emergent per-user the way a count-based mode's would be.
 
         Cuts are computed the same way ``split_mode="longitudinal"`` computes
         its single train/val/test cut (``int(n * fraction)``), just applied
         repeatedly instead of once. Purging at every fold's train/test
         boundary (and train/val, val/test when ``val_pct`` is set) uses the
-        same logic as ``split_walk_forward`` -- see its docstring and the
+        same logic as the other walk-forward modes -- see the
         class docstring for why this matters.
 
         Folds are still aligned by position, not calendar date, with the same
-        caveat as ``split_walk_forward``: fold *k* is "this user's Nth
+        caveat as every walk-forward mode: fold *k* is "this user's Nth
         walk-forward step as a fraction of their own history," not a shared
         time window across users. What changes here is that pooling across
         users within a fold index is on much steadier footing, since every
@@ -471,7 +338,7 @@ class CohortSplitter:
             val_pct: Fraction of a user's total responses each fold's
                 validation window covers. Defaults to 0.0: no validation
                 window at all, same behavior and rationale as
-                ``split_walk_forward``'s ``val_responses=0`` default -- see
+                the ``val_pct=0.0`` default -- see
                 that method's docstring.
 
         Returns:
@@ -565,7 +432,7 @@ class CohortSplitter:
         """Per-user, purged, FIXED-width walk-forward split that cycles through
         a user's full response history, wrapping past the end back to the start.
 
-        Answers the same question as ``split_walk_forward``/``split_walk_forward_pct``
+        Answers the same question as ``split_walk_forward_pct``
         ("given a user's own history, can the model forecast their near-future
         risk?"), but with a different notion of "history" than either: those two
         methods only ever grow train forward from a user's earliest response, so
@@ -585,7 +452,7 @@ class CohortSplitter:
         This trades away the expanding-window methods' realism (a real deployment
         never trains on a user's future to predict their past) for uniform,
         directly-comparable folds and denser reuse of a short response history.
-        Use ``split_walk_forward``/``split_walk_forward_pct`` when the expanding,
+        Use ``split_walk_forward_pct`` when the expanding,
         past-only-training property matters (e.g. reporting a deployment-realistic
         forecast metric); use this when the goal is a stable per-fold estimate of
         within-user forecastability that isn't confounded by fold-to-fold history
@@ -595,7 +462,7 @@ class CohortSplitter:
         Purging is applied at both adjacencies a wrapped fold can have with
         test. The near slice (train's tail, immediately before test's start)
         is purged against test's start, same timestamp-based logic as
-        ``split_walk_forward``/``split_walk_forward_pct`` -- see the class
+        ``split_walk_forward_pct`` -- see the class
         docstring for why. When train wraps around the end of the sequence, it
         is physically two disjoint row-index slices that concatenate into one
         contiguous *cyclic*-time window, and the far slice (a wrapped train
@@ -628,7 +495,7 @@ class CohortSplitter:
         Returns:
             A list of ``WalkForwardFold`` namedtuples (``val_df`` always empty
             -- this method has no validation-window concept, matching the
-            ``val_responses=0`` / ``val_pct=0.0`` default elsewhere), ordered
+            ``val_pct=0.0`` default elsewhere), ordered
             first by ``fold_index`` then by the order users appear in ``df``.
             Empty if no user has enough responses to form a full train window
             plus test window.

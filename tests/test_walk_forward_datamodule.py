@@ -48,9 +48,10 @@ def _make_dm(current_fold=0, **overrides):
     kwargs = dict(
         aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
         sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
-        burn_in_responses=6,
-        step_responses=4,
-        val_responses=2,
+        fold_sizing="pct",
+        burn_in_pct=0.3,
+        step_pct=0.2,
+        val_pct=0.1,
         current_fold=current_fold,
         use_demographics=False,
         use_sleep=False,
@@ -64,7 +65,9 @@ def _make_dm(current_fold=0, **overrides):
 
 def test_get_num_folds_matches_the_walk_forward_split():
     dm = _make_dm()
-    assert dm.get_num_folds() == 2  # 20 responses/user, burn_in=6, step=4, val=2 -> folds at (6,8,10) and (10,12,14)
+    # 20 responses/user; burn_in_pct=0.3 (6) + val_pct=0.1 (2) leaves 12 for
+    # test windows of step_pct=0.2 (4) each -> 2 folds after the burn-in.
+    assert dm.get_num_folds() == 2
 
 
 def test_setup_builds_datasets_for_the_selected_fold():
@@ -170,7 +173,7 @@ def test_modality_dfs_stored_unconditionally_via_prebuilt_cohort():
 
 def test_no_folds_raises_a_clear_error():
     """burn_in wider than every user's data raises, rather than building an empty/broken dataset."""
-    dm = _make_dm(burn_in_responses=1000)
+    dm = _make_dm(burn_in_pct=0.99, step_pct=0.99)
     with pytest.raises(Exception, match="No user in this cohort"):
         dm.setup()
 
@@ -193,10 +196,10 @@ def test_rebuilt_val_test_share_train_fitted_state_with_base_class():
     assert dm.data_test.demographics_map is dm.demographics_map
 
 
-def test_val_responses_zero_produces_an_empty_data_val_without_crashing():
-    """val_responses=0 (the new default) yields an empty (but valid) data_val,
+def test_val_pct_zero_produces_an_empty_data_val_without_crashing():
+    """val_pct=0 (the default) yields an empty (but valid) data_val,
     and setup()/dataloader construction handle that without error."""
-    dm = _make_dm(val_responses=0)
+    dm = _make_dm(val_pct=0.0)
     dm.setup()
 
     assert len(dm.data_val) == 0
@@ -208,50 +211,40 @@ def test_val_responses_zero_produces_an_empty_data_val_without_crashing():
     assert val_batches == []
 
 
-def test_val_responses_zero_gives_more_train_rows_than_with_val():
+def test_val_pct_zero_gives_more_train_rows_than_with_val():
     """With no val window, train absorbs what would otherwise be set aside for
-    val -- so for the same fold, val_responses=0 should have >= as many train
-    rows as val_responses>0 (strictly more once purge is accounted for, since
+    val -- so for the same fold, val_pct=0 should have >= as many train
+    rows as val_pct>0 (strictly more once purge is accounted for, since
     there's one fewer purge boundary to lose rows to)."""
-    dm_no_val = _make_dm(current_fold=0, val_responses=0)
+    dm_no_val = _make_dm(current_fold=0, val_pct=0.0)
     dm_no_val.setup()
 
-    dm_with_val = _make_dm(current_fold=0, val_responses=2)
+    dm_with_val = _make_dm(current_fold=0, val_pct=0.1)
     dm_with_val.setup()
 
     assert len(dm_no_val.data_train) >= len(dm_with_val.data_train)
 
 
-def test_val_responses_omitted_defaults_to_zero():
-    """Not passing val_responses at all uses the class default (0), matching
+def test_val_pct_omitted_defaults_to_zero():
+    """Not passing val_pct at all uses the class default (0.0), matching
     passing it explicitly."""
     modality_dfs, master_df, demographics_df = _cohort()
     dm_default = WalkForwardHealthDataModule(
         aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
         sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
-        burn_in_responses=6,
-        step_responses=4,
-        # val_responses omitted entirely
+        fold_sizing="pct",
+        burn_in_pct=0.3,
+        step_pct=0.2,
+        # val_pct omitted entirely
         use_demographics=False,
         use_sleep=False,
         use_survey_context=False,
         require_sensor_data=False,
         prebuilt_cohort=(modality_dfs, master_df, demographics_df),
     )
-    assert dm_default.hparams.val_responses == 0
+    assert dm_default.hparams.val_pct == 0.0
     dm_default.setup()
     assert len(dm_default.data_val) == 0
-
-
-def test_fold_sizing_count_requires_count_params():
-    modality_dfs, master_df, demographics_df = _cohort()
-    with pytest.raises(ValueError, match="burn_in_responses"):
-        WalkForwardHealthDataModule(
-            aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
-            sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
-            fold_sizing="count",
-            prebuilt_cohort=(modality_dfs, master_df, demographics_df),
-        )
 
 
 def test_fold_sizing_pct_requires_pct_params():

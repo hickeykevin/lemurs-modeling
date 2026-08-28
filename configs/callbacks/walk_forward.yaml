@@ -9,7 +9,7 @@ defaults:
 
 # Same base callbacks as configs/callbacks/default.yaml, with one change:
 # early_stopping.strict is False here. A walk-forward fold's val split is
-# sized by val_responses (a small fixed count per user, not a fraction of
+# sized by val_pct (a fraction of each user's own responses, not a split of
 # the whole cohort like CVHealthDataModule's), so some folds can end up with
 # an empty val_dataloader (fewer than one batch) after purging -- when that
 # happens, ClassificationMetricsCallback never logs val/auroc at all for

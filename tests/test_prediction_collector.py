@@ -54,9 +54,10 @@ def _make_dm(current_fold=0):
     return WalkForwardHealthDataModule(
         aggregator=MeanAggregator(question_ids=[2], threshold=0.5),
         sampler=OffsetSampler(start_offset_hours=-6, end_offset_hours=0),
-        burn_in_responses=6,
-        step_responses=4,
-        val_responses=2,
+        fold_sizing="pct",
+        burn_in_pct=0.3,
+        step_pct=0.2,
+        val_pct=0.1,
         current_fold=current_fold,
         use_demographics=False,
         use_sleep=False,
