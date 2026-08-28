@@ -118,6 +118,12 @@ Cross Validate mode and the `suicide_risk_cv.yaml` sweep still target
 `cv_train.py` (which can't be imported without side effects); drift tripwire
 tests assert they agree.
 
+`configs/eval.yaml` (`src/eval.py`'s entry config, for reloading a checkpoint)
+also defaults `data=single_split`, tracking `train.py`'s own default so a bare
+`train.py` → `eval.py` round-trip reloads without a feature-count mismatch.
+Pass `data=...` explicitly to `eval.py` when reloading a checkpoint trained
+under a different data config.
+
 ## Known sharp edge: Hydra output-directory collisions
 
 Hydra's run directory is timestamped to the second. Two runs launched in the
