@@ -1,0 +1,10 @@
+_target_: src.models.health_module.FLAMLHealthModule
+auto_class_weights: false
+class_weights: null
+automl_config:
+  time_budget: 20 # total time in seconds
+  metric: 'f1'
+  estimator_list: ['xgboost'] # pinned, unlike flaml.yaml's multi-estimator search
+  n_jobs: 1
+  log_file_name: ${paths.output_dir}/flaml.log
+task: 'classification'
