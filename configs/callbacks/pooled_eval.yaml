@@ -12,7 +12,7 @@ defaults:
 # for use with train.py against a datamodule whose data_val/data_test are
 # built with return_index=True (IndexedHealthDataModule,
 # WalkForwardHealthDataModule) -- e.g. `python train.py data=
-# longitudinal_sweep_indexed callbacks=pooled_eval`. Gets the same pooled,
+# single_split callbacks=pooled_eval`. Gets the same pooled,
 # user-cluster BCa bootstrap CI wf_cv_train.py reports for its CV schemes,
 # instead of ClassificationMetricsCallback's row-level BootStrapper CI. See
 # PooledMetricsCallback's docstring and docs/eval_schemes.md.

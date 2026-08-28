@@ -10,11 +10,11 @@ modalities: ["step", "distance"]
 
 # split_mode="longitudinal": ONE train/val/test cut per user, by
 # chronological position (see CohortSplitter._split_longitudinally) -- the
-# single-cut baseline being compared against walk_forward_pct_sweep.yaml
+# single-cut baseline being compared against walk_forward_expanding.yaml
 # (expanding-window, multiple folds) and
-# walk_forward_cyclic_5fold_sweep.yaml (cyclic, fixed-width, wraparound).
+# walk_forward_cyclic.yaml (cyclic, fixed-width, wraparound).
 # Same data/model settings as those two, carried from sweep umdhgse9 (see
-# walk_forward_cyclic_5fold_sweep.yaml's comment), so the three evaluation
+# walk_forward_cyclic.yaml's comment), so the three evaluation
 # schemes are compared holding hparams fixed.
 #
 # _target_ is IndexedHealthDataModule rather than plain HealthDataModule so

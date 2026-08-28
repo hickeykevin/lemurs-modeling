@@ -13,13 +13,13 @@ modalities: ["step", "distance"]
 # test cut by percentage of that user's own total responses -- see
 # CohortSplitter.split_walk_forward_pct. This is the middle point of the
 # three-way comparison: split_mode="longitudinal"
-# (longitudinal_sweep_indexed.yaml) samples the forecast question once per
+# (single_split.yaml) samples the forecast question once per
 # user; this samples it multiple times, walking forward, but never trains
 # on a user's chronological future; fold_sizing="cyclic"
-# (walk_forward_cyclic_5fold_sweep.yaml) also samples it multiple times
+# (walk_forward_cyclic.yaml) also samples it multiple times
 # but with a fixed-width, wrapping train window instead of an expanding
 # one. Same data/model settings as those two, carried from sweep umdhgse9
-# (see walk_forward_cyclic_5fold_sweep.yaml's comment for the full
+# (see walk_forward_cyclic.yaml's comment for the full
 # provenance and rationale).
 #
 # burn_in_pct=0.4, step_pct=0.15 -> 4 folds (near-flat user coverage across

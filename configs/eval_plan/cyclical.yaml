@@ -20,7 +20,7 @@
 # data config if you want a different pairing.
 defaults:
   - override /callbacks: walk_forward
-  - override /data: walk_forward_cyclic_5fold_sweep
+  - override /data: walk_forward_cyclic
 
 eval_plan:
   _target_: src.eval_plans.walk_forward.WalkForwardPlan

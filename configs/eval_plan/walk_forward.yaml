@@ -12,7 +12,7 @@
 # No `data` override here, unlike cyclical.yaml: the expanding-window mode is
 # already the default sweep's, and leaving it unset keeps this plan usable with
 # any WalkForwardHealthDataModule config. Pair it with
-# data=walk_forward_pct_sweep explicitly for the tuned expanding sweep.
+# data=walk_forward_expanding explicitly for the tuned expanding sweep.
 #
 # Overriding callbacks is required rather than cosmetic: a walk-forward fold's
 # val split can end up empty after purging, and configs/callbacks/default.yaml
