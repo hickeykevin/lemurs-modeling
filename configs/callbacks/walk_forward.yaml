@@ -5,6 +5,7 @@ defaults:
   - tqdm_progress_bar
   - classification_metrics
   - within_person_auroc
+  - confusion_matrix
   - _self_
 
 # Same base callbacks as configs/callbacks/default.yaml, with one change:

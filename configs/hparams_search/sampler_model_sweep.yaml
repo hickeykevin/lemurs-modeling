@@ -41,7 +41,7 @@ project: lemurs-modeling
 program: src/train.py
 method: grid
 metric:
-  name: val/f1_best
+  name: pooled/f1
   goal: maximize
 
 parameters:
@@ -105,17 +105,6 @@ parameters:
       - ["step", "calorie", "distance"]
 
 command:
-  - ${env}
-  - python
-  - ${program}
-  - "data/sampler=sweep_configs/${sampler_pkg}"
-  - "model=${model_pkg}"
-  - "data.modalities=${modalities_choice}"
-  - "data/preprocessors=${modalities_choice}"
-  - "data/scaler=dual"
-  - "data.os_filter=both"
-  - "data.collapse_strategy=none"
-  - "data.use_demographics=true"
-  - "data.use_sleep=false"
-  - "data.use_survey_context=false"
-  - "data.require_sensor_data=true"
+  - bash
+  - scripts/sampler_model_sweep_wrapper.sh
+  - ${args_no_hyphens}
