@@ -28,13 +28,14 @@
 #
 # Fixed, not swept (see command: below): scaler=dual; os_filter=both;
 # collapse_strategy=none; use_demographics=true; use_sleep=false;
-# use_survey_context=false; require_sensor_data=true.
+# use_survey_context=false; require_sensor_data=true; purge_hours=120.0 (5 days).
 #
-# scaler=dual and require_sensor_data=true both DIFFER from
-# configs/data/default.yaml (robust and false respectively) and must be
-# overridden here. The other four already match default.yaml's values --
-# pinned explicitly anyway so the sweep states its own assumptions rather
-# than depending on defaults that could silently change later.
+# scaler=dual, require_sensor_data=true, and purge_hours=120.0 DIFFER from
+# defaults and are overridden here. purge_hours=120.0 pins the boundary purge
+# duration to the maximum lookback across all runs (5 days) so that all lookback
+# configurations train on the exact same dataset splits without sample count variance.
+# The other four already match default.yaml's values -- pinned explicitly anyway
+# so the sweep states its own assumptions rather than depending on defaults.
 
 name: sampler_model_sweep
 project: lemurs-modeling

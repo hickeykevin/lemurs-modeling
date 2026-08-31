@@ -34,5 +34,6 @@ eval "uv run python src/train.py \
     data.use_sleep=false \
     data.use_survey_context=false \
     data.require_sensor_data=true \
+    data.purge_hours=120.0 \
     trainer.max_epochs=75 \
-    $ARGS"
+    \$ARGS"

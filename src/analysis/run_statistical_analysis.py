@@ -270,87 +270,111 @@ def run_analysis():
     print(comp_table)
     comp_table.to_csv(OUTPUT_DIR / "tables" / "table3_rq2_model_head_to_head.csv", index=False)
 
-    # Figure 2: Model x Horizon Interaction
-    lb_mapping = df[["sampler_pkg", "lookback_days"]].drop_duplicates().set_index("sampler_pkg")["lookback_days"]
-    paired_df["lookback_days"] = paired_df["sampler_pkg"].map(lb_mapping)
+    # Figure 2: Model Architecture Comparison (2-Panel Figure)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4.8))
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    # Panel A: Horizon Lineplot
     sns.lineplot(
         data=df,
-        x="lookback_days",
-        y="pooled_auroc",
-        hue="model_name",
-        style="model_name",
+        x='lookback_days',
+        y='pooled_auroc',
+        hue='model_name',
+        style='model_name',
         markers=True,
         dashes=False,
-        palette="Set1",
-        errorbar=("ci", 95),
+        palette={'Transformer': '#e41a1c', 'LSTM': '#2ca02c', 'FLAML XGBoost': '#1f77b4'},
+        errorbar=('ci', 95),
         ax=axes[0]
     )
-    axes[0].set_title("(A) Model Discrimination across Lookback Horizons")
-    axes[0].set_xlabel("Historical Lookback Window (Days)")
-    axes[0].set_ylabel("Pooled AUROC (Mean +/- 95% CI)")
+    axes[0].set_title('(A) AUROC across Lookback Windows', fontsize=12, weight='bold')
+    axes[0].set_xlabel('Historical Lookback Window (Days)', fontsize=10)
+    axes[0].set_ylabel('Pooled AUROC (Mean +/- 95% CI)', fontsize=10)
     axes[0].set_xticks([1, 2, 3, 4, 5])
-    axes[0].legend(title="Model", loc="lower right")
+    axes[0].grid(axis='y', linestyle='--', alpha=0.3)
+    axes[0].legend(title='Model Architecture', loc='lower right', frameon=True)
 
-    delta_melt = paired_df.melt(
-        id_vars=["lookback_days"],
-        value_vars=["Delta_LSTM_minus_XGB", "Delta_Transformer_minus_XGB"],
-        var_name="Comparison",
-        value_name="AUROC_Advantage"
+    # Panel B: Multi-metric Grouped Bar Chart
+    metric_map = {
+        'pooled_auroc': 'AUROC',
+        'pooled_f1': 'F1-Score',
+        'pooled_recall': 'Sensitivity',
+        'pooled_specificity': 'Specificity',
+        'pooled_precision': 'Precision'
+    }
+
+    melted = df.melt(
+        id_vars=['model_name'],
+        value_vars=list(metric_map.keys()),
+        var_name='metric_key',
+        value_name='score'
     )
-    delta_melt["Comparison"] = delta_melt["Comparison"].map({
-        "Delta_LSTM_minus_XGB": "LSTM Advantage over XGBoost",
-        "Delta_Transformer_minus_XGB": "Transformer Advantage over XGBoost"
-    })
-    sns.lineplot(
-        data=delta_melt,
-        x="lookback_days",
-        y="AUROC_Advantage",
-        hue="Comparison",
-        style="Comparison",
-        markers=True,
-        palette=["#2ca02c", "#d62728"],
+    melted['Metric'] = melted['metric_key'].map(metric_map)
+
+    sns.barplot(
+        data=melted,
+        x='Metric',
+        y='score',
+        hue='model_name',
+        palette={'Transformer': '#e41a1c', 'LSTM': '#2ca02c', 'FLAML XGBoost': '#1f77b4'},
+        errorbar=('ci', 95),
+        capsize=0.08,
+        err_kws={'linewidth': 1.2},
+        edgecolor='black',
+        linewidth=0.6,
         ax=axes[1]
     )
-    axes[1].axhline(0, color="black", linestyle=":", alpha=0.8)
-    axes[1].set_title("(B) Time-Series Advantage Over Classical ML by Horizon")
-    axes[1].set_xlabel("Historical Lookback Window (Days)")
-    axes[1].set_ylabel("Delta AUROC (Sequence - Tree)")
-    axes[1].set_xticks([1, 2, 3, 4, 5])
-    axes[1].legend(loc="upper left")
+    axes[1].set_ylim(0.50, 0.90)
+    axes[1].set_ylabel('Score (Mean +/- 95% CI)', fontsize=10)
+    axes[1].set_xlabel('')
+    axes[1].set_title('(B) Performance across Evaluation Metrics', fontsize=12, weight='bold')
+    axes[1].grid(axis='y', linestyle='--', alpha=0.3)
+    axes[1].legend(title='Model Architecture', loc='upper right', frameon=True)
 
     plt.tight_layout()
-    plt.savefig(OUTPUT_DIR / "figures" / "fig2_rq2_model_horizon_interaction.pdf", bbox_inches="tight")
-    plt.savefig(OUTPUT_DIR / "figures" / "fig2_rq2_model_horizon_interaction.png", dpi=300, bbox_inches="tight")
+    plt.savefig(OUTPUT_DIR / 'figures' / 'fig2_rq2_model_horizon_interaction.pdf', bbox_inches='tight')
+    plt.savefig(OUTPUT_DIR / 'figures' / 'fig2_rq2_model_horizon_interaction.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-    # 4. RQ3: 2D Response Surface Heatmap
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
-    for idx, (strategy_name, ax) in enumerate(zip(["Rolling", "Offset"], axes)):
-        strat_df = df[df["sampler_strategy"] == strategy_name]
-        pivot_map = strat_df.pivot_table(
-            index="lookback_hours",
-            columns="window_hours",
-            values="pooled_auroc",
-            aggfunc="mean"
-        )
-        sns.heatmap(
-            pivot_map,
-            annot=True,
-            fmt=".3f",
-            cmap="YlGnBu",
-            cbar=(idx == 1),
-            ax=ax,
-            vmin=df["pooled_auroc"].quantile(0.10),
-            vmax=df["pooled_auroc"].quantile(0.95)
-        )
-        ax.set_title(f"Strategy: {strategy_name} Sampling")
-        ax.set_xlabel("Resample Frequency / Window (Hours)")
-        ax.set_ylabel("Lookback Horizon (Hours)" if idx == 0 else "")
-        ax.set_yticklabels([f"{int(h)}h ({int(h/24)}d)" for h in pivot_map.index], rotation=0)
+    # 4. RQ3: 2D Response Surface Heatmap (Rolling Sampling Only with Uncertainty)
+    fig, ax = plt.subplots(figsize=(6.2, 5.0))
+    strat_df = df[df["sampler_strategy"] == "Rolling"]
+    means = strat_df.pivot_table(
+        index="lookback_hours",
+        columns="window_hours",
+        values="pooled_auroc",
+        aggfunc="mean"
+    )
+    stds = strat_df.pivot_table(
+        index="lookback_hours",
+        columns="window_hours",
+        values="pooled_auroc",
+        aggfunc="std"
+    )
 
-    plt.suptitle("Figure 3: AUROC Response Surface by Temporal Granularity and Horizon", y=1.02, fontsize=14)
+    annot_matrix = means.copy().astype(object)
+    for r in means.index:
+        for c in means.columns:
+            m = means.loc[r, c]
+            s = stds.loc[r, c]
+            annot_matrix.loc[r, c] = f"{m:.3f}\n±{s:.3f}"
+
+    sns.heatmap(
+        means,
+        annot=annot_matrix,
+        fmt="",
+        cmap="YlGnBu",
+        cbar=True,
+        cbar_kws={'label': 'Mean AUROC'},
+        annot_kws={'size': 9.5, 'weight': 'normal'},
+        ax=ax,
+        vmin=df["pooled_auroc"].quantile(0.10),
+        vmax=df["pooled_auroc"].quantile(0.95)
+    )
+    ax.set_title("RQ3: Temporal Response", fontsize=11, weight="bold", pad=10)
+    ax.set_xlabel("Sampling Resolution / Window (Hours)", fontsize=10)
+    ax.set_ylabel("Lookback Horizon (Hours)", fontsize=10)
+    ax.set_yticklabels([f"{int(h)}h ({int(h/24)}d)" for h in means.index], rotation=0)
+
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR / "figures" / "fig3_rq3_temporal_response_surface.pdf", bbox_inches="tight")
     plt.savefig(OUTPUT_DIR / "figures" / "fig3_rq3_temporal_response_surface.png", dpi=300, bbox_inches="tight")
