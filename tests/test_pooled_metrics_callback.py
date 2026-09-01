@@ -19,8 +19,9 @@ from src.data.components.samplers import OffsetSampler
 from src.data.indexed_health_datamodule import IndexedHealthDataModule
 from src.models.components.simple_lstm import SimpleLSTM
 from src.models.health_module import HealthLitModule
-from src.utils.evaluation_callbacks import ClassificationMetricsCallback
-from src.utils.pooled_metrics_callback import PooledMetricsCallback
+from src.callbacks.evaluation_callbacks import ClassificationMetricsCallback
+from src.callbacks.pooled_metrics_callback import PooledMetricsCallback
+
 
 
 def _cohort(n_users=10, n_per_user=20):
@@ -130,7 +131,8 @@ def test_finds_and_reads_sibling_classification_metrics_callback_params(tmp_path
     not a second, independent set of defaults. Uses a non-default
     min_specificity so the assertion actually depends on the params having
     flowed through, not just "didn't crash"."""
-    from src.utils.pooled_metrics import _classification_metrics_params, _pooled_classification_metrics
+    from src.eval_plans.pooled_metrics import _classification_metrics_params, _pooled_classification_metrics
+
 
     dm = _make_dm()
     dm.setup()

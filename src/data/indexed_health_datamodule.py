@@ -10,7 +10,8 @@ class IndexedHealthDataModule(HealthDataModule):
 
     Exists so a single-split evaluation (e.g. ``split_mode="longitudinal"``)
     can use ``PredictionCollectorCallback`` and the same pooled, user-cluster
-    bootstrap metrics ``wf_cv_train.py`` computes for its CV schemes --
+    bootstrap metrics computed for walk-forward CV schemes --
+
     without which a longitudinal run's only CI comes from
     ``ClassificationMetricsCallback``'s row-level ``torchmetrics.BootStrapper``,
     which (like every row-level bootstrap discussed elsewhere in this

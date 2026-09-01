@@ -15,10 +15,12 @@ defaults:
 # an empty val_dataloader (fewer than one batch) after purging -- when that
 # happens, ClassificationMetricsCallback never logs val/auroc at all for
 # that epoch, and a strict EarlyStopping crashes the entire run instead of
-# just skipping early stopping for that fold. wf_cv_train.py already
+# that epoch, and a strict EarlyStopping crashes the entire run instead of
+# just skipping early stopping for that fold. WalkForwardPlan already
 # tolerates a missing "best" checkpoint (falls back to current weights with
 # a warning), so relaxing strictness here is a real fix, not a workaround
 # that hides a different problem.
+
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints
   filename: "epoch_{epoch:03d}"

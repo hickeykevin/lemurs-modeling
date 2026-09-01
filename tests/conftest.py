@@ -48,33 +48,6 @@ def cfg_train_global() -> DictConfig:
 
 
 @pytest.fixture(scope="package")
-def cfg_wf_cv_train_global() -> DictConfig:
-    """A pytest fixture for setting up a default Hydra DictConfig for walk-forward CV training.
-
-    :return: A DictConfig object containing a default Hydra configuration for wf_cv_train.
-    """
-    with initialize(version_base="1.3", config_path="../configs"):
-        cfg = compose(config_name="wf_cv_train.yaml", return_hydra_config=True, overrides=[])
-
-        # set defaults for all tests
-        with open_dict(cfg):
-            cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
-            cfg.trainer.max_epochs = 1
-            cfg.trainer.limit_train_batches = 2
-            cfg.trainer.limit_val_batches = 2
-            cfg.trainer.limit_test_batches = 2
-            cfg.trainer.accelerator = "cpu"
-            cfg.trainer.devices = 1
-            cfg.data.num_workers = 0
-            cfg.data.pin_memory = False
-            cfg.extras.print_config = False
-            cfg.extras.enforce_tags = False
-            cfg.logger = None
-
-    return cfg
-
-
-@pytest.fixture(scope="package")
 def cfg_eval_global() -> DictConfig:
     """A pytest fixture for setting up a default Hydra DictConfig for evaluation.
 
@@ -121,25 +94,6 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
 
     GlobalHydra.instance().clear()
 
-
-@pytest.fixture(scope="function")
-def cfg_wf_cv_train(cfg_wf_cv_train_global: DictConfig, tmp_path: Path) -> DictConfig:
-    """A pytest fixture built on top of `cfg_wf_cv_train_global()`, with a temporary logging path.
-
-    :param cfg_wf_cv_train_global: The input DictConfig object to be modified.
-    :param tmp_path: The temporary logging path.
-
-    :return: A DictConfig with updated output and log directories corresponding to `tmp_path`.
-    """
-    cfg = cfg_wf_cv_train_global.copy()
-
-    with open_dict(cfg):
-        cfg.paths.output_dir = str(tmp_path)
-        cfg.paths.log_dir = str(tmp_path)
-
-    yield cfg
-
-    GlobalHydra.instance().clear()
 
 
 @pytest.fixture(scope="function")

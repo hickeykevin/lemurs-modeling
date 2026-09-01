@@ -1,15 +1,14 @@
-"""Tests for src/utils/cv_aggregation.py, including a drift tripwire against
-the cv_train.py copy it duplicates (see that module's docstring for why the
-duplication exists during the eval_plan parity window).
-"""
+"""Tests for src/eval_plans/cv_aggregation.py."""
+
 
 import math
 
 import numpy as np
 import pytest
 
+from src.eval_plans.cv_aggregation import aggregate_cv_metrics
 from src.utils import RankedLogger
-from src.utils.cv_aggregation import aggregate_cv_metrics
+
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
@@ -93,21 +92,3 @@ def test_log_step_offset_is_honoured():
     _logged, step = rec.calls[0]
     assert step == 500 + 1 + 1
 
-
-def test_matches_cv_train_copy():
-    """Drift tripwire: cv_train.py's _aggregate_cv_metrics is the reference
-    during the parity window. Identical inputs must give identical dicts."""
-    from src.cv_train import CV_LOG_STEP_OFFSET, _aggregate_cv_metrics
-
-    metrics = {
-        "test/auroc": [0.81, 0.66, float("nan"), 0.74],
-        "test/f1": [0.5, 0.55, 0.6, 0.52],
-    }
-    ours = aggregate_cv_metrics(
-        {k: list(v) for k, v in metrics.items()}, [], log, 4, CV_LOG_STEP_OFFSET
-    )
-    theirs = _aggregate_cv_metrics({k: list(v) for k, v in metrics.items()}, [], log, 4)
-
-    assert set(ours) == set(theirs)
-    for k in ours:
-        assert ours[k] == pytest.approx(theirs[k], nan_ok=True), k

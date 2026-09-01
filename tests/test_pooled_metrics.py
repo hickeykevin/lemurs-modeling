@@ -10,15 +10,16 @@ import pandas as pd
 import pytest
 import torch
 
-from src.utils import RankedLogger
-from src.utils.evaluation_callbacks import ClassificationMetricsCallback
-from src.utils.pooled_metrics import (
+from src.callbacks.evaluation_callbacks import ClassificationMetricsCallback
+from src.eval_plans.pooled_metrics import (
     _classification_metrics_params,
     _cluster_bootstrap_ci,
     _pooled_classification_metrics,
     compute_pooled_metrics,
     fold_breakdown_table,
 )
+from src.utils import RankedLogger
+
 
 log = RankedLogger(__name__, rank_zero_only=True)
 

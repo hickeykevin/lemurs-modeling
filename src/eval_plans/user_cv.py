@@ -10,8 +10,9 @@ from src.eval_plans.base import (
     UnitResult,
     default_step_for,
 )
+from src.eval_plans.cv_aggregation import aggregate_cv_metrics
 from src.eval_plans.runner import LOG_STEP_OFFSET
-from src.utils.cv_aggregation import aggregate_cv_metrics
+
 
 
 class UserCVPlan:

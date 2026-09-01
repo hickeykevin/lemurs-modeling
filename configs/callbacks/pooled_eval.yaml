@@ -13,9 +13,10 @@ defaults:
 # built with return_index=True (IndexedHealthDataModule,
 # WalkForwardHealthDataModule) -- e.g. `python train.py data=
 # single_split callbacks=pooled_eval`. Gets the same pooled,
-# user-cluster BCa bootstrap CI wf_cv_train.py reports for its CV schemes,
+# user-cluster BCa bootstrap CI reported for walk-forward CV schemes,
 # instead of ClassificationMetricsCallback's row-level BootStrapper CI. See
 # PooledMetricsCallback's docstring and docs/eval_schemes.md.
+
 
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints

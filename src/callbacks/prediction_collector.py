@@ -35,7 +35,7 @@ class PredictionCollectorCallback(Callback):
     stages/folds automatically), call ``trainer.test(...)``, then read
     ``.rows`` -- a list of dicts with ``fold_index``, ``app_user_id``,
     ``record_timestamp``, ``y_true``, and one ``prob_class_{k}`` column per
-    class. An orchestration script (e.g. ``wf_cv_train.py``) concatenates
+    class. An evaluation plan (e.g. ``WalkForwardPlan``) concatenates
     ``.rows`` across folds into one pooled prediction table.
     """
 

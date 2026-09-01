@@ -6,7 +6,8 @@ from omegaconf import DictConfig
 
 from src.eval_plans.base import CohortCache, RunContext, RunUnit, UnitResult
 from src.eval_plans.runner import LOG_STEP_OFFSET
-from src.utils.pooled_metrics import compute_pooled_metrics, fold_breakdown_table
+from src.eval_plans.pooled_metrics import compute_pooled_metrics, fold_breakdown_table
+
 
 
 class WalkForwardPlan:

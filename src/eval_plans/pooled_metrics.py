@@ -15,8 +15,10 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import torch
 
 from src.utils import RankedLogger
+
 
 
 def _classification_metrics_params(
@@ -70,8 +72,8 @@ def _pooled_classification_metrics(
     identical values, since every metric here depends only on rank order /
     argmax, both of which softmax preserves exactly.
     """
-    import torch
-    from src.utils.evaluation_callbacks import SensitivityAtSpecificityScalar
+    from src.callbacks.evaluation_callbacks import SensitivityAtSpecificityScalar
+
     from torchmetrics.classification import F1Score, AUROC, Precision, Recall, Specificity, Accuracy
 
     # np.asarray(..., copy=True) rather than as_tensor(...) directly: probs

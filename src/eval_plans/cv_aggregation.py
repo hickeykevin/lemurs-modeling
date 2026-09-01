@@ -1,18 +1,7 @@
 """Fold-metric aggregation (mean / spread / 95% interval), shared by the
 eval_plan runner's grouped-CV plan.
-
-DUPLICATION NOTE (parity window): ``aggregate_cv_metrics`` is a verbatim copy
-of ``_aggregate_cv_metrics`` in ``src/cv_train.py``, with one deliberate
-change -- the log step offset is a parameter here rather than that module's
-hardcoded ``CV_LOG_STEP_OFFSET`` constant, so a plan can supply its own.
-
-``cv_train.py`` is deliberately left untouched while the ``eval_plan`` path is
-verified for numerical parity against it, and importing from it is not an
-option (see ``src/utils/fold_identity.py``'s note for why). ``cv_train.py``'s
-copy is the reference: any change here MUST be mirrored there until that
-script is retired. ``tests/test_cv_aggregation.py`` asserts the two copies
-produce identical output, as a tripwire against silent drift.
 """
+
 
 from typing import Any, Dict, List
 
@@ -32,10 +21,11 @@ def aggregate_cv_metrics(
     """Summarises per-run metrics as mean, spread, and a 95% interval.
 
     Reporting a bare mean over folds hides the thing that matters most at this
-    cohort size: with ~31 users and roughly a dozen ever positive, which users
-    land in a given test fold moves the result more than most modelling choices
-    do. The spread and interval are therefore reported as first-class outputs,
-    not diagnostics — a mean AUROC quoted without them is not interpretable.
+    cohort size: with small number of users and roughly 1/3 (at moment of writing)
+    ever positive, which users land in a given test fold moves the result more
+    than most modelling choices do. The spread and interval are therefore reported
+    as first-class outputs, not diagnostics — a mean AUROC quoted without them
+    is not interpretable.
 
     NaNs are excluded rather than propagated, since a fold whose test users are
     all one class yields an undefined AUROC that should not erase the others.

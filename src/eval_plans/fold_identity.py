@@ -1,19 +1,6 @@
 """Cohort/fold fingerprinting, shared by the eval_plan runner.
-
-DUPLICATION NOTE (parity window): these functions are verbatim copies of
-``_user_hash`` / ``_fold_identity`` in ``src/cv_train.py`` (minus the leading
-underscore). ``cv_train.py`` is deliberately left untouched while the
-``eval_plan`` path is verified for numerical parity against it, and importing
-from it is not an option -- that module runs ``os.environ[...]``,
-``rootutils.setup_root()``, and ``allow_full_checkpoint_loading()`` at import
-time, so importing it from ``train.py`` would re-execute all of that and weld
-the two entry points together permanently.
-
-``cv_train.py``'s copies are the reference. Any change here MUST be mirrored
-there until that script is retired, at which point its copies should be
-deleted along with this note. ``tests/test_fold_identity.py`` asserts the two
-copies agree, as a tripwire against silent drift.
 """
+
 
 import hashlib
 from typing import Any, Dict

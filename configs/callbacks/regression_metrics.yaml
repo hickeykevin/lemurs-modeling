@@ -1,4 +1,5 @@
 regression_metrics:
-  _target_: src.utils.evaluation_callbacks.RegressionMetricsCallback
+  _target_: src.callbacks.evaluation_callbacks.RegressionMetricsCallback
+
   frequency: 5
   num_bootstraps: 200

@@ -582,11 +582,15 @@ def test_regression_aggregator():
 @patch('src.data.components.cohort_builder.DatabaseService')
 def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     """Tests that the datamodule yields float targets, model trains in regression mode, and callbacks run."""
-    from src.data.components.label_aggregators import RegressionAggregator
-    from src.models.health_module import HealthRegressionLitModule
-    from src.models.components.simple_lstm import SimpleLSTM
-    from src.utils.evaluation_callbacks import RegressionMetricsCallback
     from functools import partial
+    from src.callbacks.evaluation_callbacks import RegressionMetricsCallback
+    from src.data.components.label_aggregators import RegressionAggregator
+    from src.models.components.simple_lstm import SimpleLSTM
+    from src.models.health_module import HealthRegressionLitModule
+
+
+
+
     
     mock_db = mock_db_class.return_value
     mock_db.connect.return_value = True

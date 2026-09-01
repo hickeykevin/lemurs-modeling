@@ -21,7 +21,8 @@ from src.data.components.samplers import OffsetSampler
 from src.data.walk_forward_health_datamodule import WalkForwardHealthDataModule
 from src.models.components.simple_lstm import SimpleLSTM
 from src.models.health_module import HealthLitModule
-from src.utils.prediction_collector import PredictionCollectorCallback
+from src.callbacks.prediction_collector import PredictionCollectorCallback
+
 
 
 def _cohort(users=(1, 2), n_per_user=20):

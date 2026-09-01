@@ -17,15 +17,15 @@ from omegaconf import DictConfig, OmegaConf
 import hydra
 import lightning as L
 
-from src.eval_plans.base import EvalPlan, RunContext, RunUnit, UnitResult
+from src.callbacks.prediction_collector import PredictionCollectorCallback
+from src.eval_plans.base import CohortCache, EvalPlan, RunContext, RunUnit, UnitResult
+from src.eval_plans.fold_identity import fold_identity
 from src.utils import (
     RankedLogger,
     instantiate_callbacks,
     instantiate_loggers,
     log_hyperparameters,
 )
-from src.utils.fold_identity import fold_identity
-from src.utils.prediction_collector import PredictionCollectorCallback
 
 log = RankedLogger(__name__, rank_zero_only=True)
 

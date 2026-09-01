@@ -3,11 +3,12 @@ from typing import Optional
 import pandas as pd
 from lightning import Callback, LightningModule, Trainer
 
+from src.callbacks.prediction_collector import PredictionCollectorCallback
+from src.eval_plans.pooled_metrics import compute_pooled_metrics
 from src.utils import RankedLogger
-from src.utils.pooled_metrics import compute_pooled_metrics
-from src.utils.prediction_collector import PredictionCollectorCallback
 
 log = RankedLogger(__name__, rank_zero_only=True)
+
 
 
 class PooledMetricsCallback(Callback):
@@ -36,13 +37,13 @@ class PooledMetricsCallback(Callback):
     over everything that callback collected and writes them alongside the
     saved prediction table.
 
-    Not a fit for ``wf_cv_train.py``'s walk-forward CV: that script pools
+    Not a fit for walk-forward CV (``WalkForwardEvalPlan``): that plan pools
     predictions across *multiple* ``trainer.test()`` calls (one per fold)
     into a single evaluation set, which no single ``Callback`` instance's
     ``on_test_end`` can do -- it only ever sees one trainer's one test run.
-    ``wf_cv_train.py`` keeps its own orchestration for that, sharing the
+    ``WalkForwardEvalPlan`` handles its own multi-fold orchestration, sharing the
     pure pooled-metric functions in ``src/utils/pooled_metrics.py`` with
-    this class rather than either duplicating them.
+    this class rather than duplicating them.
     """
 
     def __init__(self, output_filename: str = "pooled_predictions.csv", n_bootstraps: int = 1000) -> None:

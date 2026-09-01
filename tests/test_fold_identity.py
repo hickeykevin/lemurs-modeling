@@ -1,17 +1,10 @@
-"""Tests for src/utils/fold_identity.py, including a drift tripwire against
-the cv_train.py copies it duplicates.
-
-The tripwire matters because cv_train.py is deliberately left untouched during
-the eval_plan parity window (see src/utils/fold_identity.py's module docstring),
-so the two copies can silently diverge. Importing cv_train from a test is fine
--- its module-scope side effects (env vars, rootutils, checkpoint compat) are
-harmless here, unlike importing it from another entry point.
-"""
+"""Tests for src/eval_plans/fold_identity.py."""
 
 import pandas as pd
 import pytest
 
-from src.utils.fold_identity import fold_identity, user_hash
+from src.eval_plans.fold_identity import fold_identity, user_hash
+
 
 
 class _StubDataset:
@@ -80,22 +73,3 @@ def test_fold_identity_omits_test_keys_when_there_is_no_test_set():
     assert "cv/cohort_hash" in identity
     assert not any(k.startswith("cv/test_") for k in identity)
 
-
-@pytest.mark.parametrize("user_ids", [(1, 2, 3), (7,), tuple(range(30)), ("a", "b")])
-def test_user_hash_matches_cv_train_copy(user_ids):
-    """Drift tripwire: cv_train.py's copy is the reference during the parity
-    window. If these disagree, the duplicated code has diverged."""
-    from src.cv_train import _user_hash
-
-    assert user_hash(user_ids) == _user_hash(user_ids)
-
-
-def test_fold_identity_matches_cv_train_copy():
-    """Drift tripwire for the full fingerprint dict, not just the hash."""
-    from src.cv_train import _fold_identity
-
-    dm = _StubDataModule(
-        master_df=_master_df((1, 1, 2, 3, 5)),
-        data_test=_StubDataset(_master_df((3, 5))),
-    )
-    assert fold_identity(dm) == _fold_identity(dm)
