@@ -12,12 +12,12 @@ def build_complete_notebook_all_rqs():
         "metadata": {},
         "source": [
             "# Quantitative Statistical Evaluation: Passive Sensing for EMA-Assessed Suicidal Risk\n",
-            "### Hyperparameter Sweep `vj7lbnsh` Analysis (840 Exhaustive Grid Runs across 5-Fold Cross Validation)\n",
+            "### Hyperparameter Sweep `r2mhb7wj` Analysis (Rolling Sampler Evaluation across 5-Fold Walk-Forward Cross Validation)\n",
             "\n",
             "This notebook provides the complete statistical analysis for publication answering:\n",
             "- **RQ1 (Modality Value & Multimodal Synergy)**: *Are passive sensing data predictive of EMA suicidal risk, and which modality or combination provides greatest value?*\n",
             "- **RQ2 (Model Architecture)**: *Do deep sequence models (LSTM, Transformer) better predict suicidal risk than classical ML (FLAML XGBoost)?*\n",
-            "- **RQ3 (Temporal Dynamics)**: *How do temporal design choices (lookback horizon, sampling granularity, and rolling vs. offset strategy) affect predictive performance?*\n",
+            "- **RQ3 (Temporal Dynamics)**: *How do temporal design choices (lookback horizon and sampling granularity under consistent 120h boundary purging) affect predictive performance?*\n",
             "\n",
             "---"
         ]
@@ -62,12 +62,22 @@ def build_complete_notebook_all_rqs():
             "    'ps.fonttype': 42,\n",
             "})\n",
             "\n",
-            "OUTPUT_DIR = Path('reports/sweep_analysis')\n",
+            "def find_output_dir():\n",
+            "    p = Path.cwd().resolve()\n",
+            "    for _ in range(5):\n",
+            "        if (p / 'reports' / 'sweep_analysis' / 'sweep_r2mhb7wj_full_records.csv').exists():\n",
+            "            return p / 'reports' / 'sweep_analysis'\n",
+            "        if (p / 'src').exists() or (p / '.project-root').exists():\n",
+            "            return p / 'reports' / 'sweep_analysis'\n",
+            "        p = p.parent\n",
+            "    return Path('reports/sweep_analysis').resolve()\n",
+            "\n",
+            "OUTPUT_DIR = find_output_dir()\n",
             "OUTPUT_DIR.mkdir(parents=True, exist_ok=True)\n",
             "(OUTPUT_DIR / 'figures').mkdir(exist_ok=True)\n",
             "(OUTPUT_DIR / 'tables').mkdir(exist_ok=True)\n",
             "\n",
-            "print('Setup complete. Output artifacts directory:', OUTPUT_DIR.resolve())"
+            "print('Setup complete. Output artifacts directory:', OUTPUT_DIR)"
         ]
     })
     
@@ -79,7 +89,7 @@ def build_complete_notebook_all_rqs():
         "metadata": {},
         "source": [
             "## 1. Data Ingestion & Factor Decomposition\n",
-            "We load all 840 runs from the cached sweep dataset `reports/sweep_analysis/sweep_vj7lbnsh_full_records.csv`."
+            "We load all runs from sweep `r2mhb7wj` and filter exclusively to the **Rolling** sampler configurations ($N = 420$ runs: 20 rolling samplers $\\times$ 3 model architectures $\\times$ 7 modality subsets with consistent 120h boundary purging)."
         ]
     })
     
@@ -89,8 +99,8 @@ def build_complete_notebook_all_rqs():
         "metadata": {},
         "outputs": [],
         "source": [
-            "CACHE_FILE = OUTPUT_DIR / 'sweep_vj7lbnsh_full_records.csv'\n",
-            "df = pd.read_csv(CACHE_FILE)\n",
+            "CACHE_FILE = OUTPUT_DIR / 'sweep_r2mhb7wj_full_records.csv'\n",
+            "df_raw = pd.read_csv(CACHE_FILE)\n",
             "\n",
             "# Factor parsing\n",
             "def parse_sampler(s):\n",
@@ -100,15 +110,15 @@ def build_complete_notebook_all_rqs():
             "    window_h = int(parts[2].replace('h', ''))\n",
             "    return strategy, lookback_h, lookback_h / 24.0, window_h\n",
             "\n",
-            "strategy, lb_h, lb_d, win_h = zip(*df['sampler_pkg'].map(parse_sampler))\n",
-            "df['sampler_strategy'] = strategy\n",
-            "df['lookback_hours'] = lb_h\n",
-            "df['lookback_days'] = lb_d\n",
-            "df['window_hours'] = win_h\n",
-            "df['sequence_length'] = df['lookback_hours'] / df['window_hours']\n",
+            "strategy, lb_h, lb_d, win_h = zip(*df_raw['sampler_pkg'].map(parse_sampler))\n",
+            "df_raw['sampler_strategy'] = strategy\n",
+            "df_raw['lookback_hours'] = lb_h\n",
+            "df_raw['lookback_days'] = lb_d\n",
+            "df_raw['window_hours'] = win_h\n",
+            "df_raw['sequence_length'] = df_raw['lookback_hours'] / df_raw['window_hours']\n",
             "\n",
             "model_map = {'default': 'LSTM', 'transformer': 'Transformer', 'flaml_xgboost': 'FLAML XGBoost'}\n",
-            "df['model_name'] = df['model_pkg'].map(model_map)\n",
+            "df_raw['model_name'] = df_raw['model_pkg'].map(model_map)\n",
             "\n",
             "def format_modalities(m_str):\n",
             "    m_list = json.loads(m_str) if isinstance(m_str, str) else m_str\n",
@@ -129,17 +139,22 @@ def build_complete_notebook_all_rqs():
             "        return 'All 3 (Step+Cal+Dist)', 3, True, True, True\n",
             "    return 'Other', len(m_list), False, False, False\n",
             "\n",
-            "mod_labels, mod_counts, has_step, has_cal, has_dist = zip(*df['modalities_raw'].map(format_modalities))\n",
-            "df['modality_label'] = mod_labels\n",
-            "df['n_modalities'] = mod_counts\n",
-            "df['has_step'] = has_step\n",
-            "df['has_calorie'] = has_cal\n",
-            "df['has_distance'] = has_dist\n",
+            "mod_labels, mod_counts, has_step, has_cal, has_dist = zip(*df_raw['modalities_raw'].map(format_modalities))\n",
+            "df_raw['modality_label'] = mod_labels\n",
+            "df_raw['n_modalities'] = mod_counts\n",
+            "df_raw['has_step'] = has_step\n",
+            "df_raw['has_calorie'] = has_cal\n",
+            "df_raw['has_distance'] = has_dist\n",
+            "\n",
+            "# Filter to Rolling sampler only\n",
+            "df = df_raw[df_raw['sampler_strategy'] == 'Rolling'].copy().reset_index(drop=True)\n",
             "\n",
             "# JZS Bayes Factor helper\n",
             "def jzs_bayes_factor_paired(diff, r=np.sqrt(2)/2):\n",
             "    diff_clean = diff.dropna()\n",
             "    n = len(diff_clean)\n",
+            "    if n < 2:\n",
+            "        return 0.0, np.nan\n",
             "    t_stat, _ = stats.ttest_1samp(diff_clean, 0)\n",
             "    df_val = n - 1\n",
             "    def integrand(g):\n",
@@ -153,6 +168,7 @@ def build_complete_notebook_all_rqs():
             "    return t_stat, bf10\n",
             "\n",
             "def interpret_bf(bf10):\n",
+            "    if np.isnan(bf10): return 'N/A'\n",
             "    if bf10 > 100: return 'Decisive Evidence (H1)'\n",
             "    elif bf10 > 30: return 'Very Strong Evidence (H1)'\n",
             "    elif bf10 > 10: return 'Strong Evidence (H1)'\n",
@@ -162,7 +178,7 @@ def build_complete_notebook_all_rqs():
             "    elif bf10 >= 1/30: return 'Strong Evidence (H0: Eq)'\n",
             "    else: return 'Decisive Evidence (H0: Eq)'\n",
             "\n",
-            "print(f'Tidy Dataset: {len(df)} runs ready across 840 fully crossed conditions.')\n",
+            "print(f'Tidy Dataset: {len(df)} runs ready across 420 fully crossed rolling conditions.')\n",
             "df.head()"
         ]
     })
@@ -174,8 +190,8 @@ def build_complete_notebook_all_rqs():
         "cell_type": "markdown",
         "metadata": {},
         "source": [
-            "## 2. RQ1: Modality Value & Multimodal Synergy (Complete 3-Step Testing)\n",
-            "- **Step 1 (Omnibus)**: Non-parametric Friedman test across the 120 matched blocks.\n",
+            "## 2. RQ1: Modality Value & Multimodal Synergy (60 Matched Blocks)\n",
+            "- **Step 1 (Omnibus)**: Non-parametric Friedman test across 60 matched blocks (20 rolling samplers $\\times$ 3 models).\n",
             "- **Step 2 (Pairwise Contrasts)**: Paired Wilcoxon + Benjamini-Hochberg FDR + JZS Bayes Factors ($\\text{BF}_{10}$).\n",
             "- **Step 3 (Marginal Synergy)**: Stepwise gain $\\Delta_{\\text{Pair}} - \\max(\\text{Single})$ and $\\Delta_{\\text{Trio}} - \\max(\\text{Pairs})$."
         ]
@@ -193,7 +209,7 @@ def build_complete_notebook_all_rqs():
             "\n",
             "# Step 1: Friedman Omnibus Test\n",
             "f_stat_rq1, f_pval_rq1 = stats.friedmanchisquare(*[piv_mod[c] for c in mod_order])\n",
-            "print(f'=== RQ1 Step 1: Friedman Omnibus Test: Chi2(6) = {f_stat_rq1:.4f}, p = {f_pval_rq1:.4e} ===')\n",
+            "print(f'=== RQ1 Step 1: Friedman Omnibus Test: Chi2(6) = {f_stat_rq1:.4f}, p = {f_pval_rq1:.4e} (N = {len(piv_mod)} blocks) ===')\n",
             "\n",
             "# Step 2: Post-Hoc Pairwise Table\n",
             "pw_rq1 = []\n",
@@ -206,11 +222,13 @@ def build_complete_notebook_all_rqs():
             "        t_stat, bf10 = jzs_bayes_factor_paired(diff)\n",
             "        pw_rq1.append({\n",
             "            'Comparison': f'{m1} vs. {m2}',\n",
+            "            'N_Pairs': len(diff),\n",
             "            'Mean_Delta': diff.mean(),\n",
             "            '95% CI': f'[{ci_l:+.4f}, {ci_u:+.4f}]',\n",
             "            'Cohen_dz': diff.mean() / diff.std(),\n",
             "            'Wilcoxon_p': w_p,\n",
             "            'BF10': bf10,\n",
+            "            'BF01': 1.0 / bf10 if bf10 > 0 else np.nan,\n",
             "            'Interpretation': interpret_bf(bf10)\n",
             "        })\n",
             "df_pw_rq1 = pd.DataFrame(pw_rq1)\n",
@@ -269,8 +287,8 @@ def build_complete_notebook_all_rqs():
         "cell_type": "markdown",
         "metadata": {},
         "source": [
-            "## 3. RQ2: Deep Time-Series Models vs. Tree-Based ML (Complete 3-Step Testing)\n",
-            "- **Step 1 (Omnibus Architecture Test)**: Friedman test across the 280 matched conditions (40 samplers $\\times$ 7 modalities).\n",
+            "## 3. RQ2: Deep Time-Series Models vs. Tree-Based ML (140 Matched Conditions)\n",
+            "- **Step 1 (Omnibus Architecture Test)**: Friedman test across the 140 matched conditions (20 rolling samplers $\\times$ 7 modalities).\n",
             "- **Step 2 (Head-to-Head Contrasts)**: Paired Wilcoxon, Cohen's $d_z$, and JZS Bayes Factors ($\\text{BF}_{10}$ for superiority; $\\text{BF}_{01}$ for equivalence).\n",
             "- **Step 3 (Horizon Moderation)**: Testing if the time-series advantage over XGBoost depends on lookback duration ($24\\text{h} \\to 120\\text{h}$)."
         ]
@@ -287,7 +305,7 @@ def build_complete_notebook_all_rqs():
             "# Step 1: Friedman Omnibus Architecture Test\n",
             "f_stat_rq2, f_pval_rq2 = stats.friedmanchisquare(piv_m['LSTM'], piv_m['Transformer'], piv_m['FLAML XGBoost'])\n",
             "kendall_w_rq2 = f_stat_rq2 / (len(piv_m) * 2)\n",
-            "print(f'=== RQ2 Step 1: Friedman Omnibus Test: Chi2(2) = {f_stat_rq2:.4f}, p = {f_pval_rq2:.4e} (Kendall W = {kendall_w_rq2:.4f}) ===')\n",
+            "print(f'=== RQ2 Step 1: Friedman Omnibus Test: Chi2(2) = {f_stat_rq2:.4f}, p = {f_pval_rq2:.4e} (Kendall W = {kendall_w_rq2:.4f}, N = {len(piv_m)}) ===')\n",
             "\n",
             "# Step 2: Pairwise Head-to-Head Contrasts\n",
             "rq2_pairs = [\n",
@@ -339,10 +357,10 @@ def build_complete_notebook_all_rqs():
         "cell_type": "markdown",
         "metadata": {},
         "source": [
-            "## 4. RQ3: Temporal Design Choices (Complete 3-Step Testing)\n",
-            "- **Step 1 (Factorial ANOVA)**: Decomposing variance among Lookback Horizon, Sampling Granularity, and Strategy with Partial $\\eta^2$.\n",
-            "- **Step 2 (Polynomial Horizon Trend)**: Testing linear and quadratic decay across lookback durations ($24\\text{h} \\to 120\\text{h}$).\n",
-            "- **Step 3 (Granularity & Strategy Contrasts)**: Paired comparisons ($4\\text{h}$ vs $6\\text{h}$ vs $8\\text{h}$ vs $12\\text{h}$; Rolling vs Offset) with Bayes Factors."
+            "## 4. RQ3: Temporal Design Choices (Lookback Horizon & Sampling Granularity)\n",
+            "- **Step 1 (Factorial ANOVA)**: Decomposing variance between Lookback Horizon ($24\\text{h} \\to 120\\text{h}$) and Sampling Granularity ($4\\text{h} \\to 12\\text{h}$) with Partial $\\eta^2$.\n",
+            "- **Step 2 (Horizon Trend Analysis)**: Testing stability across lookback horizons under consistent 120h boundary purging.\n",
+            "- **Step 3 (Granularity Pairwise Contrasts)**: Paired comparisons ($4\\text{h}$ vs $6\\text{h}$ vs $8\\text{h}$ vs $12\\text{h}$) with Bayes Factors across 105 matched conditions."
         ]
     })
     
@@ -355,9 +373,8 @@ def build_complete_notebook_all_rqs():
             "# Step 1: Factorial ANOVA & Partial Eta-Squared\n",
             "grand_mean = df['pooled_auroc'].mean()\n",
             "factors = {\n",
-            "    'Lookback Horizon (Days)': 'lookback_days',\n",
             "    'Sampling Granularity (Hours)': 'window_hours',\n",
-            "    'Sampling Strategy (Rolling/Offset)': 'sampler_strategy'\n",
+            "    'Lookback Horizon (Days)': 'lookback_days'\n",
             "}\n",
             "anova_rows = []\n",
             "for label, col in factors.items():\n",
@@ -385,17 +402,8 @@ def build_complete_notebook_all_rqs():
             "poly_lb = np.polyfit(x_vals, y_vals, 2)\n",
             "print(f'\\n=== RQ3 Step 2: Horizon Trend: Slope = {slope_lb:+.4f} AUROC/day (r = {r_lb:.3f}, p = {p_lb:.4e}) ===')\n",
             "\n",
-            "# Step 3: Granularity & Strategy Pairwise Contrasts\n",
-            "# 3.1 Rolling vs Offset (N = 420 pairs)\n",
-            "piv_strat = df.pivot(index=['model_pkg', 'modalities_raw', 'lookback_hours', 'window_hours'], columns='sampler_strategy', values='pooled_auroc')\n",
-            "diff_strat = piv_strat['Rolling'] - piv_strat['Offset']\n",
-            "ci_l_s, ci_u_s = stats.t.interval(0.95, len(diff_strat)-1, loc=diff_strat.mean(), scale=stats.sem(diff_strat))\n",
-            "_, w_p_s = stats.wilcoxon(diff_strat)\n",
-            "_, bf10_s = jzs_bayes_factor_paired(diff_strat)\n",
-            "print(f'• Strategy Contrast (Rolling - Offset): Delta = {diff_strat.mean():+.4f} (95% CI: [{ci_l_s:+.4f}, {ci_u_s:+.4f}], p = {w_p_s:.4e}, BF10 = {bf10_s:.2f})')\n",
-            "\n",
-            "# 3.2 Granularity Pairwise (N = 210 pairs)\n",
-            "piv_win = df.pivot(index=['model_pkg', 'modalities_raw', 'lookback_hours', 'sampler_strategy'], columns='window_hours', values='pooled_auroc')\n",
+            "# Step 3: Granularity Pairwise Contrasts (N = 105 matched conditions)\n",
+            "piv_win = df.pivot(index=['model_pkg', 'modalities_raw', 'lookback_hours'], columns='window_hours', values='pooled_auroc')\n",
             "win_pairs = []\n",
             "for i in range(len([4, 6, 8, 12])):\n",
             "    for j in range(i+1, len([4, 6, 8, 12])):\n",
@@ -406,12 +414,14 @@ def build_complete_notebook_all_rqs():
             "        _, bf10_w = jzs_bayes_factor_paired(d_w)\n",
             "        win_pairs.append({\n",
             "            'Comparison': f'{w1}h vs. {w2}h',\n",
+            "            'N_Pairs': len(d_w),\n",
             "            'Mean_Delta': d_w.mean(),\n",
-            "            '95% CI': f'[{ci_l_w:+.4f}, {ci_u_w:+.4f}]',\n",
+            "            '95% CI': f'[{ci_l_w:+.4f}, {ci_u:+.4f}]',\n",
             "            'Win_Rate (%)': (d_w > 0).mean() * 100,\n",
             "            'Cohen_dz': d_w.mean() / d_w.std(),\n",
             "            'Wilcoxon_p': w_p_w,\n",
             "            'BF10': bf10_w,\n",
+            "            'BF01': 1.0 / bf10_w if bf10_w > 0 else np.nan,\n",
             "            'Interpretation': interpret_bf(bf10_w)\n",
             "        })\n",
             "df_win_pw = pd.DataFrame(win_pairs)\n",
@@ -460,36 +470,25 @@ def build_complete_notebook_all_rqs():
             "plt.savefig(OUTPUT_DIR / 'figures' / 'fig1_rq1_modality_value.png', dpi=300, bbox_inches='tight')\n",
             "plt.show()\n",
             "\n",
-            "# Figure 2: Model Architecture Comparison (2-Panel Figure) (RQ2)\n",
-            "fig, axes = plt.subplots(1, 2, figsize=(14, 4.8))\n",
-            "sns.lineplot(data=df, x='lookback_days', y='pooled_auroc', hue='model_name', style='model_name', markers=True, dashes=False, palette={'Transformer': '#e41a1c', 'LSTM': '#2ca02c', 'FLAML XGBoost': '#1f77b4'}, errorbar=('ci', 95), ax=axes[0])\n",
-            "axes[0].set_title('(A) AUROC across Lookback Windows', fontsize=12, weight='bold')\n",
-            "axes[0].set_xlabel('Historical Lookback Window (Days)', fontsize=10)\n",
-            "axes[0].set_ylabel('Pooled AUROC (Mean +/- 95% CI)', fontsize=10)\n",
-            "axes[0].set_xticks([1, 2, 3, 4, 5])\n",
-            "axes[0].grid(axis='y', linestyle='--', alpha=0.3)\n",
-            "axes[0].legend(title='Model Architecture', loc='lower right', frameon=True)\n",
-            "\n",
-            "metric_map = {'pooled_auroc': 'AUROC', 'pooled_f1': 'F1-Score', 'pooled_recall': 'Sensitivity', 'pooled_specificity': 'Specificity', 'pooled_precision': 'Precision'}\n",
-            "melted = df.melt(id_vars=['model_name'], value_vars=list(metric_map.keys()), var_name='metric_key', value_name='score')\n",
-            "melted['Metric'] = melted['metric_key'].map(metric_map)\n",
-            "sns.barplot(data=melted, x='Metric', y='score', hue='model_name', palette={'Transformer': '#e41a1c', 'LSTM': '#2ca02c', 'FLAML XGBoost': '#1f77b4'}, errorbar=('ci', 95), capsize=0.08, err_kws={'linewidth': 1.2}, edgecolor='black', linewidth=0.6, ax=axes[1])\n",
-            "axes[1].set_ylim(0.50, 0.90)\n",
-            "axes[1].set_ylabel('Score (Mean +/- 95% CI)', fontsize=10)\n",
-            "axes[1].set_xlabel('')\n",
-            "axes[1].set_title('(B) Performance across Evaluation Metrics', fontsize=12, weight='bold')\n",
-            "axes[1].grid(axis='y', linestyle='--', alpha=0.3)\n",
-            "axes[1].legend(title='Model Architecture', loc='upper right', frameon=True)\n",
+            "# Figure 2: Model Architecture Comparison (Single Panel across Lookback Windows) (RQ2)\n",
+            "fig, ax = plt.subplots(figsize=(6.0, 4.2))\n",
+            "sns.lineplot(data=df, x='lookback_hours', y='pooled_auroc', hue='model_name', style='model_name', markers=True, dashes=False, palette={'Transformer': '#e41a1c', 'LSTM': '#2ca02c', 'FLAML XGBoost': '#1f77b4'}, errorbar=('ci', 95), ax=ax)\n",
+            "ax.set_title('AUROC across Lookback Windows', fontsize=12, weight='bold')\n",
+            "ax.set_xlabel('Historical Lookback Window', fontsize=10)\n",
+            "ax.set_ylabel('Pooled AUROC (Mean +/- 95% CI)', fontsize=10)\n",
+            "ax.set_xticks([24, 48, 72, 96, 120])\n",
+            "ax.set_xticklabels(['24h', '48h', '72h', '96h', '120h'])\n",
+            "ax.grid(axis='y', linestyle='--', alpha=0.3)\n",
+            "ax.legend(title='Model Architecture', loc='lower right', frameon=True)\n",
             "plt.tight_layout()\n",
             "plt.savefig(OUTPUT_DIR / 'figures' / 'fig2_rq2_model_horizon_interaction.pdf', bbox_inches='tight')\n",
             "plt.savefig(OUTPUT_DIR / 'figures' / 'fig2_rq2_model_horizon_interaction.png', dpi=300, bbox_inches='tight')\n",
             "plt.show()\n",
             "\n",
-            "# Figure 3: 2D Response Surface (RQ3 - Rolling Sampling with Uncertainty)\n",
+            "# Figure 3: 2D Response Surface (RQ3 - Rolling Sampler with Uncertainty)\n",
             "fig, ax = plt.subplots(figsize=(6.2, 5.0))\n",
-            "strat_df = df[df['sampler_strategy'] == 'Rolling']\n",
-            "means = strat_df.pivot_table(index='lookback_hours', columns='window_hours', values='pooled_auroc', aggfunc='mean')\n",
-            "stds = strat_df.pivot_table(index='lookback_hours', columns='window_hours', values='pooled_auroc', aggfunc='std')\n",
+            "means = df.pivot_table(index='lookback_hours', columns='window_hours', values='pooled_auroc', aggfunc='mean')\n",
+            "stds = df.pivot_table(index='lookback_hours', columns='window_hours', values='pooled_auroc', aggfunc='std')\n",
             "annot_matrix = means.copy().astype(object)\n",
             "for r in means.index:\n",
             "    for c in means.columns:\n",
@@ -497,7 +496,7 @@ def build_complete_notebook_all_rqs():
             "        s = stds.loc[r, c]\n",
             "        annot_matrix.loc[r, c] = f'{m:.3f}\\n±{s:.3f}'\n",
             "sns.heatmap(means, annot=annot_matrix, fmt='', cmap='YlGnBu', cbar=True, cbar_kws={'label': 'Mean AUROC'}, annot_kws={'size': 9.5, 'weight': 'normal'}, ax=ax, vmin=df['pooled_auroc'].quantile(0.10), vmax=df['pooled_auroc'].quantile(0.95))\n",
-            "ax.set_title('RQ3: Temporal Response', fontsize=11, weight='bold', pad=10)\n",
+            "ax.set_title('RQ3: Temporal Response (Rolling Sampler)', fontsize=11, weight='bold', pad=10)\n",
             "ax.set_xlabel('Sampling Resolution / Window (Hours)', fontsize=10)\n",
             "ax.set_ylabel('Lookback Horizon (Hours)', fontsize=10)\n",
             "ax.set_yticklabels([f'{int(h)}h ({int(h/24)}d)' for h in means.index], rotation=0)\n",
@@ -530,7 +529,7 @@ def build_complete_notebook_all_rqs():
             "].reset_index(drop=True)\n",
             "top10.to_csv(OUTPUT_DIR / 'tables' / 'table5_top10_configurations.csv', index=False)\n",
             "\n",
-            "latex_code = top10.to_latex(index=True, float_format='%.4f', caption='Top 10 performing configurations across the 840-run passive sensing hyperparameter grid.', label='tab:top10_sweep_results')\n",
+            "latex_code = top10.to_latex(index=True, float_format='%.4f', caption='Top 10 performing configurations across the 420 rolling sampler runs in sweep r2mhb7wj.', label='tab:top10_sweep_results')\n",
             "with open(OUTPUT_DIR / 'tables' / 'top10_table.tex', 'w') as f:\n",
             "    f.write(latex_code)\n",
             "\n",
@@ -555,16 +554,19 @@ def build_complete_notebook_all_rqs():
                 "name": "python",
                 "nbconvert_exporter": "python",
                 "pygments_lexer": "ipython3",
-                "version": "3.13"
+                "version": "3.12"
             }
         },
         "nbformat": 4,
         "nbformat_minor": 4
     }
     
-    with open("notebooks/sweep_statistical_analysis.ipynb", "w") as f:
+    from pathlib import Path
+    out_path = Path(__file__).parent / "sweep_statistical_analysis.ipynb"
+    with open(out_path, "w") as f:
         json.dump(notebook, f, indent=1)
-    print("Successfully built updated: notebooks/sweep_statistical_analysis.ipynb")
+    print(f"Successfully built updated: {out_path}")
+
 
 if __name__ == "__main__":
     build_complete_notebook_all_rqs()
