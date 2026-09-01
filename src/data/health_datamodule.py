@@ -12,7 +12,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from src.data.components.cohort_splitter import CohortSplitter, lookback_hours_from_sampler
 from src.data.components.demographics_processor import DemographicsProcessor
-from src.data.components.prev_prediction_linker import PrevPredictionLinker
+
 
 class HealthDataModule(LightningDataModule):
     """A DataModule for Multimodal longitudinal health data.

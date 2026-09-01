@@ -5,8 +5,8 @@ import torch
 from unittest.mock import patch
 from src.data.components.cohort_splitter import CohortSplitter, lookback_hours_from_sampler
 from src.data.components.demographics_processor import DemographicsProcessor
-from src.data.components.prev_prediction_linker import PrevPredictionLinker
 from src.data.components.health_dataset import HealthDataset
+
 from src.data.components.samplers import OffsetSampler
 
 
@@ -673,23 +673,6 @@ def test_demographics_processor():
     assert demo_map[1][8] == 1.0  # iPhone source active
     assert demo_map[2][7] == 1.0  # Android source active
 
-
-def test_prev_prediction_linker(dummy_splitter_data):
-    train_df = dummy_splitter_data[dummy_splitter_data["app_user_id"] == 1].copy()
-    val_df = dummy_splitter_data[dummy_splitter_data["app_user_id"] == 2].copy()
-    test_df = dummy_splitter_data[dummy_splitter_data["app_user_id"] == 3].copy()
-
-    t_df, v_df, test_res_df = PrevPredictionLinker.link(train_df, val_df, test_df)
-
-    assert "prev_sample_idx" in t_df.columns
-    assert "prev_sample_idx" in v_df.columns
-    assert "prev_sample_idx" in test_res_df.columns
-
-    # User 1 has 4 records, first should be -1, others point to previous index
-    assert t_df.loc[0, "prev_sample_idx"] == -1
-    assert t_df.loc[1, "prev_sample_idx"] == 0
-    assert t_df.loc[2, "prev_sample_idx"] == 1
-    assert t_df.loc[3, "prev_sample_idx"] == 2
 
 
 def test_step_preprocessor():
