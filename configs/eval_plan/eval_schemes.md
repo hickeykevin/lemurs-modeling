@@ -41,7 +41,6 @@ when `test=True`.
   not a separate code path.
 - `split_mode` (single-split only) and `fold_sizing` (walk-forward only) pick
   the split shape; see each datamodule's docstring for the options.
-- `src/cv_train.py`/`wf_cv_train.py` still exist unchanged as the numerical-
-  parity reference for `eval_plan`.
 - Hydra's output dir is timestamped to the second — two runs launched in the
   same second overwrite each other's outputs.
+

@@ -4,9 +4,9 @@ This directory contains the core entry scripts for training, validating, and eva
 
 ## Files Overview
 
+
 - **[app.py](app.py)**: A Streamlit-based GUI wrapper for visually managing and executing training and evaluation scripts.
-- **[train.py](train.py)**: Main entry point for standard PyTorch Lightning training and testing using Hydra.
-- **[cv_train.py](cv_train.py)**: Script for K-fold or Leave-One-User-Out Cross-Validation training and metric aggregation.
+- **[train.py](train.py)**: Main entry point for training and evaluation across all evaluation schemes (`eval_plan=single`, `eval_plan=user_cv`, `eval_plan=walk_forward`, `eval_plan=cyclical`) using Hydra.
 - **[compare_cv_runs.py](compare_cv_runs.py)**: Compares two CV sweeps fold by fold, reporting a paired delta with its interval after verifying the two runs split the same cohort identically.
 - **[eval.py](eval.py)**: Evaluation script to test a trained model checkpoint (`.ckpt`) on a dataset.
 
@@ -33,8 +33,7 @@ The GUI is divided into a two-column layout: **Configuration** (left) and **Exec
 
 #### A. Configuration Column (Left)
 - **Execution Mode**: Choose which script to run:
-  - **Train**: Executes `src/train.py`
-  - **Cross Validate**: Executes `src/cv_train.py`
+  - **Train**: Executes `src/train.py` (select `eval_plan` under settings for Single, User CV, or Walk-Forward)
   - **Evaluate**: Executes `src/eval.py`
 - **Execution Environment**:
   - **Local**: Runs the process locally.
@@ -46,7 +45,7 @@ The GUI is divided into a two-column layout: **Configuration** (left) and **Exec
   - **Memory (`--mem`)** (default: `8192` MB)
   - **Time limit (`-t`)** in minutes (default: `120`)
 - **Core Groups**: Dynamically populated from subdirectories in the `configs/` folder:
-  - **Data**, **Model**, **Trainer**, **Callbacks**, and others.
+  - **Data**, **Model**, **Trainer**, **Callbacks**, **Eval_plan**, and others.
   - Selecting a config value opens a **📁 settings expander** to visually modify parameters and select nested subgroup configurations.
 - **Other Options**:
   - **Seed**: Seed for random number generators.
@@ -85,30 +84,31 @@ If you prefer to run both the Streamlit GUI and the training computations on a c
 
 If you prefer running via the command line interface (CLI), you can invoke the scripts directly:
 
-### 1. Training (`train.py`)
+### 1. Standard Training (`train.py`)
 ```bash
+# Single split (default)
 uv run src/train.py model=default data=default trainer=default
+
+# Subject-wise cross validation
+uv run src/train.py eval_plan=user_cv data=user_cv
+
+# Walk-forward longitudinal validation
+uv run src/train.py eval_plan=walk_forward data=walk_forward_expanding
 ```
 
-### 2. Cross Validation (`cv_train.py`)
-```bash
-uv run src/cv_train.py model=default data=default data.num_folds=5
-```
-
-Each run logs one row per (repeat, fold) — the fold's metrics under `fold/*`, plus a fingerprint of the cohort and of the users held out (`cv/cohort_hash`, `cv/test_user_hash`) — followed by the aggregate `*_mean` / `*_ci_low` / `*_ci_high` summary.
-
-### 3. Comparing two sweeps (`compare_cv_runs.py`)
+### 2. Comparing two sweeps (`compare_cv_runs.py`)
 The partition for a given (repeat, fold) depends only on the seed and the cohort, never on the model. So two sweeps with the same `seed`, `data.num_folds`, `data.num_repeats` and `data.*` settings score the identical users in every cell, and can be differenced fold by fold:
 
 ```bash
-uv run src/cv_train.py model=A seed=7 data.num_folds=5 data.num_repeats=20 logger=csv
-uv run src/cv_train.py model=B seed=7 data.num_folds=5 data.num_repeats=20 logger=csv
+uv run src/train.py eval_plan=user_cv model=A seed=7 data.num_folds=5 data.num_repeats=20 logger=csv
+uv run src/train.py eval_plan=user_cv model=B seed=7 data.num_folds=5 data.num_repeats=20 logger=csv
 
 uv run src/compare_cv_runs.py \
-  logs/cv_train/runs/<run_A>/csv/version_0/metrics.csv \
-  logs/cv_train/runs/<run_B>/csv/version_0/metrics.csv \
+  logs/train/runs/<run_A>/csv/version_0/metrics.csv \
+  logs/train/runs/<run_B>/csv/version_0/metrics.csv \
   --metric test/auroc --label-a "model A" --label-b "model B"
 ```
+
 
 Pairing cancels fold difficulty, which at this cohort size is the largest source of spread — so it detects gaps that comparing two independent CV intervals cannot. The script verifies the cohorts and the per-fold held-out users match before differencing, and refuses rather than reporting if they don't.
 

@@ -219,11 +219,9 @@ col1, col2 = st.columns([1, 2])
 with col1:
     st.header("Configuration")
     
-    mode = st.radio("Execution Mode", ["Train", "Cross Validate", "Evaluate"])
+    mode = st.radio("Execution Mode", ["Train", "Evaluate"])
     if mode == "Train":
         script = "src/train.py"
-    elif mode == "Cross Validate":
-        script = "src/cv_train.py"
     else:
         script = "src/eval.py"
     
@@ -248,12 +246,9 @@ with col1:
     seed = None
     config_dir = ""
     
-    # Load defaults from configs/train.yaml, configs/cv_train.yaml or configs/eval.yaml
+    # Load defaults from configs/train.yaml or configs/eval.yaml
     if mode != "Evaluate":
-        if mode == "Train":
-            config_file = "configs/train.yaml"
-        else:
-            config_file = "configs/cv_train.yaml"
+        config_file = "configs/train.yaml"
         group_defaults = load_defaults_from_config(Path(config_file))
         
         # Custom group ordering: data, model, trainer, callbacks, then the rest
