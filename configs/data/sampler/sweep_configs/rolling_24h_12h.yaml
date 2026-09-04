@@ -1,0 +1,4 @@
+_target_: src.data.components.samplers.RollingSampler
+lookback_hours: 24.0
+resample_freq: "12h"
+include_time_features: true

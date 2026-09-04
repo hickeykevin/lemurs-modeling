@@ -13,29 +13,15 @@ train_val_test_split: [0.7, 0.15, 0.15]
 num_workers: 1
 pin_memory: False
 random_state: ${seed}
-# user = disjoint participants (matches deployment: new users have no labels).
-# longitudinal = temporal split within each user; diagnostic only.
-# Row-level random splitting was removed: it leaks users across the split and
-# measures user identification rather than risk. See CohortSplitter.
-split_mode: longitudinal # user, longitudinal
+split_mode: longitudinal # user = disjoint participants; longitudinal = per-user temporal split
+purge_hours: null # gap (hours) purged at each split boundary; null derives it from the sampler's lookback
 os_filter: both # both, ios, android
-# none = one sample per survey response. The morning and afternoon surveys ask
-# about different periods ("since your last prompt"), so collapsing them to a
-# daily label mislabels one half of a discordant day: 41% of days with any
-# positive have only one positive half. Options: mean, max, min, first, last, none
-collapse_strategy: none
+collapse_strategy: none # mean, max, min, first, last, none -- none keeps one sample per survey response
+require_sensor_data: false # drop responses with no sensor data in their sampling window
 
-# Drop responses whose sampling window has no sensor records rather than feeding
-# the model all-zero sequences it cannot distinguish from genuine inactivity
-require_sensor_data: false
-
-# Carry which daily survey a response is, and how long its referent period ran
-use_survey_context: false
+use_survey_context: false # which daily survey (morning/afternoon) a response is, and its referent period
 include_time_features: true
 use_demographics: true
 use_sleep: false
 
-
-# Test accounts and discontinued participants, dropped from every stream.
-# null uses CohortBuilder.DEFAULT_EXCLUDED_USER_IDS.
-exclude_user_ids: null
+exclude_user_ids: null # null uses CohortBuilder.DEFAULT_EXCLUDED_USER_IDS

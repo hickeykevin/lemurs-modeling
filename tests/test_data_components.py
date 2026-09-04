@@ -1,10 +1,13 @@
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 from unittest.mock import patch
-from src.data.components.cohort_splitter import CohortSplitter
+from src.data.components.cohort_splitter import CohortSplitter, lookback_hours_from_sampler
 from src.data.components.demographics_processor import DemographicsProcessor
-from src.data.components.prev_prediction_linker import PrevPredictionLinker
+from src.data.components.health_dataset import HealthDataset
+
+from src.data.components.samplers import OffsetSampler
 
 
 @pytest.fixture
@@ -65,6 +68,577 @@ def test_cohort_splitter_longitudinal(dummy_splitter_data):
     assert u1_val["record_timestamp"].max() < u1_test["record_timestamp"].min()
 
 
+def test_cohort_splitter_longitudinal_purge_drops_boundary_rows():
+    """Rows within purge_hours of a boundary are dropped, not reassigned."""
+    # One user, 10 responses spaced 6h apart -> 54h total span.
+    # Unpurged (0.5/0.25/0.25): train_end=5, val_end=7 -> train=5, val=2, test=3.
+    df = pd.DataFrame({
+        "app_user_id": [1] * 10,
+        "record_timestamp": pd.date_range("2026-01-01", periods=10, freq="6h"),
+        "answer": list(range(10)),
+    })
+
+    splitter = CohortSplitter(
+        split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25), purge_hours=10.0
+    )
+    train_df, val_df, test_df = splitter.split(df)
+
+    # Every retained row must be at least purge_hours from the next split's
+    # first timestamp.
+    purge = pd.Timedelta(hours=10)
+    val_start = val_df["record_timestamp"].min()
+    test_start = test_df["record_timestamp"].min()
+    assert (train_df["record_timestamp"] < val_start - purge).all()
+    assert (val_df["record_timestamp"] < test_start - purge).all()
+
+    # Purging only removes rows near a boundary -- it never reassigns a row
+    # to a different split.
+    unpurged_train, unpurged_val, unpurged_test = CohortSplitter(
+        split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25)
+    ).split(df)
+    assert set(train_df["answer"]).issubset(set(unpurged_train["answer"]))
+    assert set(val_df["answer"]).issubset(set(unpurged_val["answer"]))
+    assert set(test_df["answer"]).issubset(set(unpurged_test["answer"]))
+
+    # Purging strictly shrinks train/val relative to the unpurged split here.
+    assert len(train_df) < len(unpurged_train)
+    assert len(val_df) < len(unpurged_val)
+
+
+def test_cohort_splitter_longitudinal_purge_zero_matches_unpurged():
+    """purge_hours=0 (the default) reproduces the original unpurged split exactly."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 8,
+        "record_timestamp": pd.date_range("2026-01-01", periods=8, freq="12h"),
+        "answer": list(range(8)),
+    })
+
+    default_split = CohortSplitter(split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25))
+    explicit_zero_split = CohortSplitter(
+        split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25), purge_hours=0.0
+    )
+
+    for a, b in zip(default_split.split(df), explicit_zero_split.split(df)):
+        pd.testing.assert_frame_equal(a.reset_index(drop=True), b.reset_index(drop=True))
+
+
+def test_cohort_splitter_swap_val_test_relabels_without_changing_the_cut():
+    """swap_val_test relabels the two post-train chunks; it doesn't recut or reroute purging.
+
+    Same fixture as test_cohort_splitter_longitudinal_purge_drops_boundary_rows
+    (10 responses, 6h apart, 0.5/0.25/0.25, purge_hours=10). Unswapped: middle
+    chunk (purged against the last chunk's start) is returned as val, last
+    chunk (never purged) is returned as test. Swapped: same two chunks, exact
+    same rows, but middle -> test and last -> val -- so the purge asymmetry
+    flips with the label: it's now "test" that's purged, and "val" that isn't.
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 10,
+        "record_timestamp": pd.date_range("2026-01-01", periods=10, freq="6h"),
+        "answer": list(range(10)),
+    })
+
+    unswapped_train, unswapped_val, unswapped_test = CohortSplitter(
+        split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25), purge_hours=10.0
+    ).split(df)
+    swapped_train, swapped_val, swapped_test = CohortSplitter(
+        split_mode="longitudinal",
+        train_val_test_split=(0.5, 0.25, 0.25),
+        purge_hours=10.0,
+        swap_val_test=True,
+    ).split(df)
+
+    # Train is untouched by the swap.
+    pd.testing.assert_frame_equal(
+        unswapped_train.reset_index(drop=True), swapped_train.reset_index(drop=True)
+    )
+    # The middle chunk's rows (purged, previously "val") now come back as test.
+    pd.testing.assert_frame_equal(
+        unswapped_val.reset_index(drop=True), swapped_test.reset_index(drop=True)
+    )
+    # The last chunk's rows (unpurged, previously "test") now come back as val.
+    pd.testing.assert_frame_equal(
+        unswapped_test.reset_index(drop=True), swapped_val.reset_index(drop=True)
+    )
+
+    # The purge asymmetry travels with the position, not the label: swapped
+    # "test" (middle chunk) is purged against swapped "val" (last chunk)'s start.
+    purge = pd.Timedelta(hours=10)
+    swapped_val_start = swapped_val["record_timestamp"].min()
+    assert (swapped_test["record_timestamp"] < swapped_val_start - purge).all()
+
+
+def test_cohort_splitter_longitudinal_purge_can_empty_a_split():
+    """A purge wider than a user's total span can empty out train and val entirely.
+
+    n=6 hourly responses spans only 5h; a 24h purge against val's and test's
+    start times is wider than the whole series, so every train/val row falls
+    within the purge window and only the unpurged final split (test) survives.
+    This is intentional: purging never reassigns a row, it only ever drops
+    ones whose sampler window would otherwise reach across a boundary, so an
+    overly wide purge relative to a user's cadence can leave them with no
+    train or val contribution at all.
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 6,
+        "record_timestamp": pd.date_range("2026-01-01", periods=6, freq="1h"),
+        "answer": list(range(6)),
+    })
+
+    splitter = CohortSplitter(
+        split_mode="longitudinal", train_val_test_split=(0.5, 0.25, 0.25), purge_hours=24.0
+    )
+    train_df, val_df, test_df = splitter.split(df)
+    assert train_df.empty
+    assert val_df.empty
+    assert not test_df.empty
+
+
+def test_cohort_splitter_walk_forward_pct_basic_shape():
+    """burn_in=50%, step=15%, no purge: fold cuts scale with each user's own response count.
+
+    User 1: 20 responses. Fold 0: train=[0,50%)=[0,10), test=[50%,65%)=[10,13).
+    Fold 1: train=[0,65%)=[0,13), test=[65%,80%)=[13,16). Fold 2: train=[0,80%)=
+    [0,16), test=[80%,95%)=[16,19). Fold 3 would need test_pct_end=1.10 > 1.0 -> stops.
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 20,
+        "record_timestamp": pd.date_range("2026-01-01", periods=20, freq="1h"),
+        "answer": list(range(20)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+
+    assert [f.fold_index for f in folds] == [0, 1, 2]
+    assert list(folds[0].train_df["answer"]) == list(range(10))
+    assert list(folds[0].test_df["answer"]) == [10, 11, 12]
+    assert list(folds[1].train_df["answer"]) == list(range(13))
+    assert list(folds[1].test_df["answer"]) == [13, 14, 15]
+    assert list(folds[2].train_df["answer"]) == list(range(16))
+    assert list(folds[2].test_df["answer"]) == [16, 17, 18]
+
+
+def test_cohort_splitter_walk_forward_pct_every_user_contributes_to_every_fold():
+    """The whole point of the pct-based split: unlike the fixed-count version,
+    users with different total response counts still all contribute to the
+    same set of folds, since test size scales with each user's own total."""
+    rows = []
+    for uid, n in [(1, 20), (2, 50), (3, 100)]:
+        for i in range(n):
+            rows.append({
+                "app_user_id": uid,
+                "record_timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(hours=i),
+                "answer": i,
+            })
+    df = pd.DataFrame(rows)
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+
+    assert len(folds) > 0
+    for fold in folds:
+        assert set(fold.test_df["app_user_id"]) == {1, 2, 3}
+
+
+def test_cohort_splitter_walk_forward_pct_test_fraction_is_consistent_across_users():
+    """Each fold's test window is ~step_pct of that user's own total, regardless
+    of how many total responses they have -- this is what prevents the tiny
+    tail folds split_walk_forward (fixed-count) can produce."""
+    rows = []
+    for uid, n in [(1, 20), (2, 200)]:
+        for i in range(n):
+            rows.append({
+                "app_user_id": uid,
+                "record_timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(hours=i),
+                "answer": i,
+            })
+    df = pd.DataFrame(rows)
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+
+    fold0 = folds[0]
+    n1 = len(fold0.test_df[fold0.test_df["app_user_id"] == 1])
+    n2 = len(fold0.test_df[fold0.test_df["app_user_id"] == 2])
+    # 15% of 20 ~= 3, 15% of 200 = 30 -- both close to their own 15%, not a
+    # shared absolute count the way split_walk_forward's step_responses is.
+    assert n1 == 3
+    assert n2 == 30
+
+
+def test_cohort_splitter_walk_forward_pct_val_pct_zero_is_default_and_no_val_window():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 20,
+        "record_timestamp": pd.date_range("2026-01-01", periods=20, freq="1h"),
+        "answer": list(range(20)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+
+    folds_default = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+    folds_explicit = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15, val_pct=0.0)
+
+    for folds in (folds_default, folds_explicit):
+        for fold in folds:
+            assert fold.val_df.empty
+
+
+def test_cohort_splitter_walk_forward_pct_purges_train_against_test_start():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 20,
+        "record_timestamp": pd.date_range("2026-01-01", periods=20, freq="1h"),
+        "answer": list(range(20)),
+    })
+    splitter = CohortSplitter(purge_hours=1.5)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+
+    purge = pd.Timedelta(hours=1.5)
+    for fold in folds:
+        if fold.train_df.empty or fold.test_df.empty:
+            continue
+        test_start = fold.test_df["record_timestamp"].min()
+        assert (fold.train_df["record_timestamp"] < test_start - purge).all()
+
+
+def test_cohort_splitter_walk_forward_pct_no_response_is_a_test_example_twice():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 40,
+        "record_timestamp": pd.date_range("2026-01-01", periods=40, freq="1h"),
+        "answer": list(range(40)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.4, step_pct=0.1)
+
+    seen = []
+    for fold in folds:
+        seen.extend(fold.test_df["answer"].tolist())
+    assert len(seen) == len(set(seen))
+
+
+def test_cohort_splitter_walk_forward_pct_invalid_args_raise():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 10,
+        "record_timestamp": pd.date_range("2026-01-01", periods=10, freq="1h"),
+        "answer": list(range(10)),
+    })
+    splitter = CohortSplitter()
+    with pytest.raises(ValueError, match="burn_in_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=0.0, step_pct=0.1)
+    with pytest.raises(ValueError, match="burn_in_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=1.0, step_pct=0.1)
+    with pytest.raises(ValueError, match="step_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.0)
+    with pytest.raises(ValueError, match="step_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=1.0)
+    with pytest.raises(ValueError, match="val_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.1, val_pct=-0.1)
+    with pytest.raises(ValueError, match="val_pct"):
+        splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.1, val_pct=1.0)
+
+
+def test_cohort_splitter_walk_forward_pct_short_user_produces_no_folds():
+    """A user with too few responses for even one fold's test window to have
+    rounding-nonzero width is skipped (see the test_end <= val_end guard)."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 3,
+        "record_timestamp": pd.date_range("2026-01-01", periods=3, freq="1h"),
+        "answer": list(range(3)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_pct(df, burn_in_pct=0.5, step_pct=0.15)
+    assert folds == []
+
+
+def test_cohort_splitter_cyclic_basic_shape():
+    """train_width=40%, step=15%, no purge: fold 0's test is the user's earliest
+    15% and its train is the FIXED-width 40% immediately preceding it, WRAPPING
+    from the end of the sequence back to the start (index 30..49 for n=50).
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+
+    assert [f.fold_index for f in folds] == list(range(7))  # ceil(1/0.15) = 7
+
+    fold0 = folds[0]
+    assert list(fold0.test_df["answer"]) == [0, 1, 2, 3, 4, 5, 6, 7]
+    assert sorted(fold0.train_df["answer"]) == list(range(30, 50))  # wraps
+
+    # A later, non-wrapping fold behaves like an ordinary fixed-width slide.
+    fold3 = folds[3]
+    assert list(fold3.test_df["answer"]) == [22, 23, 24, 25, 26, 27, 28, 29]
+    assert sorted(fold3.train_df["answer"]) == list(range(2, 22))
+
+
+def test_cohort_splitter_cyclic_covers_every_response_exactly_once_per_cycle():
+    """The whole point: test windows tile the user's full response range with
+    no gaps and no response tested on twice within one cycle."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+
+    seen = []
+    for fold in folds:
+        seen.extend(fold.test_df["answer"].tolist())
+    assert sorted(seen) == list(range(50))
+
+
+def test_cohort_splitter_cyclic_every_fold_train_is_fixed_width():
+    """Unlike the expanding-window methods, every fold's train set is the
+    SAME size (modulo rounding) -- it slides, it does not grow."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+
+    sizes = [len(f.train_df) for f in folds]
+    assert max(sizes) - min(sizes) <= 1  # rounding-only variation, no growth trend
+
+
+def test_cohort_splitter_cyclic_every_user_contributes_to_every_fold():
+    rows = []
+    for uid, n in [(1, 20), (2, 50), (3, 100)]:
+        for i in range(n):
+            rows.append({
+                "app_user_id": uid,
+                "record_timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(hours=i),
+                "answer": i,
+            })
+    df = pd.DataFrame(rows)
+
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+
+    assert len(folds) > 0
+    for fold in folds:
+        assert set(fold.test_df["app_user_id"]) == {1, 2, 3}
+
+
+def test_cohort_splitter_cyclic_no_val_window_ever():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+    assert len(folds) > 0
+    for fold in folds:
+        assert fold.val_df.empty
+
+
+def test_cohort_splitter_cyclic_purges_train_against_test_start():
+    """Only the physically-adjacent slice of a (possibly wrapped) train window
+    is purged against test's start -- verified here on a wrapping fold, where
+    naive purging by raw index position (rather than the slice adjacent to
+    test) would purge the wrong end."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=1.5)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+
+    purge = pd.Timedelta(hours=1.5)
+    for fold in folds:
+        if fold.train_df.empty or fold.test_df.empty:
+            continue
+        test_start = fold.test_df["record_timestamp"].min()
+        # Every retained train row must be far enough from test's start --
+        # true regardless of which side of a wrap it physically sits on,
+        # since a wrapped train window's far slice is many hours away either way.
+        gaps = (test_start - fold.train_df["record_timestamp"]).abs()
+        assert (gaps >= purge).all() or (fold.train_df["record_timestamp"] < test_start - purge).all()
+
+
+def test_cohort_splitter_cyclic_purges_wrapped_train_against_test_end():
+    """The far slice of a wrapped train window (the user's most-recent rows,
+    concatenated onto the near slice) is ALSO adjacent to test -- to test's
+    end, cyclically -- and must be purged against that boundary too, not just
+    the near slice against test's start.
+
+    train_width_pct + step_pct == 1.0 here (0.4 + 0.6, one wrapping fold),
+    the exact configuration where the far slice sits with ZERO gap to test's
+    end absent this purge: fold 0's test is rows [0, 30) and the far slice
+    would otherwise start at row 30, the row immediately after test ends.
+    """
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=1.5)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.6)
+
+    purge = pd.Timedelta(hours=1.5)
+    saw_a_wrapping_fold = False
+    for fold in folds:
+        if fold.train_df.empty or fold.test_df.empty:
+            continue
+        test_end = fold.test_df["record_timestamp"].max()
+        # Any retained train row that sits AFTER test (the far/wrapped slice)
+        # must be far enough past test's end -- not merely "not inside test".
+        after_test = fold.train_df[fold.train_df["record_timestamp"] > test_end]
+        if not after_test.empty:
+            saw_a_wrapping_fold = True
+            assert (after_test["record_timestamp"] > test_end + purge).all()
+    assert saw_a_wrapping_fold  # sanity: the scenario this test targets actually occurred
+
+
+def test_cohort_splitter_cyclic_no_duplicate_test_role_within_a_fold():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 50,
+        "record_timestamp": pd.date_range("2026-01-01", periods=50, freq="1h"),
+        "answer": list(range(50)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+    for fold in folds:
+        assert not fold.test_df.duplicated(subset=["app_user_id", "answer"]).any()
+
+
+def test_cohort_splitter_cyclic_invalid_args_raise():
+    df = pd.DataFrame({
+        "app_user_id": [1] * 10,
+        "record_timestamp": pd.date_range("2026-01-01", periods=10, freq="1h"),
+        "answer": list(range(10)),
+    })
+    splitter = CohortSplitter()
+    with pytest.raises(ValueError, match="train_width_pct"):
+        splitter.split_walk_forward_cyclic(df, train_width_pct=0.0, step_pct=0.1)
+    with pytest.raises(ValueError, match="train_width_pct"):
+        splitter.split_walk_forward_cyclic(df, train_width_pct=1.0, step_pct=0.1)
+    with pytest.raises(ValueError, match="step_pct"):
+        splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.0)
+    with pytest.raises(ValueError, match="step_pct"):
+        splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=1.0)
+
+
+def test_cohort_splitter_cyclic_short_user_produces_no_folds():
+    """A single-response user has no room for both a train row and a test
+    row in any fold, and is excluded."""
+    df = pd.DataFrame({
+        "app_user_id": [1],
+        "record_timestamp": pd.date_range("2026-01-01", periods=1, freq="1h"),
+        "answer": [0],
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.4, step_pct=0.15)
+    assert folds == []
+
+
+def test_cohort_splitter_cyclic_train_is_exact_complement_of_test_when_widths_sum_to_one():
+    """When train_width_pct + step_pct == 1.0 (e.g. 0.75/0.25 -- ordinary
+    4-fold CV with contiguous, wrapped train blocks), every fold's train set
+    should be EXACTLY the rest of the user's data not in that fold's test
+    set: no gap, no overlap, with no purging (purge_hours=0 here isolates
+    this from the purge-driven shrinkage the purge test already covers)."""
+    df = pd.DataFrame({
+        "app_user_id": [1] * 40,
+        "record_timestamp": pd.date_range("2026-01-01", periods=40, freq="1h"),
+        "answer": list(range(40)),
+    })
+    splitter = CohortSplitter(purge_hours=0.0)
+    folds = splitter.split_walk_forward_cyclic(df, train_width_pct=0.75, step_pct=0.25)
+
+    assert len(folds) == 4
+    all_answers = set(range(40))
+    for fold in folds:
+        train_answers = set(fold.train_df["answer"])
+        test_answers = set(fold.test_df["answer"])
+        assert train_answers.isdisjoint(test_answers)
+        assert train_answers | test_answers == all_answers
+
+
+def test_lookback_hours_from_sampler():
+    """Derives purge width from window_bounds rather than a type-specific attribute."""
+
+    class FakeSampler:
+        def window_bounds(self, ts):
+            ts = pd.Timestamp(ts)
+            return ts - pd.Timedelta(hours=96), ts
+
+    class NoWindowSampler:
+        """Mimics LagSampler: no window_bounds override, reads no sensor data."""
+        pass
+
+    assert lookback_hours_from_sampler(FakeSampler()) == 96.0
+    assert lookback_hours_from_sampler(NoWindowSampler()) == 0.0
+
+
+def test_health_dataset_handles_empty_split():
+    """An empty split (e.g. every response purged) yields a valid, empty Dataset
+    rather than crashing on np.stack([])."""
+    empty_links = pd.DataFrame(columns=["app_user_id", "record_timestamp", "answer"])
+    step_df = pd.DataFrame(columns=["app_user_id", "start_timestamp", "steps"])
+
+    dataset = HealthDataset(
+        linked_data=empty_links,
+        modality_dfs={"step": step_df},
+        modality_cols={"step": "steps"},
+        sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
+    )
+
+    assert len(dataset) == 0
+
+
+def test_health_dataset_return_index_appends_idx_last():
+    """return_index=True appends idx as the tuple's last element without changing anything else.
+
+    Off by default so existing model_step branches (fixed lengths 4/5/6) are
+    unaffected; a caller that opts in can join a prediction back to
+    dataset.data_links.iloc[idx] to recover app_user_id/record_timestamp.
+    """
+    links = pd.DataFrame({
+        "app_user_id": [1, 1, 2],
+        "record_timestamp": pd.to_datetime([
+            "2026-01-01 08:00:00", "2026-01-02 08:00:00", "2026-01-01 08:00:00",
+        ]),
+        "answer": [0, 1, 0],
+    })
+    step_df = pd.DataFrame({
+        "app_user_id": [1, 1, 2],
+        "start_timestamp": pd.to_datetime([
+            "2026-01-01 06:00:00", "2026-01-02 06:00:00", "2026-01-01 06:00:00",
+        ]),
+        "steps": [100, 200, 300],
+    })
+    sampler = OffsetSampler(start_offset_hours=-24, end_offset_hours=0)
+
+    dataset_without = HealthDataset(
+        linked_data=links, modality_dfs={"step": step_df},
+        modality_cols={"step": "steps"}, sampler=sampler,
+    )
+    dataset_with = HealthDataset(
+        linked_data=links, modality_dfs={"step": step_df},
+        modality_cols={"step": "steps"}, sampler=sampler, return_index=True,
+    )
+
+    without_len = len(dataset_without[0])
+    with_item = dataset_with[0]
+    assert len(with_item) == without_len + 1
+    assert with_item[-1].dtype == torch.long
+    assert with_item[-1].item() == 0
+
+    # idx recovers the correct source row via data_links.
+    for i in range(len(dataset_with)):
+        item = dataset_with[i]
+        idx = item[-1].item()
+        assert idx == i
+        assert dataset_with.data_links.iloc[idx]["app_user_id"] == links.iloc[i]["app_user_id"]
+
+
 def test_demographics_processor():
     train_df = pd.DataFrame({"app_user_id": [1, 2]})
     master_df = pd.DataFrame({"app_user_id": [1, 2, 3]})
@@ -99,23 +673,6 @@ def test_demographics_processor():
     assert demo_map[1][8] == 1.0  # iPhone source active
     assert demo_map[2][7] == 1.0  # Android source active
 
-
-def test_prev_prediction_linker(dummy_splitter_data):
-    train_df = dummy_splitter_data[dummy_splitter_data["app_user_id"] == 1].copy()
-    val_df = dummy_splitter_data[dummy_splitter_data["app_user_id"] == 2].copy()
-    test_df = dummy_splitter_data[dummy_splitter_data["app_user_id"] == 3].copy()
-
-    t_df, v_df, test_res_df = PrevPredictionLinker.link(train_df, val_df, test_df)
-
-    assert "prev_sample_idx" in t_df.columns
-    assert "prev_sample_idx" in v_df.columns
-    assert "prev_sample_idx" in test_res_df.columns
-
-    # User 1 has 4 records, first should be -1, others point to previous index
-    assert t_df.loc[0, "prev_sample_idx"] == -1
-    assert t_df.loc[1, "prev_sample_idx"] == 0
-    assert t_df.loc[2, "prev_sample_idx"] == 1
-    assert t_df.loc[3, "prev_sample_idx"] == 2
 
 
 def test_step_preprocessor():

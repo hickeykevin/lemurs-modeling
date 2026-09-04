@@ -1,0 +1,12 @@
+# @package _global_
+
+# Per-user walk-forward CV, fixed-width sliding/wrapping window. Same
+# WalkForwardPlan as walk_forward.yaml, defaulted to the cyclic data config
+# instead of the expanding one. See eval_schemes.md.
+defaults:
+  - override /callbacks: walk_forward
+  - override /data: walk_forward_cyclic
+
+eval_plan:
+  _target_: src.eval_plans.walk_forward.WalkForwardPlan
+  n_bootstraps: 1000 # BCa bootstrap resamples per pooled metric

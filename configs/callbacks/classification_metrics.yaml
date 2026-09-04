@@ -1,5 +1,6 @@
 classification_metrics:
-  _target_: src.utils.evaluation_callbacks.ClassificationMetricsCallback
+  _target_: src.callbacks.evaluation_callbacks.ClassificationMetricsCallback
+
   f1_average: "macro"
   auroc_average: "macro"
   specificity_average: "macro"

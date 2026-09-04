@@ -7,7 +7,8 @@ import torch
 
 from src.data.components.cohort_splitter import CohortSplitter
 from src.data.cv_health_datamodule import CVHealthDataModule
-from src.utils.evaluation_callbacks import WithinPersonAUROCCallback
+from src.callbacks.evaluation_callbacks import WithinPersonAUROCCallback
+
 
 
 # ---------------------------------------------------------------------------

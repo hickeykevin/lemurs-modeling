@@ -1,0 +1,32 @@
+defaults:
+  - _self_
+  - aggregator: suicide_risk
+  - sampler: sweep_configs/offset_48h_6h
+  - scaler: dual
+  - preprocessors: [step, distance]
+
+# IndexedHealthDataModule (not plain HealthDataModule) so data_val/data_test
+# carry return_index=True, letting PredictionCollectorCallback pool
+# predictions into a user-cluster bootstrap CI. See eval_schemes.md.
+_target_: src.data.indexed_health_datamodule.IndexedHealthDataModule
+modalities: ["step", "distance"]
+
+split_mode: longitudinal # single chronological train/val/test cut per user
+train_val_test_split: [0.7, 0.15, 0.15]
+purge_hours: null # gap (hours) purged at each split boundary; null derives it from the sampler's lookback
+
+batch_size: 16
+num_workers: 1
+pin_memory: False
+random_state: ${seed}
+os_filter: both
+
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+include_time_features: false
+
+use_demographics: true
+use_sleep: true
+
+exclude_user_ids: null

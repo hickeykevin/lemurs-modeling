@@ -1,0 +1,139 @@
+# W&B Sweep Configuration: Modular Hydra Sweep
+# Replaces flat sweep parameters with clean, native Hydra package selections.
+# Eliminates parameter leakage and dummy variables entirely.
+
+name: modular_hydra_sweep
+project: lemurs-modeling
+program: src/train.py
+method: bayes
+metric:
+  name: val/f1_best
+  goal: maximize
+
+parameters:
+  # --- Data Scaler Package ---
+  scaler_pkg:
+    values: [standard, subject_standard, dual]
+
+  # --- Modular Data Sampler Packages (43 total explicit sampler files) ---
+  sampler_pkg:
+    values:
+      # Offset Samplers (20 options)
+      - sweep_configs/offset_24h_4h
+      - sweep_configs/offset_24h_6h
+      - sweep_configs/offset_24h_8h
+      - sweep_configs/offset_24h_12h
+      - sweep_configs/offset_48h_4h
+      - sweep_configs/offset_48h_6h
+      - sweep_configs/offset_48h_8h
+      - sweep_configs/offset_48h_12h
+      - sweep_configs/offset_72h_4h
+      - sweep_configs/offset_72h_6h
+      - sweep_configs/offset_72h_8h
+      - sweep_configs/offset_72h_12h
+      - sweep_configs/offset_96h_4h
+      - sweep_configs/offset_96h_6h
+      - sweep_configs/offset_96h_8h
+      - sweep_configs/offset_96h_12h
+      - sweep_configs/offset_120h_4h
+      - sweep_configs/offset_120h_6h
+      - sweep_configs/offset_120h_8h
+      - sweep_configs/offset_120h_12h
+      # Rolling Samplers (20 options)
+      - sweep_configs/rolling_24h_4h
+      - sweep_configs/rolling_24h_6h
+      - sweep_configs/rolling_24h_8h
+      - sweep_configs/rolling_24h_12h
+      - sweep_configs/rolling_48h_4h
+      - sweep_configs/rolling_48h_6h
+      - sweep_configs/rolling_48h_8h
+      - sweep_configs/rolling_48h_12h
+      - sweep_configs/rolling_72h_4h
+      - sweep_configs/rolling_72h_6h
+      - sweep_configs/rolling_72h_8h
+      - sweep_configs/rolling_72h_12h
+      - sweep_configs/rolling_96h_4h
+      - sweep_configs/rolling_96h_6h
+      - sweep_configs/rolling_96h_8h
+      - sweep_configs/rolling_96h_12h
+      - sweep_configs/rolling_120h_4h
+      - sweep_configs/rolling_120h_6h
+      - sweep_configs/rolling_120h_8h
+      - sweep_configs/rolling_120h_12h
+      # Interval-Aware Samplers (3 options)
+      - sweep_configs/interval_72h
+      - sweep_configs/interval_96h
+      - sweep_configs/interval_120h
+
+  # --- Modalities Choices (ALL 7 options) ---
+  modalities_choice:
+    values:
+      - ["step"]
+      - ["calorie"]
+      - ["distance"]
+      - ["step", "calorie"]
+      - ["step", "distance"]
+      - ["calorie", "distance"]
+      - ["step", "calorie", "distance"]
+
+  # --- Cohort Data Filtering Flags ---
+  os_filter_choice:
+    values: [ios, both]
+
+  collapse_strategy_choice:
+    values: [mean, none]
+
+  require_sensor_data_choice:
+    values: [true, false]
+
+  use_survey_context_choice:
+    values: [true, false]
+
+  include_time_features_choice:
+    values: [true, false]
+
+  use_demographics_choice:
+    values: [true, false]
+
+  use_sleep_choice:
+    values: [true, false]
+
+  # --- Model Architecture Modular Packages (FLAML + 8 PyTorch Neural Net packages) ---
+  model_pkg:
+    values:
+      - flaml                       # FLAML AutoML (LightGBM, XGBoost, CatBoost, RandomForest)
+      - transformer_mean_wd0        # Transformer, pooling=mean, weight_decay=0.0
+      - transformer_mean_wd1        # Transformer, pooling=mean, weight_decay=0.0001
+      - transformer_last_wd0         # Transformer, pooling=last, weight_decay=0.0
+      - transformer_last_wd1         # Transformer, pooling=last, weight_decay=0.0001
+      - lstm_mean_wd0               # LSTM, pooling=mean, weight_decay=0.0
+      - lstm_mean_wd1               # LSTM, pooling=mean, weight_decay=0.0001
+      - lstm_last_wd0                # LSTM, pooling=last, weight_decay=0.0
+      - lstm_last_wd1                # LSTM, pooling=last, weight_decay=0.0001
+
+  # --- Class Weights ---
+  class_weights_choice:
+    values:
+      - [1.0, 1.0]
+      - [1.0, 2.0]
+      - [1.0, 3.0]
+      - [1.0, 5.0]
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "data/scaler=${scaler_pkg}"
+  - "data/sampler=${sampler_pkg}"
+  - "model=${model_pkg}"
+  - "data.modalities=${modalities_choice}"
+  - "data/preprocessors=${modalities_choice}"
+  - "data.os_filter=${os_filter_choice}"
+  - "data.collapse_strategy=${collapse_strategy_choice}"
+  - "data.require_sensor_data=${require_sensor_data_choice}"
+  - "data.use_survey_context=${use_survey_context_choice}"
+  - "data.include_time_features=${include_time_features_choice}"
+  - "data.use_demographics=${use_demographics_choice}"
+  - "data.use_sleep=${use_sleep_choice}"
+  - "model.class_weights=${class_weights_choice}"
+  - "data.num_workers=4"

@@ -1,0 +1,39 @@
+defaults:
+  - _self_
+  - aggregator: suicide_risk
+  - sampler: sweep_configs/offset_48h_6h
+  - scaler: dual
+  - preprocessors: [step, distance]
+
+_target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
+modalities: ["step", "distance"]
+
+# fold_sizing=pct: train window EXPANDS from a user's earliest response; test
+# is a fixed % of that user's own total responses. See eval_schemes.md.
+fold_sizing: pct
+burn_in_pct: 0.4
+step_pct: 0.15 # -> 4 folds
+val_pct: 0.0
+current_fold: 0
+
+batch_size: 16
+num_workers: 1
+pin_memory: False
+random_state: ${seed}
+os_filter: both
+
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+include_time_features: false
+
+use_demographics: true
+use_sleep: true
+
+purge_hours: null # gap (hours) purged at each fold boundary; null derives it from the sampler's lookback
+
+exclude_user_ids: null
+
+# Hyperparameters shared with single_split.yaml and walk_forward_cyclic.yaml,
+# carried from W&B sweep umdhgse9, so the three schemes are compared without
+# a hyperparameter confound. Full provenance: walk_forward_cyclic.yaml.

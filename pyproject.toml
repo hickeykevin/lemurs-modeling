@@ -22,7 +22,19 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "flaml[automl]>=2.5.0",
     "streamlit>=1.58.0",
+    "sshtunnel>=0.4.0",
 ]
+
+[project.optional-dependencies]
+# For model=wbm (src/models/components/wbm_net.py): the pretrained OpenMHC/WBM encoder.
+# `mamba-ssm` is CUDA-only -- install this extra on a GPU cluster node, not for local
+# (e.g. Mac) development. `uv sync --extra wbm`.
+wbm = [
+    "huggingface_hub>=0.24.0",
+    "causal-conv1d>=1.4.0",
+    "mamba-ssm>=2.2.0",
+]
+
 
 [tool.pytest.ini_options]
 addopts = [
