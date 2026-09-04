@@ -7,6 +7,6 @@ defaults:
 
 _target_: src.models.health_module.HealthLitModule
 compile: false
-auto_class_weights: true
+auto_class_weights: false
 class_weights: null
 use_sequence_data: true
