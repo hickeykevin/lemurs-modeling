@@ -113,7 +113,11 @@ def get_metric_value(metric_dict: Dict[str, Any], metric_name: Optional[str]) ->
             "Make sure `optimized_metric` name in `hparams_search` config is correct!"
         )
 
-    metric_value = metric_dict[metric_name].item()
+    # An eval plan's aggregate() returns plain floats (mean/std/CI summaries,
+    # pooled metrics), while a single Lightning run's callback_metrics holds
+    # tensors. Accept either rather than assuming .item() exists.
+    raw = metric_dict[metric_name]
+    metric_value = raw.item() if hasattr(raw, "item") else float(raw)
     log.info(f"Retrieved metric value! <{metric_name}={metric_value}>")
 
     return metric_value

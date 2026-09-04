@@ -1,3 +1,4 @@
 target_distribution:
-  _target_: src.utils.evaluation_callbacks.TargetDistributionCallback
+  _target_: src.callbacks.evaluation_callbacks.TargetDistributionCallback
+
 

@@ -1,0 +1,12 @@
+# Requires the `wbm` extra (`uv sync --extra wbm`) AND a CUDA GPU -- the pretrained
+# encoder's Mamba2 kernels do not run on CPU. See src/models/components/wbm_net.py.
+defaults:
+  - net: wbm
+  - optimizer: adam
+  - scheduler: null
+
+_target_: src.models.health_module.HealthLitModule
+compile: false
+auto_class_weights: false
+class_weights: null
+use_sequence_data: true

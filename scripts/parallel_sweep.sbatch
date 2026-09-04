@@ -13,6 +13,10 @@ if [ -z "$1" ]; then
 fi
 
 SWEEP_ID=$1
+# Auto-prepend entity/project if user passed a bare sweep ID (e.g. 3sle2zr6)
+if [[ "$SWEEP_ID" != */* ]]; then
+    SWEEP_ID="hickeykevin/lemurs-modeling/$SWEEP_ID"
+fi
 NUM_WORKERS=16
 
 # Prevent CPU core thrashing by restricting each PyTorch/numpy thread count to 1

@@ -145,17 +145,51 @@ class HealthLitModule(LightningModule):
         weights = counts.sum() / (self.num_classes * counts)
         return torch.tensor(weights, dtype=torch.float, device=self.device)
 
+    def _maybe_strip_index(self, batch: Any, stage: str) -> Any:
+        """Drops a trailing sample-index tensor before the fixed-length dispatch below runs.
+
+        ``HealthDataset.__getitem__`` appends ``idx`` as the true last tuple
+        element when built with ``return_index=True`` (see
+        ``WalkForwardHealthDataModule``, which sets this on ``data_val``/
+        ``data_test`` but not ``data_train``). Undetected, that idx tensor
+        would be destructured by the length-based dispatch below as if it
+        were the demographics tensor and fed straight into the network,
+        silently corrupting both training and evaluation rather than merely
+        confusing a prediction-collecting callback.
+
+        Checked per call against the *current* stage's dataset (rather than
+        a static flag on this module) so it can never drift out of sync with
+        what the datamodule actually built for that stage, and so the same
+        module instance handles a datamodule where only some stages return
+        an index (as ``WalkForwardHealthDataModule`` does) correctly.
+
+        Uses ``self._trainer`` (the private attribute), not the ``trainer``
+        property: the property raises ``RuntimeError`` when this module is
+        not attached to a ``Trainer`` (e.g. ``model_step`` called directly in
+        a unit test on a bare module), rather than returning ``None`` the way
+        a plain ``getattr`` fallback would expect.
+        """
+        dm = getattr(self._trainer, "datamodule", None) if self._trainer is not None else None
+        dataset = getattr(dm, f"data_{stage}", None) if dm is not None else None
+        if getattr(dataset, "return_index", False):
+            return batch[:-1]
+        return batch
+
     def model_step(
-        self, batch: Any
+        self, batch: Any, stage: str = "train"
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single step through the model.
 
         Args:
             batch: A tuple containing features, targets, user_indices, etc.
+            stage: One of "train", "val", "test" -- which dataset's
+                ``return_index`` flag to check (see ``_maybe_strip_index``).
 
         Returns:
             A tuple of (loss, predictions, targets, logits).
         """
+        batch = self._maybe_strip_index(batch, stage)
+
         if len(batch) == 4:
             x, y, _, demographics = batch
         elif len(batch) == 6:
@@ -185,7 +219,7 @@ class HealthLitModule(LightningModule):
         Returns:
             The loss tensor.
         """
-        loss, preds, targets, _ = self.model_step(batch)
+        loss, preds, targets, _ = self.model_step(batch, stage="train")
 
         # Update metrics
         self.train_loss(loss)
@@ -203,7 +237,7 @@ class HealthLitModule(LightningModule):
             batch: A tuple containing (features, targets).
             batch_idx: The index of the current batch.
         """
-        loss, preds, targets, logits = self.model_step(batch)
+        loss, preds, targets, logits = self.model_step(batch, stage="val")
 
         # Update and log metrics
         self.val_loss(loss)
@@ -220,7 +254,7 @@ class HealthLitModule(LightningModule):
             batch: A tuple containing (features, targets).
             batch_idx: The index of the current batch.
         """
-        loss, preds, targets, logits = self.model_step(batch)
+        loss, preds, targets, logits = self.model_step(batch, stage="test")
 
         # Update and log metrics
         self.test_loss(loss)

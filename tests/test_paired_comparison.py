@@ -14,7 +14,9 @@ import pandas as pd
 import pytest
 
 from src.compare_cv_runs import check_pairable, load_per_run_rows, paired_deltas
-from src.cv_train import _fold_identity, _user_hash
+from src.eval_plans.fold_identity import fold_identity as _fold_identity, user_hash as _user_hash
+
+
 
 from tests.test_cv_evaluation import _cohort, _dm
 

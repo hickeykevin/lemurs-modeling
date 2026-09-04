@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 import torch
 import pytest
-from src.utils.evaluation_callbacks import ConfusionMatrixCallback
+from src.callbacks.evaluation_callbacks import ConfusionMatrixCallback
 from lightning import LightningModule, Trainer
 from lightning.pytorch.loggers.wandb import WandbLogger
 
@@ -84,7 +84,7 @@ def test_confusion_matrix_callback_with_wandb():
 
 
 def test_classification_metrics_callback():
-    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+    from src.callbacks.evaluation_callbacks import ClassificationMetricsCallback
     from unittest.mock import MagicMock
     import torch
 
@@ -181,7 +181,7 @@ def test_confusion_matrix_callback_logs_to_file(tmp_path):
 
 
 def test_classification_metrics_callback_test_stage():
-    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+    from src.callbacks.evaluation_callbacks import ClassificationMetricsCallback
     
     # Arrange
     callback = ClassificationMetricsCallback(num_bootstraps=5, sampling_strategy="multinomial")
@@ -232,7 +232,7 @@ def test_classification_metrics_callback_test_stage():
 
 
 def test_regression_metrics_callback_test_stage(tmp_path):
-    from src.utils.evaluation_callbacks import RegressionMetricsCallback
+    from src.callbacks.evaluation_callbacks import RegressionMetricsCallback
     
     # Arrange
     callback = RegressionMetricsCallback(num_bootstraps=5, sampling_strategy="multinomial")
@@ -395,7 +395,7 @@ def test_classification_metrics_callback_degenerate_val_epoch_logs_nan():
     model_checkpoint act on it, and a repeated-CV aggregate averages it in as
     if it meant something, silently biasing the reported mean/std.
     """
-    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+    from src.callbacks.evaluation_callbacks import ClassificationMetricsCallback
 
     callback = ClassificationMetricsCallback()
 
@@ -435,7 +435,7 @@ def test_classification_metrics_callback_degenerate_val_epoch_logs_nan():
 
 def test_classification_metrics_callback_normal_val_epoch_unaffected():
     """A two-class epoch must be logged and tracked exactly as before."""
-    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+    from src.callbacks.evaluation_callbacks import ClassificationMetricsCallback
 
     callback = ClassificationMetricsCallback()
 
@@ -462,7 +462,7 @@ def test_classification_metrics_callback_normal_val_epoch_unaffected():
 
 def test_classification_metrics_callback_degenerate_test_epoch_logs_nan():
     """The test-stage bootstrap path must apply the same single-class guard."""
-    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+    from src.callbacks.evaluation_callbacks import ClassificationMetricsCallback
 
     callback = ClassificationMetricsCallback(num_bootstraps=5, sampling_strategy="multinomial")
 
@@ -488,7 +488,7 @@ def test_classification_metrics_callback_degenerate_test_epoch_logs_nan():
 
 def test_classification_metrics_callback_degenerate_epoch_warns():
     """The degenerate case must be visible in logs, not just silently NaN."""
-    from src.utils.evaluation_callbacks import ClassificationMetricsCallback
+    from src.callbacks.evaluation_callbacks import ClassificationMetricsCallback
 
     callback = ClassificationMetricsCallback()
 
@@ -507,7 +507,7 @@ def test_classification_metrics_callback_degenerate_epoch_warns():
     callback.on_validation_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
 
     import logging
-    logger = logging.getLogger("src.utils.evaluation_callbacks")
+    logger = logging.getLogger("src.callbacks.evaluation_callbacks")
     records = []
     handler = logging.Handler()
     handler.emit = lambda record: records.append(record)

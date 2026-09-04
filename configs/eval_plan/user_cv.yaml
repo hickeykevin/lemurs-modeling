@@ -1,0 +1,8 @@
+# @package _global_
+
+# Repeated, user-grouped k-fold. See eval_schemes.md.
+defaults:
+  - override /data: user_cv
+
+eval_plan:
+  _target_: src.eval_plans.user_cv.UserCVPlan

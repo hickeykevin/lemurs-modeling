@@ -1,12 +1,28 @@
+# Question styles (from the DB's own question table, checked directly --
+# see the RuleBasedAggregator fix that coerces string answers, and the
+# investigation that found question 5 misclassified below):
+#   2  "I wanted to die"                              5-scale-much
+#   3  "I thought about taking my life"                5-scale-much
+#   5  "Considered a specific method / made prep..."   5-scale-much  <- Likert, NOT yes/no
+#   7  "How intense was your desire to kill..."        5-scale-intense
+#   8  "Do you intend to kill yourself right now?"     yes-no
+#   12 "Have you attempted suicide?"                   yes-no
+#   13 "Were you severely injured / need med. help?"   yes-no
+#
+# Question 5 was previously grouped into rule_2 (yes/no, "any_gt val: 0"),
+# which is wrong for a 5-scale question -- every response's minimum
+# possible answer is 1, not 0, so "> 0" was true for virtually every
+# response (1983/1983 in a direct check), saturating the whole aggregator.
+# Moved into rule_1 alongside 2/3/7, same style and threshold.
 _target_: src.data.components.label_aggregators.RuleBasedAggregator
 combination_logic: "any"
 rules:
   rule_1:
-    ids: [2, 3, 7]
+    ids: [2, 3, 5, 7]
     op: "ge"
-    val: 1.0
+    val: 2.0
   rule_2:
-    ids: [5, 8, 12, 13]
+    ids: [8, 12, 13]
     op: "any_gt"
     val: 0
 
