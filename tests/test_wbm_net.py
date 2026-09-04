@@ -101,9 +101,12 @@ def test_wbm_encoder_net_rejects_non_sequence_data():
 
 def test_wbm_encoder_net_forward_requires_mamba_ssm():
     pytest.importorskip("mamba_ssm", reason="only runs where the `wbm` extra is installed")
-    # A real forward pass additionally needs network access to fetch the checkpoint and
-    # a CUDA device to run it -- out of scope for CI; this just documents the contract.
-    net = WBMEncoderNet(modalities=["step", "calorie"], output_size=2)
-    x = torch.randn(2, 16, 2)
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA device required to run Mamba2 forward pass")
+
+    device = torch.device("cuda")
+    net = WBMEncoderNet(modalities=["step", "calorie"], output_size=2).to(device)
+    x = torch.randn(2, 16, 2, device=device)
     logits = net(x)
     assert logits.shape == (2, 2)
+
