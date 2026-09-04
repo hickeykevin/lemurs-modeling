@@ -145,17 +145,51 @@ class HealthLitModule(LightningModule):
         weights = counts.sum() / (self.num_classes * counts)
         return torch.tensor(weights, dtype=torch.float, device=self.device)
 
+    def _maybe_strip_index(self, batch: Any, stage: str) -> Any:
+        """Drops a trailing sample-index tensor before the fixed-length dispatch below runs.
+
+        ``HealthDataset.__getitem__`` appends ``idx`` as the true last tuple
+        element when built with ``return_index=True`` (see
+        ``WalkForwardHealthDataModule``, which sets this on ``data_val``/
+        ``data_test`` but not ``data_train``). Undetected, that idx tensor
+        would be destructured by the length-based dispatch below as if it
+        were the demographics tensor and fed straight into the network,
+        silently corrupting both training and evaluation rather than merely
+        confusing a prediction-collecting callback.
+
+        Checked per call against the *current* stage's dataset (rather than
+        a static flag on this module) so it can never drift out of sync with
+        what the datamodule actually built for that stage, and so the same
+        module instance handles a datamodule where only some stages return
+        an index (as ``WalkForwardHealthDataModule`` does) correctly.
+
+        Uses ``self._trainer`` (the private attribute), not the ``trainer``
+        property: the property raises ``RuntimeError`` when this module is
+        not attached to a ``Trainer`` (e.g. ``model_step`` called directly in
+        a unit test on a bare module), rather than returning ``None`` the way
+        a plain ``getattr`` fallback would expect.
+        """
+        dm = getattr(self._trainer, "datamodule", None) if self._trainer is not None else None
+        dataset = getattr(dm, f"data_{stage}", None) if dm is not None else None
+        if getattr(dataset, "return_index", False):
+            return batch[:-1]
+        return batch
+
     def model_step(
-        self, batch: Any
+        self, batch: Any, stage: str = "train"
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single step through the model.
 
         Args:
             batch: A tuple containing features, targets, user_indices, etc.
+            stage: One of "train", "val", "test" -- which dataset's
+                ``return_index`` flag to check (see ``_maybe_strip_index``).
 
         Returns:
             A tuple of (loss, predictions, targets, logits).
         """
+        batch = self._maybe_strip_index(batch, stage)
+
         if len(batch) == 4:
             x, y, _, demographics = batch
         elif len(batch) == 6:
@@ -185,7 +219,7 @@ class HealthLitModule(LightningModule):
         Returns:
             The loss tensor.
         """
-        loss, preds, targets, _ = self.model_step(batch)
+        loss, preds, targets, _ = self.model_step(batch, stage="train")
 
         # Update metrics
         self.train_loss(loss)
@@ -203,7 +237,7 @@ class HealthLitModule(LightningModule):
             batch: A tuple containing (features, targets).
             batch_idx: The index of the current batch.
         """
-        loss, preds, targets, logits = self.model_step(batch)
+        loss, preds, targets, logits = self.model_step(batch, stage="val")
 
         # Update and log metrics
         self.val_loss(loss)
@@ -220,7 +254,7 @@ class HealthLitModule(LightningModule):
             batch: A tuple containing (features, targets).
             batch_idx: The index of the current batch.
         """
-        loss, preds, targets, logits = self.model_step(batch)
+        loss, preds, targets, logits = self.model_step(batch, stage="test")
 
         # Update and log metrics
         self.test_loss(loss)
@@ -332,12 +366,21 @@ class FLAMLHealthModule(LightningModule):
     automated machine learning benchmarks on the same data pipeline.
     """
     
-    def __init__(self, automl_config: Dict[str, Any], task: str = "classification", **kwargs):
+    def __init__(
+        self,
+        automl_config: Dict[str, Any],
+        task: str = "classification",
+        auto_class_weights: bool = False,
+        class_weights: Optional[List[float]] = None,
+        **kwargs
+    ):
         """Initializes the FLAMLHealthModule.
 
         Args:
             automl_config (Dict[str, Any]): Configuration dictionary for FLAML's fit method.
             task (str): Type of AutoML task (e.g., 'classification', 'regression').
+            auto_class_weights (bool): Whether to compute inverse-frequency sample weights automatically.
+            class_weights (Optional[List[float]]): Explicit class weights list. Overrides auto_class_weights if set.
         """
         try:
             from omegaconf import OmegaConf, DictConfig
@@ -351,9 +394,7 @@ class FLAMLHealthModule(LightningModule):
         
         self.automl = AutoML()
         self.task = task
-        
 
-        
     def _flatten_batch(self, x: torch.Tensor) -> np.ndarray:
         """Flattens sequential data for tabular ML models.
 
@@ -381,8 +422,6 @@ class FLAMLHealthModule(LightningModule):
                 self.num_classes = _resolve_num_classes(
                     getattr(self, "trainer", None), explicit, _scan_val_labels
                 )
-                
-
 
         if stage == "fit" and not hasattr(self.automl, "best_estimator"):
             self.print("--- FLAML AutoML: Starting Optimization ---")
@@ -404,13 +443,31 @@ class FLAMLHealthModule(LightningModule):
             if num_classes_train > self.num_classes:
                 self.num_classes = num_classes_train
 
-            
+            sample_weight = None
+            explicit_weights = getattr(self.hparams, "class_weights", None)
+            auto_weights = getattr(self.hparams, "auto_class_weights", False)
+
+            if explicit_weights is not None:
+                weights = np.array(explicit_weights, dtype=np.float64)
+                sample_weight = weights[y_train.astype(int)]
+                self.print(f"[FLAML ClassWeights] explicit weights: {[round(w, 3) for w in weights.tolist()]}")
+            elif auto_weights:
+                counts = np.bincount(y_train.astype(int), minlength=self.num_classes)[: self.num_classes].astype(np.float64)
+                counts = np.maximum(counts, 1.0)
+                weights = counts.sum() / (self.num_classes * counts)
+                sample_weight = weights[y_train.astype(int)]
+                self.print(f"[FLAML AutoClassWeights] inverse-frequency weights: {[round(w, 3) for w in weights.tolist()]}")
+
+            fit_kwargs = dict(self.hparams.automl_config)
+            if sample_weight is not None:
+                fit_kwargs["sample_weight"] = sample_weight
+
             # Fit FLAML (this may take some time depending on automl_config.time_budget)
             self.automl.fit(
                 X_train=X_train,
                 y_train=y_train,
                 task=self.task,
-                **self.hparams.automl_config
+                **fit_kwargs
             )
             self.print(f"--- FLAML AutoML: Fit Complete. Best Model: {self.automl.best_estimator} ---")
 

@@ -1,0 +1,111 @@
+# W&B Sweep Configuration: Sampler x Model x Modality Sweep
+#
+# Grid search (method: grid) -- exhaustive, not sampled. Every combination of
+# every parameter below runs exactly once (40 x 3 x 7 = 840 runs).
+#
+# Three swept axes, crossed:
+#   sampler_pkg -- rolling_<lookback>h_<window>h and offset_<lookback>h_<window>h,
+#     lookback in [24, 48, 72, 96, 120], window (resample_freq) in [4, 6, 8, 12].
+#     Every value here is a self-contained config in
+#     configs/data/sampler/sweep_configs/ -- picking one is a plain Hydra
+#     group override (data/sampler=<name>), so there is no risk of a class
+#     getting an argument it doesn't accept.
+#   model_pkg -- default (LSTM), transformer, flaml_xgboost (FLAML AutoML
+#     pinned to estimator_list=[xgboost], not FLAML's usual multi-estimator
+#     search -- see configs/model/flaml_xgboost.yaml). Each is likewise a
+#     self-contained config; no cross-model arg is set from this file, since
+#     e.g. automl_config only exists on FLAMLHealthModule and would error
+#     under default/transformer.
+#   modalities_choice -- all 7 non-empty subsets of {step, calorie, distance}.
+#     data.modalities and data/preprocessors are set from the SAME value
+#     (data/preprocessors=${modalities_choice} is a genuine Hydra multi-select
+#     -- verified [step,calorie] resolves to exactly those two preprocessors,
+#     not a group named "[step,calorie]"), so the preprocessor set can never
+#     drift out of sync with the requested modalities. Setting only
+#     data.modalities and leaving preprocessors at its [step, calorie] default
+#     would silently build a modality with no preprocessor -- confirmed this
+#     composes without error but drops the missing modality entirely.
+#
+# Fixed, not swept (see command: below): scaler=dual; os_filter=both;
+# collapse_strategy=none; use_demographics=true; use_sleep=false;
+# use_survey_context=false; require_sensor_data=true; purge_hours=120.0 (5 days).
+#
+# scaler=dual, require_sensor_data=true, and purge_hours=120.0 DIFFER from
+# defaults and are overridden here. purge_hours=120.0 pins the boundary purge
+# duration to the maximum lookback across all runs (5 days) so that all lookback
+# configurations train on the exact same dataset splits without sample count variance.
+# The other four already match default.yaml's values -- pinned explicitly anyway
+# so the sweep states its own assumptions rather than depending on defaults.
+
+name: sampler_model_sweep
+project: lemurs-modeling
+program: src/train.py
+method: grid
+metric:
+  name: pooled/f1
+  goal: maximize
+
+parameters:
+  sampler_pkg:
+    values:
+      - rolling_24h_4h
+      - rolling_24h_6h
+      - rolling_24h_8h
+      - rolling_24h_12h
+      - rolling_48h_4h
+      - rolling_48h_6h
+      - rolling_48h_8h
+      - rolling_48h_12h
+      - rolling_72h_4h
+      - rolling_72h_6h
+      - rolling_72h_8h
+      - rolling_72h_12h
+      - rolling_96h_4h
+      - rolling_96h_6h
+      - rolling_96h_8h
+      - rolling_96h_12h
+      - rolling_120h_4h
+      - rolling_120h_6h
+      - rolling_120h_8h
+      - rolling_120h_12h
+      - offset_24h_4h
+      - offset_24h_6h
+      - offset_24h_8h
+      - offset_24h_12h
+      - offset_48h_4h
+      - offset_48h_6h
+      - offset_48h_8h
+      - offset_48h_12h
+      - offset_72h_4h
+      - offset_72h_6h
+      - offset_72h_8h
+      - offset_72h_12h
+      - offset_96h_4h
+      - offset_96h_6h
+      - offset_96h_8h
+      - offset_96h_12h
+      - offset_120h_4h
+      - offset_120h_6h
+      - offset_120h_8h
+      - offset_120h_12h
+
+  model_pkg:
+    values:
+      - default        # LSTM
+      - transformer
+      - flaml_xgboost   # FLAML AutoML, pinned to XGBoost
+
+  modalities_choice:
+    values:
+      - ["step"]
+      - ["calorie"]
+      - ["distance"]
+      - ["step", "calorie"]
+      - ["step", "distance"]
+      - ["calorie", "distance"]
+      - ["step", "calorie", "distance"]
+
+command:
+  - bash
+  - scripts/sampler_model_sweep_wrapper.sh
+  - ${args_no_hyphens}

@@ -311,13 +311,14 @@ For robust evaluation on longitudinal health data, you can run Group K-Fold cros
 Run cross-validation from the command line:
 ```bash
 # Run 5-fold cross-validation
-uv run python src/cv_train.py data.num_folds=5
+uv run python src/train.py eval_plan=user_cv data=user_cv data.num_folds=5
 
 # Run Leave-One-User-Out cross-validation (evaluates on all users, one-by-one)
-uv run python src/cv_train.py data.num_folds=-1
+uv run python src/train.py eval_plan=user_cv data=user_cv data.num_folds=-1
 ```
 
-All folds are logged under a single run prefix (e.g., logging to WandB or local CSV), with fold-specific metrics formatted as `val/loss_fold_0` and aggregated final statistics logged at the end as `val/loss_mean` and `val/loss_std`.
+All folds are logged under a single run prefix (e.g., logging to WandB or local CSV), with fold-specific metrics formatted as `fold/val_loss` and aggregated final statistics logged at the end as `test/auroc_mean` and `test/auroc_ci_low`.
+
 
 ### 7. Distributed Training & Cluster Submissions
 For large-scale training across multiple GPUs or cluster nodes:

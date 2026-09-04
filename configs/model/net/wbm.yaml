@@ -1,0 +1,14 @@
+_target_: src.models.components.wbm_net.WBMEncoderNet
+modalities: ${data.modalities}
+# Must match data.sampler's bin width (e.g. rolling.yaml's resample_freq: "6h" -> 6.0).
+# Not auto-derived from data.sampler.resample_freq (a string like "6h") since that
+# needs a custom OmegaConf resolver; override this alongside the sampler if you change it.
+resample_freq_hours: 6.0
+output_size: ${oc.select:data.aggregator.num_classes,2}
+use_sequence_data: ${model.use_sequence_data}
+freeze_encoder: true # fine-tune by setting false (needs a GPU either way)
+checkpoint_repo_id: MyHeartCounts/openmhc-wbm-dp
+modality_channel_map: # our modality name -> one of the pretrained encoder's 19 channels
+  step: iphone_steps
+  distance: iphone_distance
+  calorie: watch_energy

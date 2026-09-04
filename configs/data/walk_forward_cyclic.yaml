@@ -1,0 +1,44 @@
+defaults:
+  - _self_
+  - aggregator: suicide_risk
+  - sampler: sweep_configs/offset_48h_6h
+  - scaler: dual
+  - preprocessors: [step, distance]
+
+_target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
+modalities: ["step", "distance"]
+
+# fold_sizing=cyclic: fixed-width train window that SLIDES and WRAPS past
+# 100% back to 0%. train_width_pct + step_pct == 1.0 makes train the exact
+# complement of test each fold. See eval_schemes.md and
+# CohortSplitter.split_walk_forward_cyclic (both wrap boundaries are purged).
+fold_sizing: cyclic
+train_width_pct: 0.80
+step_pct: 0.20 # -> 5 folds, each 20% of a user's data as test
+current_fold: 0
+
+batch_size: 16
+num_workers: 1
+pin_memory: False
+random_state: ${seed}
+os_filter: both # both, ios, android
+
+collapse_strategy: none
+require_sensor_data: true
+use_survey_context: true
+include_time_features: false
+
+use_demographics: true
+use_sleep: true
+
+purge_hours: null # gap (hours) purged at each fold boundary; null derives it from the sampler's lookback
+
+exclude_user_ids: null
+
+# Hyperparameters carried from W&B sweep umdhgse9 (1291 runs, split_mode=
+# longitudinal), specifically its #1 leaderboard run (6yssfkcp, mean val
+# AUROC 0.9700), to test whether that combination holds up under per-user
+# walk-forward pooled evaluation. Shared with single_split.yaml and
+# walk_forward_expanding.yaml so the three schemes compare without a
+# hyperparameter confound. Full sweep rationale (per-flag significance,
+# what was and wasn't carried): see git history for this file.

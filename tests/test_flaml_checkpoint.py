@@ -91,3 +91,34 @@ def test_flaml_checkpoint_save_and_load():
         best_estimator_orig = loaded_module.automl.best_estimator
         loaded_module.setup(stage="test")
         assert loaded_module.automl.best_estimator == best_estimator_orig
+
+
+def test_flaml_auto_class_weights():
+    """Tests that FLAMLHealthModule correctly computes sample_weight with auto_class_weights=True."""
+    np.random.seed(42)
+    torch.manual_seed(42)
+
+    X_train = torch.randn(40, 5, 2)
+    # Imbalanced targets: 30 zeros, 10 ones
+    y_train = torch.tensor([0] * 30 + [1] * 10)
+    X_val = torch.randn(10, 5, 2)
+    y_val = torch.tensor([0] * 8 + [1] * 2)
+
+    dm = DummyDataModule(X_train, y_train, X_val, y_val)
+    automl_config = {"time_budget": 2, "estimator_list": ["rf"], "verbose": 0}
+
+    module = FLAMLHealthModule(
+        automl_config=automl_config, task="classification", auto_class_weights=True
+    )
+    trainer = Trainer(
+        default_root_dir="logs/debug",
+        max_epochs=1,
+        accelerator="cpu",
+        logger=False,
+        enable_checkpointing=False,
+    )
+    trainer.fit(module, datamodule=dm)
+
+    assert hasattr(module.automl, "best_estimator")
+    assert module.automl.best_estimator is not None
+

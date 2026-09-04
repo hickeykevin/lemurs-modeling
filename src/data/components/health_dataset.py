@@ -37,8 +37,22 @@ class HealthDataset(Dataset):
         default_demographics: Optional[np.ndarray] = None,
         use_sleep: bool = False,
         use_survey_context: bool = False,
+        return_index: bool = False,
     ) -> None:
-        """Initializes the HealthDataset."""
+        """Initializes the HealthDataset.
+
+        Args:
+            return_index: When True, ``__getitem__`` appends the sample's
+                positional index as the tuple's last element. Off by default
+                so every existing ``model_step`` branch (which dispatches on
+                fixed tuple lengths 4/5/6) is unaffected; callers that need to
+                join predictions back to ``data_links`` (e.g. a walk-forward
+                CV prediction collector, which needs each prediction's
+                ``app_user_id``/``record_timestamp`` to pool and order
+                results) opt in explicitly. The index is into this dataset's
+                own ``data_links`` (post ``reset_index(drop=True)``), so
+                ``dataset.data_links.iloc[idx]`` recovers the source row.
+        """
         self.data_links = linked_data.reset_index(drop=True)
         self.sampler = sampler
         self.scaler = scaler
@@ -49,6 +63,7 @@ class HealthDataset(Dataset):
         self.default_demographics = default_demographics
         self.use_sleep = use_sleep
         self.use_survey_context = use_survey_context
+        self.return_index = return_index
 
         if self.use_survey_context:
             context_cols = ["is_morning", "referent_hours_scaled", "referent_missing"]
@@ -104,6 +119,18 @@ class HealthDataset(Dataset):
             else:
                 user_indices.append(0)
 
+        if not sequences:
+            # An empty split (e.g. every response for every user fell within
+            # a longitudinal purge gap) has no sequence to infer [T, F] from.
+            # Returning a [0, T, F]-shaped-as-[0] array rather than crashing
+            # lets the dataset behave as a normal, simply empty, Dataset.
+            target_dtype = np.float32 if self.is_regression else np.int64
+            return (
+                np.zeros((0,), dtype=np.float32),
+                np.array([], dtype=target_dtype),
+                np.array([], dtype=np.int64),
+            )
+
         seqs_np = np.stack(sequences, axis=0).astype(np.float32)  # [N, T, F]
 
         if self.scaler is not None:
@@ -140,8 +167,14 @@ class HealthDataset(Dataset):
                 - features: ``float32`` tensor of shape ``[Time, Modalities]``.
                 - target: ``long`` or ``float32`` scalar tensor.
                 - user_idx: ``long`` scalar tensor.
-                - (optional) prev_pred: ``float32`` scalar tensor.
-                - (optional) idx: ``long`` scalar tensor.
+                - (optional, if demographics/sleep/survey_context configured)
+                  demographics: ``float32`` tensor.
+                - (optional, if ``return_index=True``) idx: ``long`` scalar
+                  tensor, always last regardless of what else is present, so
+                  every ``model_step``'s fixed-length (4/5/6) branch matches
+                  unchanged when this is off. ``dataset.data_links.iloc[idx]``
+                  recovers the source row (``app_user_id``,
+                  ``record_timestamp``, ...) for a prediction carrying this.
         """
         target_dtype = torch.float32 if self.is_regression else torch.long
         ret = (
@@ -161,5 +194,8 @@ class HealthDataset(Dataset):
                 parts.append(self.context_features[idx])
             demo = np.concatenate(parts).astype(np.float32)
             ret = ret + (torch.tensor(demo, dtype=torch.float32),)
+
+        if self.return_index:
+            ret = ret + (torch.tensor(idx, dtype=torch.long),)
 
         return ret

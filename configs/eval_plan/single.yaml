@@ -1,0 +1,8 @@
+# @package _global_
+
+# One train/val/test split, evaluated once. See eval_schemes.md.
+defaults:
+  - override /data: single_split
+
+eval_plan:
+  _target_: src.eval_plans.single.SingleSplitPlan

@@ -75,6 +75,7 @@ class CVHealthDataModule(HealthDataModule):
         enrollment_trail_days: float = 1.0,
         require_sensor_data: bool = True,
         use_survey_context: bool = True,
+        include_time_features: Optional[bool] = None,
         exclude_user_ids: Optional[List[int]] = None,
         high_risk_user_ids: Optional[List[int]] = None,
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
@@ -91,7 +92,6 @@ class CVHealthDataModule(HealthDataModule):
             pin_memory=pin_memory,
             train_val_test_split=train_val_test_split,
             random_state=random_state,
-            split_mode="user",
             os_filter=os_filter,
             collapse_strategy=collapse_strategy,
             use_demographics=use_demographics,
@@ -100,6 +100,7 @@ class CVHealthDataModule(HealthDataModule):
             enrollment_trail_days=enrollment_trail_days,
             require_sensor_data=require_sensor_data,
             use_survey_context=use_survey_context,
+            include_time_features=include_time_features,
             exclude_user_ids=exclude_user_ids,
             prebuilt_cohort=prebuilt_cohort,
         )

@@ -1,3 +1,4 @@
 label_history:
-  _target_: src.utils.callbacks.LabelHistoryCallback
+  _target_: src.callbacks.callbacks.LabelHistoryCallback
+
   target_user_id: 27

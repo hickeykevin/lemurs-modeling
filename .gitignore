@@ -166,3 +166,14 @@ configs/local/default.yaml
 
 # any slurm files
 slurm*
+
+# macOS Finder metadata
+.DS_Store
+
+# Reports and generated figures/tables
+reports/
+*.pdf
+*.png
+*.tex
+*.html
+*key

@@ -167,6 +167,90 @@ def test_rule_based_aggregator_dict_rules():
     assert set(agg.get_question_ids()) == {2, 3, 7, 5, 8, 12, 13}
 
 
+def test_rule_based_aggregator_string_likert_answers():
+    """Regression test: the real DB can return Likert-scale answers as
+    strings ('1'..'5') rather than numeric. Before RuleBasedAggregator
+    coerced to numeric, a string-vs-float compare (e.g. '2' >= 2.0) did not
+    raise but silently produced the wrong boolean result under pandas'
+    string dtypes -- this saturated a real aggregator config to ~100%
+    positive with no visible error. See suicide_risk.yaml's comment for the
+    live-DB incident this test locks in a fix for."""
+    from src.data.components.label_aggregators import RuleBasedAggregator
+
+    df = pd.DataFrame({
+        'survey_response_id': [1, 1, 2, 2, 3, 3],
+        'question_id':        [2, 3, 2, 3, 2, 3],
+        'answer':             ['1', '1', '2', '1', '1', '5'],
+    })
+    rules = [{'ids': [2, 3], 'op': 'ge', 'val': 2.0}]
+    agg = RuleBasedAggregator(rules=rules, combination_logic="any")
+    result = agg(df).set_index('survey_response_id')['answer']
+
+    assert result[1] == 0  # both '1' < 2.0
+    assert result[2] == 1  # '2' >= 2.0
+    assert result[3] == 1  # '5' >= 2.0
+
+
+def test_rule_based_aggregator_yes_no_text_answers():
+    """Regression test: yes/no questions return literal 'yes'/'no' strings
+    from the DB. A naive numeric coercion (pd.to_numeric) turns these into
+    NaN, which compares False against any numeric val -- silently making a
+    yes/no rule permanently False (never detecting an actual 'yes') rather
+    than raising. RuleBasedAggregator must map yes/no to 1/0 before
+    coercing, not coerce yes/no text away."""
+    from src.data.components.label_aggregators import RuleBasedAggregator
+
+    df = pd.DataFrame({
+        'survey_response_id': [1, 1, 2, 2, 3, 3],
+        'question_id':        [8, 12, 8, 12, 8, 12],
+        'answer':             ['no', 'no', 'yes', 'no', 'no', 'yes'],
+    })
+    rules = [{'ids': [8, 12], 'op': 'any_gt', 'val': 0}]
+    agg = RuleBasedAggregator(rules=rules, combination_logic="any")
+    result = agg(df).set_index('survey_response_id')['answer']
+
+    assert result[1] == 0  # both 'no'
+    assert result[2] == 1  # 'yes' on question 8
+    assert result[3] == 1  # 'yes' on question 12
+
+
+def test_rule_based_aggregator_yes_no_is_case_insensitive():
+    from src.data.components.label_aggregators import RuleBasedAggregator
+
+    df = pd.DataFrame({
+        'survey_response_id': [1, 2],
+        'question_id':        [8, 8],
+        'answer':             ['Yes', 'NO'],
+    })
+    rules = [{'ids': [8], 'op': 'any_gt', 'val': 0}]
+    agg = RuleBasedAggregator(rules=rules, combination_logic="any")
+    result = agg(df).set_index('survey_response_id')['answer']
+
+    assert result[1] == 1
+    assert result[2] == 0
+
+
+def test_rule_based_aggregator_mixed_numeric_and_yes_no_rules():
+    """A single aggregator combining a Likert rule (numeric-string answers)
+    and a yes/no rule (text answers) in the same call -- the real
+    suicide_risk/suicide_ideation/suicide_preparation/self_harm configs all
+    do exactly this."""
+    from src.data.components.label_aggregators import RuleBasedAggregator
+
+    df = pd.DataFrame({
+        'survey_response_id': [1, 1, 1, 2, 2, 2],
+        'question_id':        [2, 3, 8, 2, 3, 8],
+        'answer':             ['1', '1', 'no', '1', '1', 'yes'],
+    })
+    rules = {
+        'rule_1': {'ids': [2, 3], 'op': 'ge', 'val': 2.0},
+        'rule_2': {'ids': [8], 'op': 'any_gt', 'val': 0},
+    }
+    agg = RuleBasedAggregator(rules=rules, combination_logic="any")
+    result = agg(df).set_index('survey_response_id')['answer']
+
+    assert result[1] == 0  # Likert below threshold, no on question 8
+    assert result[2] == 1  # Likert still below threshold, but yes on question 8
 
 
 
@@ -317,16 +401,23 @@ def test_datamodule_longitudinal_split(mock_db_class, dummy_data):
     mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
     
     dm = HealthDataModule(
-    
+
         exclude_user_ids=[],
         aggregator=MeanAggregator(threshold=None),
         sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
         train_val_test_split=(0.5, 0.25, 0.25),
-        split_mode="longitudinal"
+        split_mode="longitudinal",
+        # This fixture's daily survey cadence exactly equals the sampler's 24h
+        # window, so the default auto-derived purge (also 24h) would purge
+        # every response and leave every split empty -- see
+        # test_cohort_splitter_longitudinal_purge_can_empty_a_split for that
+        # behavior in isolation. This test is only about chronological
+        # ordering across the split, so purging is disabled here.
+        purge_hours=0.0,
     )
-    
+
     dm.setup()
-    
+
     # For user 1, response 101 (2023-01-02) should be in train
     # response 102 (2023-01-03) should be in val or test
     user1_train = dm.data_train.data_links[dm.data_train.data_links['app_user_id'] == 1]
@@ -491,11 +582,15 @@ def test_regression_aggregator():
 @patch('src.data.components.cohort_builder.DatabaseService')
 def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     """Tests that the datamodule yields float targets, model trains in regression mode, and callbacks run."""
-    from src.data.components.label_aggregators import RegressionAggregator
-    from src.models.health_module import HealthRegressionLitModule
-    from src.models.components.simple_lstm import SimpleLSTM
-    from src.utils.evaluation_callbacks import RegressionMetricsCallback
     from functools import partial
+    from src.callbacks.evaluation_callbacks import RegressionMetricsCallback
+    from src.data.components.label_aggregators import RegressionAggregator
+    from src.models.components.simple_lstm import SimpleLSTM
+    from src.models.health_module import HealthRegressionLitModule
+
+
+
+
     
     mock_db = mock_db_class.return_value
     mock_db.connect.return_value = True

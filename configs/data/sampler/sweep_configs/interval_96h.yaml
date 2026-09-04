@@ -1,0 +1,5 @@
+_target_: src.data.components.samplers.IntervalAwareSampler
+bin_edges_hours: [0, 3, 6, 12, 24, 48, 72, 96]
+emit_mask: true
+normalize_by_duration: true
+include_time_features: true
