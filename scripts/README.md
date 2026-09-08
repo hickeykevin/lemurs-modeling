@@ -7,8 +7,12 @@ This directory contains the active scripts used for running and orchestrating th
 ## 🚀 Active Scripts
 
 - **[sampler_model_sweep_wrapper.sh](sampler_model_sweep_wrapper.sh)**:
-  - Translates W&B sweep agent arguments into sanitized Hydra configuration overrides.
+  - Translates W&B sweep agent arguments into sanitized Hydra configuration overrides for 120h purge baseline.
   - Dispatches `src/train.py` using `eval_plan=cyclical` with pinned parameters (`data/scaler=dual`, `purge_hours=120.0`, `use_demographics=true`, `trainer.max_epochs=75`).
+
+- **[sampler_model_sweep_72h_wrapper.sh](sampler_model_sweep_72h_wrapper.sh)**:
+  - Translates W&B sweep agent arguments into sanitized Hydra configuration overrides for 72h purge (`data.purge_hours=72.0`, `task_name=cyclical_sweep_72h`).
+  - Evaluates rolling samplers across 24h, 48h, and 72h lookbacks with apples-to-apples 72h boundary purging.
 
 - **[parallel_sweep.sbatch](parallel_sweep.sbatch)**:
   - Slurm batch array job script for launching multiple parallel W&B sweep agents across cluster nodes.

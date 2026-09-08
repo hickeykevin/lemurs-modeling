@@ -1,0 +1,73 @@
+# W&B Sweep Configuration: Sampler x Model x Modality Sweep (72h Purge, Rolling Only)
+#
+# Grid search (method: grid) -- exhaustive, not sampled. Every combination of
+# every parameter below runs exactly once (12 x 3 x 7 = 252 runs).
+#
+# Three swept axes, crossed:
+#   sampler_pkg -- rolling_<lookback>h_<window>h,
+#     lookback in [24, 48, 72], window (resample_freq) in [4, 6, 8, 12].
+#     Only Rolling sampler strategy is evaluated (offset omitted).
+#     Every value here is a self-contained config in
+#     configs/data/sampler/sweep_configs/ -- picking one is a plain Hydra
+#     group override (data/sampler=<name>), so there is no risk of a class
+#     getting an argument it doesn't accept.
+#   model_pkg -- default (LSTM), transformer, flaml_xgboost (FLAML AutoML
+#     pinned to estimator_list=[xgboost], not FLAML's usual multi-estimator
+#     search -- see configs/model/flaml_xgboost.yaml).
+#   modalities_choice -- all 7 non-empty subsets of {step, calorie, distance}.
+#     data.modalities and data/preprocessors are set from the SAME value
+#     (data/preprocessors=${modalities_choice} is a genuine Hydra multi-select).
+#
+# Fixed, not swept (see command: below): scaler=dual; os_filter=both;
+# collapse_strategy=none; use_demographics=true; use_sleep=false;
+# use_survey_context=false; require_sensor_data=true; purge_hours=72.0 (3 days).
+#
+# purge_hours=72.0 pins the boundary purge duration to the maximum lookback
+# across all runs (3 days) so that all lookback configurations (24h, 48h, 72h)
+# train on the exact same dataset splits without sample count variance, while
+# recovering 48h of training data compared to the 120h purge baseline.
+
+name: sampler_model_sweep_72h_purge_rolling
+project: lemurs-modeling
+program: src/train.py
+method: grid
+metric:
+  name: pooled/f1
+  goal: maximize
+
+parameters:
+  sampler_pkg:
+    values:
+      - rolling_24h_4h
+      - rolling_24h_6h
+      - rolling_24h_8h
+      - rolling_24h_12h
+      - rolling_48h_4h
+      - rolling_48h_6h
+      - rolling_48h_8h
+      - rolling_48h_12h
+      - rolling_72h_4h
+      - rolling_72h_6h
+      - rolling_72h_8h
+      - rolling_72h_12h
+
+  model_pkg:
+    values:
+      - default        # LSTM
+      - transformer
+      - flaml_xgboost   # FLAML AutoML, pinned to XGBoost
+
+  modalities_choice:
+    values:
+      - ["step"]
+      - ["calorie"]
+      - ["distance"]
+      - ["step", "calorie"]
+      - ["step", "distance"]
+      - ["calorie", "distance"]
+      - ["step", "calorie", "distance"]
+
+command:
+  - bash
+  - scripts/sampler_model_sweep_72h_wrapper.sh
+  - ${args_no_hyphens}
