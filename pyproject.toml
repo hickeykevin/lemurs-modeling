@@ -34,6 +34,13 @@ wbm = [
     "causal-conv1d>=1.4.0",
     "mamba-ssm>=2.2.0",
 ]
+# For model=chronos2 (src/models/components/chronos2_net.py): the pretrained/fine-tuned
+# OpenMHC/Chronos-2 encoder. Pure PyTorch -- unlike `wbm`, this runs fine on CPU (slowly)
+# for local development, not just on a GPU cluster node. `uv sync --extra chronos2`.
+chronos2 = [
+    "huggingface_hub>=0.24.0",
+    "chronos-forecasting==2.3.0",
+]
 
 
 [tool.pytest.ini_options]

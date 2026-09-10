@@ -57,35 +57,32 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.models.components._sensor_channels import (
+    DEFAULT_MODALITY_CHANNEL_MAP,
+    N_CONTINUOUS_CHANNELS,
+    N_SENSOR_CHANNELS,
+    SENSOR_CHANNELS,
+    WEEK_HOURS,
+    resample_and_pad_to_week,
+)
+
+__all__ = [
+    "SENSOR_CHANNELS",
+    "N_SENSOR_CHANNELS",
+    "N_CONTINUOUS_CHANNELS",
+    "DEFAULT_MODALITY_CHANNEL_MAP",
+    "WBM_ARCH",
+    "DEFAULT_CHECKPOINT_REPO_ID",
+    "HourPatchEmbedding",
+    "BiMamba2Block",
+    "Mamba2WeekEncoder",
+    "assemble_weekly_tensor",
+    "WBMEncoderNet",
+]
+
 # --------------------------------------------------------------------------------- #
 # Vendored from OpenMHC (MIT license) -- see module docstring for exact source.
 # --------------------------------------------------------------------------------- #
-
-# Ordered list of the pretrained encoder's 19 sensor channels (column order fixed by
-# the checkpoint). Source: openmhc._constants.SENSOR_CHANNELS.
-SENSOR_CHANNELS: List[str] = [
-    "iphone_steps",
-    "iphone_distance",
-    "iphone_flights",
-    "watch_steps",
-    "watch_distance",
-    "watch_hr",
-    "watch_energy",
-    "sleep_asleep",
-    "sleep_inbed",
-    "workout_walking",
-    "workout_cycling",
-    "workout_running",
-    "workout_other",
-    "workout_mixed_cardio",
-    "workout_strength",
-    "workout_elliptical",
-    "workout_hiit",
-    "workout_functional",
-    "workout_yoga",
-]
-N_SENSOR_CHANNELS = len(SENSOR_CHANNELS)  # 19
-N_CONTINUOUS_CHANNELS = 7  # channels 0-6 are z-scored; 7-18 pass through as identity
 
 # The published checkpoint's architecture (openmhc_manifest.json / downstream_evaluation
 # .models.wbm.model._ARCH). Loading is strict=False with a missing-keys check, so a wrong
@@ -93,14 +90,6 @@ N_CONTINUOUS_CHANNELS = 7  # channels 0-6 are z-scored; 7-18 pass through as ide
 WBM_ARCH = dict(in_dim=38, embed_dim=256, hidden_dim=64, num_layers=4, proj_dim=128, dropout=0.223)
 
 DEFAULT_CHECKPOINT_REPO_ID = "MyHeartCounts/openmhc-wbm-dp"
-
-# Our own mapping from this repo's modality names (configs/data/preprocessors/*) onto
-# the pretrained encoder's channel vocabulary -- see the "channel-mapping caveat" above.
-DEFAULT_MODALITY_CHANNEL_MAP: Dict[str, str] = {
-    "step": "iphone_steps",
-    "distance": "iphone_distance",
-    "calorie": "watch_energy",
-}
 
 
 class HourPatchEmbedding(nn.Module):
@@ -271,45 +260,18 @@ def assemble_weekly_tensor(
         (1 = missing, 0 = mapped/observed) -- the same layout the checkpoint was
         pretrained on.
     """
-    if not float(resample_freq_hours).is_integer():
-        raise ValueError(f"resample_freq_hours must be a whole number of hours, got {resample_freq_hours}")
-    hours_per_bin = int(resample_freq_hours)
+    values, observed = resample_and_pad_to_week(x_sensor, modalities, modality_channel_map, resample_freq_hours)
 
-    batch_size, num_bins, num_modalities = x_sensor.shape
-    if num_modalities != len(modalities):
-        raise ValueError(
-            f"x_sensor has {num_modalities} channels but {len(modalities)} modality names were given"
-        )
+    if norm_means is not None and norm_stds is not None:
+        # Only the 7 continuous channels are z-scored; 7-18 pass through as identity,
+        # matching the checkpoint's own pretraining/eval normalization.
+        cont = values[:, :, :N_CONTINUOUS_CHANNELS]
+        cont_observed = observed[:, :, :N_CONTINUOUS_CHANNELS]
+        cont = torch.where(cont_observed, (cont - norm_means) / norm_stds, cont)
+        values = torch.cat([cont, values[:, :, N_CONTINUOUS_CHANNELS:]], dim=-1)
 
-    device = x_sensor.device
-    observed_hours = num_bins * hours_per_bin
-    values = torch.zeros(batch_size, observed_hours, N_SENSOR_CHANNELS, device=device, dtype=x_sensor.dtype)
-    missing = torch.ones(batch_size, observed_hours, N_SENSOR_CHANNELS, device=device, dtype=x_sensor.dtype)
-
-    for col_idx, name in enumerate(modalities):
-        mapped = modality_channel_map.get(name)
-        if mapped is None:
-            continue
-        if mapped not in SENSOR_CHANNELS:
-            raise ValueError(f"modality_channel_map[{name!r}] = {mapped!r} is not one of SENSOR_CHANNELS")
-        ch_idx = SENSOR_CHANNELS.index(mapped)
-
-        series = torch.repeat_interleave(x_sensor[:, :, col_idx], hours_per_bin, dim=1)  # [B, observed_hours]
-        if ch_idx < N_CONTINUOUS_CHANNELS and norm_means is not None and norm_stds is not None:
-            series = (series - norm_means[ch_idx]) / norm_stds[ch_idx]
-
-        values[:, :, ch_idx] = series
-        missing[:, :, ch_idx] = 0.0
-
-    week_hours = 168
-    if observed_hours < week_hours:
-        pad = week_hours - observed_hours
-        values = F.pad(values, (0, 0, pad, 0))  # left-pad the time dimension
-        missing = F.pad(missing, (0, 0, pad, 0), value=1.0)
-    elif observed_hours > week_hours:
-        values = values[:, -week_hours:, :]
-        missing = missing[:, -week_hours:, :]
-
+    values = values * observed  # zero out anything unobserved/unmapped/padded
+    missing = (~observed).to(values.dtype)
     return torch.cat([values, missing], dim=-1)  # [B, 168, 38]
 
 
