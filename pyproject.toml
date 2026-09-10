@@ -23,6 +23,11 @@ dependencies = [
     "flaml[automl]>=2.5.0",
     "streamlit>=1.58.0",
     "sshtunnel>=0.4.0",
+    "matplotlib>=3.11.1",
+    "seaborn>=0.13.2",
+    "torchaudio>=2.11.0",
+    "av>=18.0.0",
+    "soundfile>=0.14.0",
 ]
 
 [project.optional-dependencies]
@@ -79,5 +84,8 @@ torch = [
   { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 torchvision = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchaudio = [
   { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
