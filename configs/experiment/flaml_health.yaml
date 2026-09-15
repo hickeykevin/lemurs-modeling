@@ -5,7 +5,7 @@
 
 defaults:
   - override /data: default
-  - override /data/preprocessors: [step]
+  - override /data/modalities: step
   - override /model: flaml
   - override /callbacks: [classification_metrics,confusion_matrix]
   - override /trainer: cpu
@@ -25,5 +25,4 @@ callbacks:
 
 data:
   os_filter: both
-  collapse_strategy: mean  
-  modalities: ["step"]
+  collapse_strategy: mean

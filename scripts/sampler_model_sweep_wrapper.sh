@@ -15,7 +15,7 @@ for arg in "$@"; do
             ;;
         modalities_choice=*)
             val="${arg#*=}"
-            ARGS="$ARGS \"data.modalities=$val\" \"data/preprocessors=$val\""
+            ARGS="$ARGS \"data/modalities=$val\""
             ;;
         *)
             ARGS="$ARGS \"$arg\""

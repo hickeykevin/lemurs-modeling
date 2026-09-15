@@ -44,6 +44,18 @@ The data pipeline configuration is split into modular sub-directories. You can s
   * [**`robust.yaml`**](scaler/robust.yaml): Scales features globally using statistics that are robust to outliers (using interquartile range).
   * [**`none.yaml`**](scaler/none.yaml): Bypasses feature scaling.
 
+### 4. 🧩 Modalities & Preprocessors
+* **Path**: `configs/data/modalities/`
+* **Purpose**: Configures input sensor modalities (`data.modalities`) alongside their matching preprocessors (`data/preprocessors`). Selecting any modality combination automatically selects the matching preprocessors without needing to manually synchronize both.
+* **Available Combinations (7 total + alias)**:
+  * `step.yaml`: Steps only (`modalities: ["step"]`, preprocessors: `[step]`)
+  * `calorie.yaml`: Calories only (`modalities: ["calorie"]`, preprocessors: `[calorie]`)
+  * `distance.yaml`: Distance only (`modalities: ["distance"]`, preprocessors: `[distance]`)
+  * `step_calorie.yaml`: Steps + Calories (`modalities: ["step", "calorie"]`, preprocessors: `[step, calorie]`)
+  * `step_distance.yaml`: Steps + Distance (`modalities: ["step", "distance"]`, preprocessors: `[step, distance]`)
+  * `calorie_distance.yaml`: Calories + Distance (`modalities: ["calorie", "distance"]`, preprocessors: `[calorie, distance]`)
+  * `step_calorie_distance.yaml` (alias: `all.yaml`): All three modalities
+
 ---
 
 ### 🔄 Daily Survey Collapsing (`collapse_strategy`)
@@ -72,6 +84,9 @@ uv run src/train.py data/scaler=dual model.net.input_size=6
 
 # Swap clinical target aggregators (Classification)
 uv run src/train.py data/aggregator=suicide_risk
+
+# Swap modality combination (automatically configures matching preprocessors)
+uv run src/train.py data/modalities=step_distance
 ```
 
 To override specific properties:

@@ -3,10 +3,9 @@ defaults:
   - aggregator: suicide_risk
   - sampler: sweep_configs/offset_48h_6h
   - scaler: dual
-  - preprocessors: [step, distance]
+  - modalities: step_distance
 
 _target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
-modalities: ["step", "distance"]
 
 # fold_sizing=pct: train window EXPANDS from a user's earliest response; test
 # is a fixed % of that user's own total responses. See eval_schemes.md.

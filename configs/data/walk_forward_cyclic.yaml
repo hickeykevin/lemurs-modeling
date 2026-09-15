@@ -3,10 +3,9 @@ defaults:
   - aggregator: suicide_risk
   - sampler: sweep_configs/offset_48h_6h
   - scaler: dual
-  - preprocessors: [step, distance]
+  - modalities: step_distance
 
 _target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
-modalities: ["step", "distance"]
 
 # fold_sizing=cyclic: fixed-width train window that SLIDES and WRAPS past
 # 100% back to 0%. train_width_pct + step_pct == 1.0 makes train the exact
