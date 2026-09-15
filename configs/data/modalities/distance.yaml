@@ -1,0 +1,6 @@
+# @package data
+defaults:
+  - /data/preprocessors@preprocessors: [distance]
+
+modalities:
+  - distance

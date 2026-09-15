@@ -1,0 +1,8 @@
+# @package data
+defaults:
+  - /data/preprocessors@preprocessors: [step, calorie, distance]
+
+modalities:
+  - step
+  - calorie
+  - distance
