@@ -354,6 +354,9 @@ class HealthLitModule(LightningModule):
 
 
 from flaml import AutoML
+#adding new import
+from src.data.components.tabular_features import SummaryStatsFeaturizer
+
 
 class FLAMLHealthModule(LightningModule):
     """A LightningModule wrapper for FLAML AutoML.
@@ -372,6 +375,8 @@ class FLAMLHealthModule(LightningModule):
         task: str = "classification",
         auto_class_weights: bool = False,
         class_weights: Optional[List[float]] = None,
+        #adding featurizer to init
+        featurizer: Optional[SummaryStatsFeaturizer] = None,
         **kwargs
     ):
         """Initializes the FLAMLHealthModule.
@@ -394,18 +399,79 @@ class FLAMLHealthModule(LightningModule):
         
         self.automl = AutoML()
         self.task = task
+        self.featurizer = featurizer
 
-    def _flatten_batch(self, x: torch.Tensor) -> np.ndarray:
-        """Flattens sequential data for tabular ML models.
+
+    def _split_batch(self, batch: Any, stage: str) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        """get x, y, demographics and optional demographics from a batch.
+
+        Batch layout is (x, y, user_idx, [demographics], [idx]) -- see
+        HealthDataset.__getitem__. The trailing idx (present when this
+        stage's dataset was built with return_index=True) is stripped first,
+        using the dataset's own flag -- not batch length -- since a
+        length-4 batch is ambiguous: it's (x,y,user_idx,demographics) with
+        no idx, or (x,y,user_idx,idx) with no demographics, depending on
+        that flag. Mirrors HealthLitModule._maybe_strip_index.
+        """
+        ## Remove the sample index if it is included.
+        dm = getattr(self._trainer, "datamodule", None) if self._trainer is not None else None
+        dataset = getattr(dm, f"data_{stage}", None) if dm is not None else None
+        if getattr(dataset, "return_index", False):
+            batch = batch[:-1]
+        ## Get x, y, and demographics.
+        if len(batch) >= 4:
+            x, y, demographics = batch[0], batch[1], batch[3]
+        else:
+            x, y, demographics = batch[0], batch[1], None
+        return x, y, demographics
+
+#def flatten_batch
+    def _prepare_features(self, x: torch.Tensor, demographics: Optional[torch.Tensor] = None) -> np.ndarray:
+
+        """Convert sensor data into tabular features.
 
         Args:
             x: Input tensor of shape [batch_size, time_steps, features].
+            demographics: Optional tensor of shape [batch_size, demographics_dim].
 
         Returns:
-            NumPy array of shape [batch_size, time_steps * features].
+            NumPy array of shape [batch_size, n_features] -- summary-stats
+            features if a featurizer is set, else the legacy raw
+            [time_steps * features] flatten -- with demographics columns
+            appended when given.
         """
-        # x: [B, T, F] -> [B, T*F]
-        return x.cpu().numpy().reshape(x.shape[0], -1)
+        x_np = x.cpu().numpy()
+
+
+        if self.featurizer is not None:
+            features = self.featurizer.transform(x_np)
+
+
+
+#testing size of a batch of data
+            #modality_order = sorted(self.trainer.datamodule.hparams.modalities)
+            #print("Original x shape:", x_np.shape)
+            #print("Column order:", modality_order)
+            #for i, mod in enumerate(modality_order):
+                #print(f"First sample, {mod} (col {i}):", x_np[0, :, i])
+
+            #names = self.featurizer.feature_names(modality_order)
+            #print("Computed features (labeled):")
+            #for name, val in zip(names, features[0]):
+                #print(f"  {name:20s} = {val:.4f}")
+
+
+
+        else:
+            # x: [B, T, F] -> [B, T*F]
+            features = x_np.reshape(x_np.shape[0], -1)
+
+        #adding demographics if available
+        if demographics is not None:
+            features = np.concatenate([features, demographics.cpu().numpy()], axis=1)
+
+        return features
+
 
     def setup(self, stage: str, **kwargs) -> None:
         """Collects the entire training set and fits the AutoML model."""
@@ -431,10 +497,15 @@ class FLAMLHealthModule(LightningModule):
             
             X_list, y_list = [], []
             for batch in train_dataloader:
-                x, y = batch[:2]
-                X_list.append(self._flatten_batch(x))
+                ## Get sensor data, labels, and optional demographics.
+                x, y, demographics = self._split_batch(batch, stage="train")
+                ## Convert each sample to one tabular feature row.
+                #import pdb
+                #pdb.set_trace()
+                X_list.append(self._prepare_features(x, demographics))
                 y_list.append(y.cpu().numpy())
-                
+
+            #pdb.set_trace()    
             X_train = np.concatenate(X_list, axis=0)
             y_train = np.concatenate(y_list, axis=0)
 
@@ -461,7 +532,7 @@ class FLAMLHealthModule(LightningModule):
             fit_kwargs = dict(self.hparams.automl_config)
             if sample_weight is not None:
                 fit_kwargs["sample_weight"] = sample_weight
-
+                #pdb.set_trace()
             # Fit FLAML (this may take some time depending on automl_config.time_budget)
             self.automl.fit(
                 X_train=X_train,
@@ -487,8 +558,13 @@ class FLAMLHealthModule(LightningModule):
             batch: A tuple containing (features, targets, ...).
             batch_idx: The index of the current batch.
         """
-        x, y = batch[:2]
-        X_val = self._flatten_batch(x)
+        # Get sensor data, labels, and optional demographics.
+
+        x, y, demographics = self._split_batch(batch, stage="val")
+        ## Convert the batch to tabular features.
+
+        X_val = self._prepare_features(x, demographics)
+
         
         # Predict using the fitted AutoML object
         y_pred = self.automl.predict(X_val)
@@ -513,8 +589,13 @@ class FLAMLHealthModule(LightningModule):
             batch: A tuple containing (features, targets, ...).
             batch_idx: The index of the current batch.
         """
-        x, y = batch[:2]
-        X_test = self._flatten_batch(x)
+        ## Get sensor data, labels, and optional demographics.
+
+        x, y, demographics = self._split_batch(batch, stage="test")
+        ## Convert the batch to tabular features.
+
+        X_test = self._prepare_features(x, demographics)
+
         
         y_pred = self.automl.predict(X_test)
         y_pred_tensor = torch.tensor(y_pred, device=self.device)
