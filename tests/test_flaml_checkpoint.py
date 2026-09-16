@@ -5,7 +5,11 @@ import pytest
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from lightning import LightningDataModule, Trainer
+
+
 from src.models.health_module import FLAMLHealthModule
+#importing featurizer
+from src.data.components.tabular_features import SummaryStatsFeaturizer
 
 
 class DummyDataModule(LightningDataModule):
@@ -13,6 +17,24 @@ class DummyDataModule(LightningDataModule):
         super().__init__()
         train_ds = TensorDataset(X_train, y_train)
         val_ds = TensorDataset(X_val, y_val)
+        self._train_loader = DataLoader(train_ds, batch_size=10)
+        self._val_loader = DataLoader(val_ds, batch_size=10)
+
+    def train_dataloader(self):
+        return self._train_loader
+
+    def val_dataloader(self):
+        return self._val_loader
+
+class DemoDataModule(LightningDataModule):
+    """Like DummyDataModule, but batches include a user_idx and a demographics
+    tensor -- (x, y, user_idx, demographics) -- matching HealthDataset's real
+    __getitem__ layout, so _split_batch has something real to unpack."""
+
+    def __init__(self, X_train, y_train, demo_train, X_val, y_val, demo_val):
+        super().__init__()
+        train_ds = TensorDataset(X_train, y_train, torch.zeros(len(y_train), dtype=torch.long), demo_train)
+        val_ds = TensorDataset(X_val, y_val, torch.zeros(len(y_val), dtype=torch.long), demo_val)
         self._train_loader = DataLoader(train_ds, batch_size=10)
         self._val_loader = DataLoader(val_ds, batch_size=10)
 
@@ -122,3 +144,61 @@ def test_flaml_auto_class_weights():
     assert hasattr(module.automl, "best_estimator")
     assert module.automl.best_estimator is not None
 
+def test_flaml_with_summary_stats_featurizer():
+    """Feature count should depend on modalities * n_stats, not time_steps,
+    once a featurizer is set."""
+    np.random.seed(0)
+    torch.manual_seed(0)
+
+    batch_size = 40
+    time_steps = 15
+    features = 3
+    num_classes = 2
+
+    X_train = torch.randn(batch_size, time_steps, features)
+    y_train = torch.randint(0, num_classes, (batch_size,))
+    X_val = torch.randn(12, time_steps, features)
+    y_val = torch.randint(0, num_classes, (12,))
+
+    dm = DummyDataModule(X_train, y_train, X_val, y_val)
+
+    featurizer = SummaryStatsFeaturizer()  # default 5 stats
+    automl_config = {"time_budget": 2, "estimator_list": ["rf"], "verbose": 0}
+    module = FLAMLHealthModule(automl_config=automl_config, task="classification", featurizer=featurizer)
+
+    trainer = Trainer(default_root_dir="logs/debug", max_epochs=1, accelerator="cpu", logger=False, enable_checkpointing=False)
+    trainer.fit(module, datamodule=dm)
+
+    assert module.automl.best_estimator is not None
+    expected_width = features * len(featurizer.stats)  # 3 * 5 = 15, independent of time_steps
+    assert module.automl.model.estimator.n_features_in_ == expected_width
+
+    val_out = module.validation_step((X_val, y_val), 0)
+    assert val_out["preds"].shape == (12,)
+
+
+def test_flaml_with_featurizer_and_demographics():
+    """Demographics columns should be concatenated onto the featurized row."""
+    np.random.seed(1)
+    torch.manual_seed(1)
+
+    batch_size, time_steps, features, demo_dim = 40, 8, 3, 2
+
+    X_train = torch.randn(batch_size, time_steps, features)
+    y_train = torch.randint(0, 2, (batch_size,))
+    demo_train = torch.randn(batch_size, demo_dim)
+    X_val = torch.randn(10, time_steps, features)
+    y_val = torch.randint(0, 2, (10,))
+    demo_val = torch.randn(10, demo_dim)
+
+    dm = DemoDataModule(X_train, y_train, demo_train, X_val, y_val, demo_val)
+
+    featurizer = SummaryStatsFeaturizer()
+    automl_config = {"time_budget": 2, "estimator_list": ["rf"], "verbose": 0}
+    module = FLAMLHealthModule(automl_config=automl_config, task="classification", featurizer=featurizer)
+
+    trainer = Trainer(default_root_dir="logs/debug", max_epochs=1, accelerator="cpu", logger=False, enable_checkpointing=False)
+    trainer.fit(module, datamodule=dm)
+
+    expected_width = features * len(featurizer.stats) + demo_dim  # 3*5 + 2 = 17
+    assert module.automl.model.estimator.n_features_in_ == expected_width
