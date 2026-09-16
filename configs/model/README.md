@@ -18,13 +18,17 @@ The primary deep learning model for longitudinal sequence learning. It takes tim
     uv run src/train.py model=default
     ```
 
-### 2. `flaml.yaml` (AutoML Baseline)
-Integrates with Microsoft's **FLAML** (Fast and Lightweight AutoML) library. It flattens the input time-series window and automatically runs a search over traditional machine learning models (LightGBM, Random Forest, XGBoost) to find the best fit.
+### 2. `flaml.yaml` / `flaml_xgboost.yaml` (AutoML / Tree Model Baselines)
+Integrates with Microsoft's **FLAML** (Fast and Lightweight AutoML) library. `flaml.yaml` searches over LightGBM, Random Forest, XGBoost, and Extra Trees; `flaml_xgboost.yaml` pins the search to XGBoost only.
+*   **Feature engineering:** Both configs compose in `model/featurizer=summary_stats` by default (see `configs/model/featurizer/summary_stats.yaml`), which collapses each modality's sampled `[Time, Modality]` window into per-modality summary statistics (mean, median, std, min, max) instead of feeding raw per-bin values. Implementation: `src/data/components/tabular_features.py` (`SummaryStatsFeaturizer`).
 *   **Use Case:** Establishes a highly competitive non-deep-learning baseline.
 *   **Command:**
     ```bash
     uv run src/train.py model=flaml
+    uv run src/train.py model=flaml_xgboost
     ```
+
+
 
 ### 3. `lag.yaml` (Last-Value Baseline)
 A naive lag benchmark that predicts that the user's current symptom state is exactly identical to their last completed survey answer.
@@ -63,6 +67,12 @@ Deep learning models (like `default.yaml`) are composed of multiple sub-configur
 * **Path**: `configs/model/scheduler/`
 * **Purpose**: Controls how the optimizer learning rate decays or adjusts throughout training epochs.
 * **Example (`scheduler/cosine.yaml`)**: Targets `torch.optim.lr_scheduler.CosineAnnealingLR` to dynamically reduce learning rates following a cosine curve.
+
+
+### 4. Tabular Feature Engineering (`featurizer/`)
+* **Path**: `configs/model/featurizer/`
+* **Purpose**: Used by `FLAMLHealthModule` (`flaml.yaml`, `flaml_xgboost.yaml`) to convert a sampled `[Time, Modality]` sensor window into a tabular record for tree models, instead of a raw flatten.
+* **Example (`featurizer/summary_stats.yaml`)**: Targets `src.data.components.tabular_features.SummaryStatsFeaturizer` and lists which per-modality statistics to compute (`stats`), and how many trailing time-feature columns to exclude (`exclude_last_n_cols`).
 
 ---
 
