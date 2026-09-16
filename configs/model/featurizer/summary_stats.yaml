@@ -1,0 +1,26 @@
+# Featurizer config for tabular tree models (FLAML/XGBoost/etc.).
+# Collapses each modality's time-series window into summary statistics
+# instead of feeding raw per-bin values.
+_target_: src.data.components.tabular_features.SummaryStatsFeaturizer
+
+# Which statistics to compute, and the order they appear in each modality's block.
+stats: [mean, median, std, min, max]
+
+
+
+# RollingSampler appends 4 cyclic time columns (sin_hour, cos_hour, sin_weekday,
+# cos_weekday) after the modality columns when include_time_features=true
+# (the default in configs/data/sampler/rolling.yaml and rolling_hour.yaml).
+# Set to 4 to drop them before computing stats -- they describe *when* the
+# window is, not modality signal. Set to 0 if include_time_features=false.
+
+
+# RollingSampler adds 4 time columns at the end.
+# Remove them before calculating statistics.
+# Use 0 if time features are not included.
+exclude_last_n_cols: 4
+
+
+#data.include_time_features=False --> model.featurizer.exclude_last_n_cols=0
+
+# if data.include_time_features=True  --> the config already has: exclude_last_n_cols: 4
