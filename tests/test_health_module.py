@@ -37,7 +37,7 @@ def test_health_lit_module():
     y = torch.randint(0, num_classes, (batch_size,))
     # user_idx: [Batch]
     user_idx = torch.zeros(batch_size, dtype=torch.long)
-    batch = (x, y, user_idx)
+    batch = {"features": x, "targets": y, "user_indices": user_idx}
     
     # 4. Test forward pass
     output = module(x)
@@ -150,7 +150,7 @@ def test_health_lit_module_num_classes_survives_single_class_val_fold():
             x = torch.zeros(4, 24, 2)
             y = torch.zeros(4, dtype=torch.long)
             user_idx = torch.zeros(4, dtype=torch.long)
-            return [(x, y, user_idx)]
+            return [{"features": x, "targets": y, "user_indices": user_idx}]
 
     class FakeTrainer:
         datamodule = FakeDataModule()
@@ -174,7 +174,7 @@ def test_model_step_without_trainer_is_unaffected_by_stage_param():
     x = torch.randn(batch_size, 24, 2)
     y = torch.randint(0, 3, (batch_size,))
     user_idx = torch.zeros(batch_size, dtype=torch.long)
-    batch = (x, y, user_idx)
+    batch = {"features": x, "targets": y, "user_indices": user_idx}
 
     loss, preds, targets, logits = module.model_step(batch, stage="test")
     assert loss.shape == torch.Size([])
@@ -203,7 +203,12 @@ def test_model_step_strips_trailing_index_when_dataset_declares_return_index():
     y = torch.randint(0, 3, (batch_size,))
     user_idx = torch.zeros(batch_size, dtype=torch.long)
     idx = torch.arange(batch_size, dtype=torch.long)
-    batch_with_idx = (x, y, user_idx, idx)  # length 4, mimics return_index=True with no demographics
+    batch_with_idx = {
+        "features": x,
+        "targets": y,
+        "user_indices": user_idx,
+        "sample_idx": idx,
+    }
 
     class FakeDataset:
         return_index = True
@@ -216,8 +221,7 @@ def test_model_step_strips_trailing_index_when_dataset_declares_return_index():
 
     module._trainer = FakeTrainer()
 
-    # Must not raise (would raise a shape mismatch in net.forward if idx were
-    # fed through as demographics instead of being stripped).
+    # Must not raise (sample_idx key in dict batch does not collide with demographics).
     loss, preds, targets, logits = module.model_step(batch_with_idx, stage="test")
     assert loss.shape == torch.Size([])
     assert preds.shape == (batch_size,)
@@ -239,7 +243,12 @@ def test_model_step_keeps_demographics_when_dataset_does_not_return_index():
     y = torch.randint(0, 3, (batch_size,))
     user_idx = torch.zeros(batch_size, dtype=torch.long)
     demographics = torch.randn(batch_size, demographics_dim)
-    batch = (x, y, user_idx, demographics)
+    batch = {
+        "features": x,
+        "targets": y,
+        "user_indices": user_idx,
+        "demographics": demographics,
+    }
 
     class FakeDataset:
         return_index = False
@@ -254,6 +263,31 @@ def test_model_step_keeps_demographics_when_dataset_does_not_return_index():
 
     loss, preds, targets, logits = module.model_step(batch, stage="test")
     assert loss.shape == torch.Size([])
+
+
+def test_model_step_with_dict_batch():
+    """Verify that model_step consumes modern dictionary batches cleanly."""
+    batch_size = 4
+    input_size = 2
+    demographics_dim = 3
+    net = SimpleLSTM(input_size=input_size, hidden_size=8, num_layers=1, output_size=3)
+    if hasattr(net, "init_demographics"):
+        net.init_demographics(demographics_dim)
+    module = HealthLitModule(net=net, optimizer=lambda params: torch.optim.Adam(params, lr=1e-3))
+    module.setup(stage="fit", num_classes=3)
+
+    dict_batch = {
+        "features": torch.randn(batch_size, 24, input_size),
+        "targets": torch.randint(0, 3, (batch_size,)),
+        "user_indices": torch.zeros(batch_size, dtype=torch.long),
+        "demographics": torch.randn(batch_size, demographics_dim),
+        "sample_idx": torch.arange(batch_size, dtype=torch.long),
+    }
+
+    loss, preds, targets, logits = module.model_step(dict_batch, stage="test")
+    assert loss.shape == torch.Size([])
+    assert preds.shape == (batch_size,)
+    assert torch.equal(targets, dict_batch["targets"])
 
 
 if __name__ == "__main__":

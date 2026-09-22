@@ -156,32 +156,27 @@ class HealthDataset(Dataset):
         """Returns the number of samples in the dataset."""
         return len(self._sequences)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, ...]:
-        """Returns the pre-computed sequence, target, and user index for index *idx*.
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Returns the pre-computed sequence, target, user index, and context features.
 
         Args:
             idx (int): Sample index.
 
         Returns:
-            Tuple[torch.Tensor, ...]:
-                - features: ``float32`` tensor of shape ``[Time, Modalities]``.
-                - target: ``long`` or ``float32`` scalar tensor.
-                - user_idx: ``long`` scalar tensor.
-                - (optional, if demographics/sleep/survey_context configured)
-                  demographics: ``float32`` tensor.
-                - (optional, if ``return_index=True``) idx: ``long`` scalar
-                  tensor, always last regardless of what else is present, so
-                  every ``model_step``'s fixed-length (4/5/6) branch matches
-                  unchanged when this is off. ``dataset.data_links.iloc[idx]``
-                  recovers the source row (``app_user_id``,
-                  ``record_timestamp``, ...) for a prediction carrying this.
+            Dict[str, torch.Tensor]:
+                - "features": ``float32`` tensor of shape ``[Time, Modalities]``.
+                - "targets": ``long`` or ``float32`` scalar tensor.
+                - "user_indices": ``long`` scalar tensor.
+                - "demographics": (optional) ``float32`` tensor of shape ``[DemographicsDim]``.
+                - "sample_idx": (optional) ``long`` scalar tensor if ``return_index=True``.
+                  ``dataset.data_links.iloc[sample_idx]`` recovers the source row.
         """
         target_dtype = torch.float32 if self.is_regression else torch.long
-        ret = (
-            torch.from_numpy(self._sequences[idx]),
-            torch.tensor(self._targets[idx], dtype=target_dtype),
-            torch.tensor(self._user_indices[idx], dtype=torch.long),
-        )
+        sample: Dict[str, torch.Tensor] = {
+            "features": torch.from_numpy(self._sequences[idx]),
+            "targets": torch.tensor(self._targets[idx], dtype=target_dtype),
+            "user_indices": torch.tensor(self._user_indices[idx], dtype=torch.long),
+        }
 
         if self.demographics_map is not None or self.use_sleep or self.use_survey_context:
             parts = []
@@ -193,9 +188,9 @@ class HealthDataset(Dataset):
             if self.use_survey_context:
                 parts.append(self.context_features[idx])
             demo = np.concatenate(parts).astype(np.float32)
-            ret = ret + (torch.tensor(demo, dtype=torch.float32),)
+            sample["demographics"] = torch.tensor(demo, dtype=torch.float32)
 
         if self.return_index:
-            ret = ret + (torch.tensor(idx, dtype=torch.long),)
+            sample["sample_idx"] = torch.tensor(idx, dtype=torch.long)
 
-        return ret
+        return sample

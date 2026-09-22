@@ -80,14 +80,18 @@ class PredictionCollectorCallback(Callback):
                 "batch element as the index."
             )
 
-        idx_tensor = batch[-1]
+        if not isinstance(batch, dict) or "sample_idx" not in batch:
+            raise RuntimeError(
+                f"Expected dictionary batch containing 'sample_idx' "
+                f"(return_index=True contract), got {type(batch)}. "
+                "The batch structure may not match what return_index=True produces."
+            )
+
+        idx_tensor = batch["sample_idx"]
         if not torch.is_tensor(idx_tensor) or idx_tensor.dtype != torch.long:
             raise RuntimeError(
-                f"Expected the last batch element to be a long index tensor "
-                f"(return_index=True's contract), got {type(idx_tensor)} / "
-                f"{getattr(idx_tensor, 'dtype', None)}. The batch shape may "
-                "not match what return_index=True produces any more -- check "
-                "HealthDataset.__getitem__."
+                f"Expected batch['sample_idx'] to be a long tensor, got {type(idx_tensor)} / "
+                f"{getattr(idx_tensor, 'dtype', None)}."
             )
 
         idx = idx_tensor.detach().cpu().numpy()

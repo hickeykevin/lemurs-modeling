@@ -89,13 +89,14 @@ def test_val_and_test_datasets_return_index_but_train_does_not():
     val_item = dm.data_val[0]
     test_item = dm.data_test[0]
 
-    # use_demographics=False still yields a fixed-width default demographics
-    # vector as the 4th element (DemographicsProcessor's fallback), present
-    # identically on every split. val/test add idx as a genuine 5th element;
-    # train does not.
-    assert len(train_item) == len(val_item) - 1 == len(test_item) - 1
-    assert val_item[-1].dtype == torch.long
-    assert test_item[-1].dtype == torch.long
+    assert isinstance(train_item, dict)
+    assert isinstance(val_item, dict)
+    assert isinstance(test_item, dict)
+    assert "sample_idx" not in train_item
+    assert "sample_idx" in val_item
+    assert "sample_idx" in test_item
+    assert val_item["sample_idx"].dtype == torch.long
+    assert test_item["sample_idx"].dtype == torch.long
 
 
 def test_index_recovers_the_correct_source_row():
@@ -104,7 +105,7 @@ def test_index_recovers_the_correct_source_row():
 
     for i in range(len(dm.data_test)):
         item = dm.data_test[i]
-        idx = item[-1].item()
+        idx = item["sample_idx"].item()
         assert idx == i
         row = dm.data_test.data_links.iloc[idx]
         assert row["app_user_id"] in (1, 2)
@@ -118,8 +119,9 @@ def test_dataloaders_carry_the_index_through_batching():
     val_batch = next(iter(dm.val_dataloader()))
     train_batch = next(iter(dm.train_dataloader()))
 
-    assert len(test_batch) == len(train_batch) + 1  # ... + idx
-    assert len(val_batch) == len(train_batch) + 1
+    assert "sample_idx" in test_batch
+    assert "sample_idx" in val_batch
+    assert "sample_idx" not in train_batch
 
 
 def test_current_fold_out_of_range_raises():

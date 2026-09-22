@@ -139,67 +139,28 @@ class HealthLitModule(LightningModule):
         train_loader = self.trainer.datamodule.train_dataloader()
         counts = np.zeros(self.num_classes, dtype=np.float64)
         for batch in train_loader:
-            y = batch[1].detach().cpu().numpy().astype(int)
+            y_tensor = batch["targets"]
+            y = y_tensor.detach().cpu().numpy().astype(int)
             counts += np.bincount(y, minlength=self.num_classes)[: self.num_classes]
         counts = np.maximum(counts, 1.0)
         weights = counts.sum() / (self.num_classes * counts)
         return torch.tensor(weights, dtype=torch.float, device=self.device)
 
-    def _maybe_strip_index(self, batch: Any, stage: str) -> Any:
-        """Drops a trailing sample-index tensor before the fixed-length dispatch below runs.
-
-        ``HealthDataset.__getitem__`` appends ``idx`` as the true last tuple
-        element when built with ``return_index=True`` (see
-        ``WalkForwardHealthDataModule``, which sets this on ``data_val``/
-        ``data_test`` but not ``data_train``). Undetected, that idx tensor
-        would be destructured by the length-based dispatch below as if it
-        were the demographics tensor and fed straight into the network,
-        silently corrupting both training and evaluation rather than merely
-        confusing a prediction-collecting callback.
-
-        Checked per call against the *current* stage's dataset (rather than
-        a static flag on this module) so it can never drift out of sync with
-        what the datamodule actually built for that stage, and so the same
-        module instance handles a datamodule where only some stages return
-        an index (as ``WalkForwardHealthDataModule`` does) correctly.
-
-        Uses ``self._trainer`` (the private attribute), not the ``trainer``
-        property: the property raises ``RuntimeError`` when this module is
-        not attached to a ``Trainer`` (e.g. ``model_step`` called directly in
-        a unit test on a bare module), rather than returning ``None`` the way
-        a plain ``getattr`` fallback would expect.
-        """
-        dm = getattr(self._trainer, "datamodule", None) if self._trainer is not None else None
-        dataset = getattr(dm, f"data_{stage}", None) if dm is not None else None
-        if getattr(dataset, "return_index", False):
-            return batch[:-1]
-        return batch
-
     def model_step(
-        self, batch: Any, stage: str = "train"
+        self, batch: Dict[str, torch.Tensor], stage: str = "train"
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single step through the model.
 
         Args:
-            batch: A tuple containing features, targets, user_indices, etc.
-            stage: One of "train", "val", "test" -- which dataset's
-                ``return_index`` flag to check (see ``_maybe_strip_index``).
+            batch: A dict containing 'features', 'targets', and optional 'demographics'.
+            stage: One of "train", "val", "test".
 
         Returns:
             A tuple of (loss, predictions, targets, logits).
         """
-        batch = self._maybe_strip_index(batch, stage)
-
-        if len(batch) == 4:
-            x, y, _, demographics = batch
-        elif len(batch) == 6:
-            x, y, _, _, _, demographics = batch
-        elif len(batch) == 5:
-            x, y, _, _, _ = batch
-            demographics = None
-        else:
-            x, y = batch[0], batch[1]
-            demographics = None
+        x = batch["features"]
+        y = batch["targets"]
+        demographics = batch.get("demographics")
 
         logits = self.forward(x, demographics)
         loss = self.criterion(logits, y)
@@ -278,7 +239,7 @@ class HealthLitModule(LightningModule):
 
             def _scan_val_labels() -> int:
                 val_dataloader = self.trainer.datamodule.val_dataloader()
-                y_list = [batch[1].cpu().numpy() for batch in val_dataloader]
+                y_list = [batch["targets"].cpu().numpy() for batch in val_dataloader]
                 return int(np.max(np.concatenate(y_list, axis=0))) + 1
 
             self.num_classes = _resolve_num_classes(self._trainer, explicit, _scan_val_labels)
@@ -289,7 +250,7 @@ class HealthLitModule(LightningModule):
                 train_ds = dm.data_train
                 if len(train_ds) > 0:
                     sample = train_ds[0]
-                    input_size = sample[0].shape[-1]
+                    input_size = sample["features"].shape[-1]
                     if hasattr(self.net, "init_input_size"):
                         self.net.init_input_size(input_size)
             if hasattr(dm, "demographics_dim") and dm.demographics_dim is not None:
@@ -401,77 +362,64 @@ class FLAMLHealthModule(LightningModule):
         self.task = task
         self.featurizer = featurizer
 
+        # Register custom learners (e.g. svm_pipeline)
+        try:
+            from src.models.components.flaml_custom import register_custom_learners
+            register_custom_learners(self.automl)
+        except ImportError:
+            try:
+                from models.components.flaml_custom import register_custom_learners
+                register_custom_learners(self.automl)
+            except ImportError:
+                pass
 
-    def _split_batch(self, batch: Any, stage: str) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        """get x, y, demographics and optional demographics from a batch.
-
-        Batch layout is (x, y, user_idx, [demographics], [idx]) -- see
-        HealthDataset.__getitem__. The trailing idx (present when this
-        stage's dataset was built with return_index=True) is stripped first,
-        using the dataset's own flag -- not batch length -- since a
-        length-4 batch is ambiguous: it's (x,y,user_idx,demographics) with
-        no idx, or (x,y,user_idx,idx) with no demographics, depending on
-        that flag. Mirrors HealthLitModule._maybe_strip_index.
-        """
-        ## Remove the sample index if it is included.
-        dm = getattr(self._trainer, "datamodule", None) if self._trainer is not None else None
-        dataset = getattr(dm, f"data_{stage}", None) if dm is not None else None
-        if getattr(dataset, "return_index", False):
-            batch = batch[:-1]
-        ## Get x, y, and demographics.
-        if len(batch) >= 4:
-            x, y, demographics = batch[0], batch[1], batch[3]
-        else:
-            x, y, demographics = batch[0], batch[1], None
-        return x, y, demographics
-
-#def flatten_batch
-    def _prepare_features(self, x: torch.Tensor, demographics: Optional[torch.Tensor] = None) -> np.ndarray:
-
-        """Convert sensor data into tabular features.
+    def _flatten_batch(self, x: torch.Tensor) -> np.ndarray:
+        """Flattens sequential data for tabular ML models.
 
         Args:
             x: Input tensor of shape [batch_size, time_steps, features].
-            demographics: Optional tensor of shape [batch_size, demographics_dim].
 
         Returns:
-            NumPy array of shape [batch_size, n_features] -- summary-stats
-            features if a featurizer is set, else the legacy raw
-            [time_steps * features] flatten -- with demographics columns
-            appended when given.
+            NumPy array of shape [batch_size, time_steps * features].
         """
+        return x.cpu().numpy().reshape(x.shape[0], -1)
+
+    def _extract_features_and_targets(
+        self, batch: Dict[str, torch.Tensor], stage: str = "train"
+    ) -> Tuple[np.ndarray, torch.Tensor]:
+        """Extracts tabular features (sequential + demographics) and targets from a batch dict.
+
+        If self.featurizer is configured (e.g. SummaryStatsFeaturizer or Catch22Featurizer),
+        it transforms the sequential data [B, T, F] into summary statistics. Otherwise, it
+        flattens the sequential data into [B, T * F]. Any static demographic features [B, D]
+        are then concatenated to form the final feature matrix.
+
+        Args:
+            batch: Batch dict from the DataLoader.
+            stage: Stage string ('train', 'val', or 'test') to query dataset properties.
+
+        Returns:
+            Tuple of:
+                - features: 2D NumPy array of shape [B, n_features].
+                - targets: Target tensor of shape [B].
+        """
+        x = batch["features"]
+        y = batch["targets"]
+        demographics = batch.get("demographics")
+
         x_np = x.cpu().numpy()
-
-
         if self.featurizer is not None:
             features = self.featurizer.transform(x_np)
-
-
-
-#testing size of a batch of data
-            #modality_order = sorted(self.trainer.datamodule.hparams.modalities)
-            #print("Original x shape:", x_np.shape)
-            #print("Column order:", modality_order)
-            #for i, mod in enumerate(modality_order):
-                #print(f"First sample, {mod} (col {i}):", x_np[0, :, i])
-
-            #names = self.featurizer.feature_names(modality_order)
-            #print("Computed features (labeled):")
-            #for name, val in zip(names, features[0]):
-                #print(f"  {name:20s} = {val:.4f}")
-
-
-
         else:
-            # x: [B, T, F] -> [B, T*F]
             features = x_np.reshape(x_np.shape[0], -1)
 
-        #adding demographics if available
         if demographics is not None:
-            features = np.concatenate([features, demographics.cpu().numpy()], axis=1)
+            demo_np = demographics.cpu().numpy()
+            if demo_np.ndim == 1:
+                demo_np = demo_np.reshape(-1, 1)
+            features = np.concatenate([features, demo_np], axis=1)
 
-        return features
-
+        return features, y
 
     def setup(self, stage: str, **kwargs) -> None:
         """Collects the entire training set and fits the AutoML model."""
@@ -482,7 +430,7 @@ class FLAMLHealthModule(LightningModule):
             else:
                 def _scan_val_labels() -> int:
                     val_dataloader = self.trainer.datamodule.val_dataloader()
-                    y_list = [batch[1].cpu().numpy() for batch in val_dataloader]
+                    y_list = [batch["targets"].cpu().numpy() for batch in val_dataloader]
                     return int(np.max(np.concatenate(y_list, axis=0))) + 1
 
                 self.num_classes = _resolve_num_classes(
@@ -497,15 +445,10 @@ class FLAMLHealthModule(LightningModule):
             
             X_list, y_list = [], []
             for batch in train_dataloader:
-                ## Get sensor data, labels, and optional demographics.
-                x, y, demographics = self._split_batch(batch, stage="train")
-                ## Convert each sample to one tabular feature row.
-                #import pdb
-                #pdb.set_trace()
-                X_list.append(self._prepare_features(x, demographics))
+                X_batch, y = self._extract_features_and_targets(batch, stage="train")
+                X_list.append(X_batch)
                 y_list.append(y.cpu().numpy())
 
-            #pdb.set_trace()    
             X_train = np.concatenate(X_list, axis=0)
             y_train = np.concatenate(y_list, axis=0)
 
@@ -551,65 +494,72 @@ class FLAMLHealthModule(LightningModule):
         self.trainer.should_stop = True
         return torch.tensor(0.0, requires_grad=True)
 
-    def validation_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
+    def forward(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Runs prediction on a batch dict using the fitted AutoML object."""
+        X, _ = self._extract_features_and_targets(batch, stage="test")
+        y_pred = self.automl.predict(X)
+        y_pred_tensor = torch.tensor(y_pred, device=self.device)
+        if self.task == "regression" and y_pred_tensor.is_floating_point():
+            y_pred_tensor = y_pred_tensor.float()
+        return y_pred_tensor
+
+    def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
+        """Evaluates predictions on a batch during trainer.predict()."""
+        return self.forward(batch)
+
+    def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         """Evaluates the fitted FLAML model on a validation batch.
 
         Args:
-            batch: A tuple containing (features, targets, ...).
+            batch: A dict containing 'features', 'targets', and optional 'demographics'.
             batch_idx: The index of the current batch.
         """
-        # Get sensor data, labels, and optional demographics.
+        X_val, y = self._extract_features_and_targets(batch, stage="val")
 
-        x, y, demographics = self._split_batch(batch, stage="val")
-        ## Convert the batch to tabular features.
-
-        X_val = self._prepare_features(x, demographics)
-
-        
         # Predict using the fitted AutoML object
         y_pred = self.automl.predict(X_val)
         y_pred_tensor = torch.tensor(y_pred, device=self.device)
-        
+        if self.task == "regression" and y_pred_tensor.is_floating_point():
+            y_pred_tensor = y_pred_tensor.float()
+
+        if self.task == "regression":
+            return {"preds": y_pred_tensor, "targets": y}
+
         # Try to get probabilities for AUROC
         try:
             y_prob = self.automl.predict_proba(X_val)
             logits = torch.tensor(y_prob, device=self.device)
-        except:
+        except Exception:
             # Fallback if the estimator doesn't support predict_proba
-            logits = torch.nn.functional.one_hot(y_pred_tensor, num_classes=self.num_classes).float()
-
-
+            logits = torch.nn.functional.one_hot(y_pred_tensor.long(), num_classes=self.num_classes).float()
 
         return {"preds": y_pred_tensor, "targets": y, "logits": logits}
 
-    def test_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
+    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         """Evaluates the fitted FLAML model on a test batch.
 
         Args:
-            batch: A tuple containing (features, targets, ...).
+            batch: A dict containing 'features', 'targets', and optional 'demographics'.
             batch_idx: The index of the current batch.
         """
-        ## Get sensor data, labels, and optional demographics.
+        X_test, y = self._extract_features_and_targets(batch, stage="test")
 
-        x, y, demographics = self._split_batch(batch, stage="test")
-        ## Convert the batch to tabular features.
-
-        X_test = self._prepare_features(x, demographics)
-
-        
         y_pred = self.automl.predict(X_test)
         y_pred_tensor = torch.tensor(y_pred, device=self.device)
+        if self.task == "regression" and y_pred_tensor.is_floating_point():
+            y_pred_tensor = y_pred_tensor.float()
+
+        if self.task == "regression":
+            return {"preds": y_pred_tensor, "targets": y}
 
         # Try to get probabilities for AUROC
         try:
             y_prob = self.automl.predict_proba(X_test)
             logits = torch.tensor(y_prob, device=self.device)
-        except:
+        except Exception:
             # Fallback
-            logits = torch.nn.functional.one_hot(y_pred_tensor, num_classes=self.num_classes).float()
-        
+            logits = torch.nn.functional.one_hot(y_pred_tensor.long(), num_classes=self.num_classes).float()
 
-        
         return {"preds": y_pred_tensor, "targets": y, "logits": logits}
 
     def configure_optimizers(self) -> Any:
@@ -672,7 +622,7 @@ class BaselineHealthModule(LightningModule):
         
         y_list = []
         for batch in train_dataloader:
-            _, y = batch[:2]
+            y = batch["targets"]
             y_list.append(y.cpu().numpy())
         y_train = np.concatenate(y_list, axis=0)
 
@@ -712,8 +662,8 @@ class BaselineHealthModule(LightningModule):
         
         return logits
 
-    def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        x, y = batch[:2]
+    def model_step(self, batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        x, y = batch["features"], batch["targets"]
         logits = self.forward(x)
         loss = torch.nn.functional.cross_entropy(logits, y)
         preds = torch.argmax(logits, dim=1)
@@ -771,18 +721,11 @@ class HealthRegressionLitModule(LightningModule):
         return self.net(x, demographics)
 
     def model_step(
-        self, batch: Any
+        self, batch: Dict[str, torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        if len(batch) == 4:
-            x, y, _, demographics = batch
-        elif len(batch) == 6:
-            x, y, _, _, _, demographics = batch
-        elif len(batch) == 5:
-            x, y, _, _, _ = batch
-            demographics = None
-        else:
-            x, y = batch[0], batch[1]
-            demographics = None
+        x = batch["features"]
+        y = batch["targets"]
+        demographics = batch.get("demographics")
 
         logits = self.forward(x, demographics) # shape [Batch, output_size=1]
         preds = logits.squeeze(-1)
@@ -791,26 +734,24 @@ class HealthRegressionLitModule(LightningModule):
         return loss, preds, y, logits
 
     def training_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
+        self, batch: Dict[str, torch.Tensor], batch_idx: int
     ) -> torch.Tensor:
         loss, preds, targets, _ = self.model_step(batch)
         self.train_loss(loss)
         self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
+    def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         loss, preds, targets, logits = self.model_step(batch)
         self.val_loss(loss)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        # Yield preds and targets so validation callbacks can compute regression metrics
-        return {"loss": loss, "preds": preds, "targets": targets}
+        return {"loss": loss, "preds": preds, "targets": targets, "logits": logits}
 
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
+    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         loss, preds, targets, logits = self.model_step(batch)
         self.test_loss(loss)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
-        # Yield preds and targets so test callbacks can compute regression metrics
-        return {"loss": loss, "preds": preds, "targets": targets}
+        return {"loss": loss, "preds": preds, "targets": targets, "logits": logits}
 
     def setup(self, stage: str, **kwargs) -> None:
         if self.hparams.compile and stage == "fit":
@@ -823,7 +764,7 @@ class HealthRegressionLitModule(LightningModule):
                 train_ds = dm.data_train
                 if len(train_ds) > 0:
                     sample = train_ds[0]
-                    input_size = sample[0].shape[-1]
+                    input_size = sample["features"].shape[-1]
                     if hasattr(self.net, "init_input_size"):
                         self.net.init_input_size(input_size)
             if hasattr(dm, "demographics_dim") and dm.demographics_dim is not None:

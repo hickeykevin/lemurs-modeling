@@ -251,7 +251,7 @@ def test_survey_context_appended_to_demographics_vector(two_survey_data):
         dm.setup()
 
         sample = dm.data_train[0]
-        context = sample[-1]
+        context = sample["demographics"] if isinstance(sample, dict) else sample[-1]
         # is_morning, referent_hours_scaled, referent_missing
         assert context.shape[-1] == dm.demographics_dim
         assert context.shape[-1] >= 3

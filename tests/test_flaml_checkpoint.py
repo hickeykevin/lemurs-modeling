@@ -12,13 +12,23 @@ from src.models.health_module import FLAMLHealthModule
 from src.data.components.tabular_features import SummaryStatsFeaturizer
 
 
+class DummyDataset:
+    def __init__(self, X, y):
+        self.X = X
+        self.y = y
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        return {"features": self.X[idx], "targets": self.y[idx]}
+
+
 class DummyDataModule(LightningDataModule):
     def __init__(self, X_train, y_train, X_val, y_val):
         super().__init__()
-        train_ds = TensorDataset(X_train, y_train)
-        val_ds = TensorDataset(X_val, y_val)
-        self._train_loader = DataLoader(train_ds, batch_size=10)
-        self._val_loader = DataLoader(val_ds, batch_size=10)
+        self._train_loader = DataLoader(DummyDataset(X_train, y_train), batch_size=10)
+        self._val_loader = DataLoader(DummyDataset(X_val, y_val), batch_size=10)
 
     def train_dataloader(self):
         return self._train_loader
@@ -26,17 +36,35 @@ class DummyDataModule(LightningDataModule):
     def val_dataloader(self):
         return self._val_loader
 
+class DemoDataset:
+    def __init__(self, X, y, demo):
+        self.X = X
+        self.y = y
+        self.demo = demo
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        return {
+            "features": self.X[idx],
+            "targets": self.y[idx],
+            "user_indices": torch.tensor(0, dtype=torch.long),
+            "demographics": self.demo[idx],
+        }
+
+
 class DemoDataModule(LightningDataModule):
-    """Like DummyDataModule, but batches include a user_idx and a demographics
-    tensor -- (x, y, user_idx, demographics) -- matching HealthDataset's real
-    __getitem__ layout, so _split_batch has something real to unpack."""
+    """DataModule returning dictionary batches with demographics."""
 
     def __init__(self, X_train, y_train, demo_train, X_val, y_val, demo_val):
         super().__init__()
-        train_ds = TensorDataset(X_train, y_train, torch.zeros(len(y_train), dtype=torch.long), demo_train)
-        val_ds = TensorDataset(X_val, y_val, torch.zeros(len(y_val), dtype=torch.long), demo_val)
-        self._train_loader = DataLoader(train_ds, batch_size=10)
-        self._val_loader = DataLoader(val_ds, batch_size=10)
+        self._train_loader = DataLoader(
+            DemoDataset(X_train, y_train, demo_train), batch_size=10
+        )
+        self._val_loader = DataLoader(
+            DemoDataset(X_val, y_val, demo_val), batch_size=10
+        )
 
     def train_dataloader(self):
         return self._train_loader
@@ -82,7 +110,7 @@ def test_flaml_checkpoint_save_and_load():
     assert module.automl.best_estimator is not None
 
     # Get predictions before saving checkpoint
-    val_batch = (X_val, y_val)
+    val_batch = {"features": X_val, "targets": y_val}
     val_out_before = module.validation_step(val_batch, 0)
     preds_before = val_out_before["preds"]
     logits_before = val_out_before["logits"]
@@ -173,7 +201,7 @@ def test_flaml_with_summary_stats_featurizer():
     expected_width = features * len(featurizer.stats)  # 3 * 5 = 15, independent of time_steps
     assert module.automl.model.estimator.n_features_in_ == expected_width
 
-    val_out = module.validation_step((X_val, y_val), 0)
+    val_out = module.validation_step({"features": X_val, "targets": y_val}, 0)
     assert val_out["preds"].shape == (12,)
 
 
@@ -202,3 +230,74 @@ def test_flaml_with_featurizer_and_demographics():
 
     expected_width = features * len(featurizer.stats) + demo_dim  # 3*5 + 2 = 17
     assert module.automl.model.estimator.n_features_in_ == expected_width
+
+    val_out = module.validation_step({"features": X_val, "targets": y_val, "demographics": demo_val}, 0)
+    assert val_out["preds"].shape == (10,)
+
+
+def test_flaml_checkpoint_save_and_load_with_demographics():
+    """Tests that FLAMLHealthModule fits a model with demographics, saves a PyTorch Lightning checkpoint,
+    and loads the checkpoint successfully while preserving predictions, best estimator, and feature counts."""
+    np.random.seed(42)
+    torch.manual_seed(42)
+
+    batch_size = 40
+    time_steps = 6
+    features = 3
+    demo_dim = 5
+    num_classes = 2
+
+    X_train = torch.randn(batch_size, time_steps, features)
+    y_train = torch.randint(0, num_classes, (batch_size,))
+    demo_train = torch.randn(batch_size, demo_dim)
+
+    X_val = torch.randn(15, time_steps, features)
+    y_val = torch.randint(0, num_classes, (15,))
+    demo_val = torch.randn(15, demo_dim)
+
+    dm = DemoDataModule(X_train, y_train, demo_train, X_val, y_val, demo_val)
+
+    automl_config = {
+        "time_budget": 2,
+        "estimator_list": ["rf"],
+        "verbose": 0,
+    }
+    module = FLAMLHealthModule(automl_config=automl_config, task="classification")
+
+    trainer = Trainer(
+        default_root_dir="logs/debug",
+        max_epochs=1,
+        accelerator="cpu",
+        logger=False,
+        enable_checkpointing=True,
+    )
+    trainer.fit(module, datamodule=dm)
+
+    assert hasattr(module.automl, "best_estimator")
+    assert module.automl.best_estimator is not None
+    assert module.automl.model.estimator.n_features_in_ == (time_steps * features) + demo_dim
+
+    val_batch = {"features": X_val, "targets": y_val, "demographics": demo_val}
+    val_out_before = module.validation_step(val_batch, 0)
+    preds_before = val_out_before["preds"]
+    logits_before = val_out_before["logits"]
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        ckpt_path = os.path.join(tmp_dir, "flaml_demo_test.ckpt")
+        trainer.save_checkpoint(ckpt_path)
+
+        assert os.path.exists(ckpt_path)
+
+        loaded_module = FLAMLHealthModule.load_from_checkpoint(ckpt_path)
+        assert hasattr(loaded_module.automl, "best_estimator")
+        assert loaded_module.automl.best_estimator == module.automl.best_estimator
+        assert loaded_module.automl.model.estimator.n_features_in_ == (time_steps * features) + demo_dim
+
+        loaded_module._trainer = trainer
+        val_out_after = loaded_module.validation_step(val_batch, 0)
+        preds_after = val_out_after["preds"]
+        logits_after = val_out_after["logits"]
+
+        torch.testing.assert_close(preds_before, preds_after)
+        torch.testing.assert_close(logits_before, logits_after)
+
