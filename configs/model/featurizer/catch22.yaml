@@ -8,8 +8,9 @@ _target_: src.data.components.catch22_features.Catch22Featurizer
 # given window -- e.g. most features on an all-zero or constant window.
 fill_value: 0.0
 
-# Same 0-or-4 rule as summary_stats.yaml: 0 if data.include_time_features
-# is false for the data config you're using (e.g. eval_plan=cyclical);
-# 4 if it's true with RollingSampler/BlockSampler/IntervalAwareSampler
-# (2 with OffsetSampler). See docs/feature_engineering_summary.md.
-exclude_last_n_cols: 0
+# Setting to 'auto' automatically detects time features:
+#   exclude_last_n_cols = total_feature_cols - len(datamodule.modalities)
+# (e.g. 4 for RollingSampler, 2 for OffsetSampler, 0 if include_time_features=false).
+# Can also be explicitly overridden with an integer (e.g. 0, 2, 4).
+exclude_last_n_cols: auto
+

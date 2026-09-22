@@ -5,7 +5,7 @@ using the pycatch22 package.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Union
 
 import numpy as np
 import pycatch22
@@ -21,7 +21,7 @@ class Catch22Featurizer:
     def __init__(
         self,
         fill_value: float = 0.0,
-        exclude_last_n_cols: int = 0,
+        exclude_last_n_cols: Union[int, str, None] = "auto",
     ) -> None:
         self.fill_value = fill_value
         self.exclude_last_n_cols = exclude_last_n_cols
@@ -41,7 +41,9 @@ class Catch22Featurizer:
             raise ValueError(f"Expected a [Time, Features] or [N, Time, Features] array, got shape {x.shape}")
 
         # Drop the last exclude_last_n_cols columns (0 = keep everything).
-        n_cols = x.shape[-1] - self.exclude_last_n_cols
+        # If 'auto' or None was not resolved by FLAMLHealthModule, default to 0.
+        exclude_cols = 0 if self.exclude_last_n_cols in (None, "auto") else int(self.exclude_last_n_cols)
+        n_cols = x.shape[-1] - exclude_cols
         if n_cols <= 0:
             raise ValueError(
                 f"exclude_last_n_cols={self.exclude_last_n_cols} leaves no feature columns "

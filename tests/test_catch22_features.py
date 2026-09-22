@@ -46,6 +46,14 @@ def test_exclude_last_n_cols_drops_trailing_columns():
     assert out.shape == (3, 1 * len(featurizer.stats))
 
 
+def test_exclude_last_n_cols_auto_defaults_to_zero():
+    x = np.random.randn(3, 8, 2).astype(np.float32)
+    featurizer = Catch22Featurizer(exclude_last_n_cols="auto")
+    out = featurizer.transform(x)
+    assert out.shape == (3, 2 * len(featurizer.stats))
+
+
+
 def test_exclude_all_cols_raises():
     x = np.random.randn(2, 8, 4).astype(np.float32)
     featurizer = Catch22Featurizer(exclude_last_n_cols=4)

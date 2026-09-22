@@ -5,7 +5,7 @@ summary statistics for each modality.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Union
 
 import numpy as np
 
@@ -34,7 +34,7 @@ class SummaryStatsFeaturizer:
     def __init__(
         self,
         stats: Sequence[str] = DEFAULT_STATS,
-        exclude_last_n_cols: int = 0,
+        exclude_last_n_cols: Union[int, str, None] = "auto",
     ) -> None:
         # Check that the requested statistics are supported.
         unknown = sorted(set(stats) - set(SUPPORTED_STATS))
@@ -44,6 +44,7 @@ class SummaryStatsFeaturizer:
         self.stats = list(stats)   #save the statistics
         # Trailing columns to drop before computing stats (e.g. a sampler's
         # appended sin/cos time-of-day columns, which aren't modality signal).
+        # Can be an integer, 'auto', or None.
         self.exclude_last_n_cols = exclude_last_n_cols
 
     def transform(self, x: np.ndarray) -> np.ndarray:
@@ -61,7 +62,9 @@ class SummaryStatsFeaturizer:
             raise ValueError(f"Expected a [Time, Features] or [N, Time, Features] array, got shape {x.shape}")
 
         # Drop the last exclude_last_n_cols columns (0 = keep everything).
-        n_cols = x.shape[-1] - self.exclude_last_n_cols
+        # If 'auto' or None was not resolved by FLAMLHealthModule, default to 0.
+        exclude_cols = 0 if self.exclude_last_n_cols in (None, "auto") else int(self.exclude_last_n_cols)
+        n_cols = x.shape[-1] - exclude_cols
         if n_cols <= 0:
             raise ValueError(
                 f"exclude_last_n_cols={self.exclude_last_n_cols} leaves no feature columns "

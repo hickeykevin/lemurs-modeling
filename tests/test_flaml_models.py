@@ -681,3 +681,75 @@ def test_flaml_regression_with_demographics():
     assert pred_out.shape == (B,)
 
 
+def test_flaml_featurizer_auto_exclude_last_n_cols():
+    """Verify that FLAMLHealthModule automatically sets exclude_last_n_cols from datamodule modalities."""
+    import torch
+    from src.data.components.tabular_features import SummaryStatsFeaturizer
+    from src.data.components.catch22_features import Catch22Featurizer
+
+    B, T = 10, 8
+    # 2 modalities + 4 time features = 6 columns
+    x = torch.randn(B, T, 6)
+    y = torch.randint(0, 2, (B,))
+
+    batch = {
+        "features": x,
+        "targets": y,
+    }
+
+    class DummyDataModule:
+        modalities = ["step", "calorie"]  # 2 modalities
+        def train_dataloader(self):
+            return [batch]
+        def val_dataloader(self):
+            return [batch]
+
+    class DummyTrainer:
+        datamodule = DummyDataModule()
+        should_stop = False
+        is_global_zero = True
+        progress_bar_callback = None
+
+    # Test SummaryStatsFeaturizer with auto
+    feat = SummaryStatsFeaturizer(stats=["mean"], exclude_last_n_cols="auto")
+    module = FLAMLHealthModule(
+        featurizer=feat,
+        automl_config={"time_budget": 1, "estimator_list": ["lrl2"], "n_jobs": 1},
+    )
+    module.trainer = DummyTrainer()
+
+    # Before extraction, featurizer has 'auto'
+    assert feat.exclude_last_n_cols == "auto"
+
+    X, _ = module._extract_features_and_targets(batch)
+    # After extraction, auto was resolved to 6 - 2 = 4
+    assert feat.exclude_last_n_cols == 4
+    # With 2 modalities and 1 stat ('mean'), X should have 2 columns
+    assert X.shape == (B, 2)
+
+    # Test Catch22Featurizer with auto
+    c22_feat = Catch22Featurizer(exclude_last_n_cols="auto")
+    module_c22 = FLAMLHealthModule(
+        featurizer=c22_feat,
+        automl_config={"time_budget": 1, "estimator_list": ["lrl2"], "n_jobs": 1},
+    )
+    module_c22.trainer = DummyTrainer()
+
+    assert c22_feat.exclude_last_n_cols == "auto"
+    X_c22, _ = module_c22._extract_features_and_targets(batch)
+    assert c22_feat.exclude_last_n_cols == 4
+    # 2 modalities * 22 features = 44 columns
+    assert X_c22.shape == (B, 2 * len(c22_feat.stats))
+
+    # Test checkpoint save and load preserves resolved exclude_last_n_cols
+    ckpt = {}
+    module_c22.on_save_checkpoint(ckpt)
+    assert ckpt["featurizer_exclude_last_n_cols"] == 4
+
+    fresh_feat = Catch22Featurizer(exclude_last_n_cols="auto")
+    fresh_module = FLAMLHealthModule(featurizer=fresh_feat, automl_config={})
+    fresh_module.on_load_checkpoint(ckpt)
+    assert fresh_feat.exclude_last_n_cols == 4
+
+
+

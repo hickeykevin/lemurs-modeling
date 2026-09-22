@@ -52,6 +52,13 @@ def test_exclude_last_n_cols_drops_trailing_columns():
     output = featurizer.transform(x)
     assert output.shape == (4, 1)
 
+def test_exclude_last_n_cols_auto_defaults_to_zero():
+    x = np.random.randn(4, 8, 3)
+    featurizer = SummaryStatsFeaturizer(stats=["mean"], exclude_last_n_cols="auto")
+    output = featurizer.transform(x)
+    assert output.shape == (4, 3)
+
+
 #Can the featurizer work with one sample even when there is no batch dimension?
 def test_single_sample_input_is_squeezed():
     x = np.random.randn(6, 2)  # [Time, Features], no batch dim

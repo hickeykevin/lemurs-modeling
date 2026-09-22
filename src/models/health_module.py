@@ -384,6 +384,29 @@ class FLAMLHealthModule(LightningModule):
         """
         return x.cpu().numpy().reshape(x.shape[0], -1)
 
+    def _resolve_featurizer_exclude_cols(self, batch_features: torch.Tensor) -> None:
+        """Resolves 'auto' exclude_last_n_cols on the featurizer using datamodule modalities."""
+        if self.featurizer is None or getattr(self.featurizer, "exclude_last_n_cols", None) not in (None, "auto"):
+            return
+
+        dm = getattr(getattr(self, "trainer", None), "datamodule", None)
+        modalities = None
+        if dm is not None:
+            modalities = getattr(dm, "modalities", None)
+            if modalities is None and hasattr(dm, "hparams"):
+                modalities = getattr(dm.hparams, "modalities", None)
+
+        if modalities is not None:
+            total_cols = batch_features.shape[-1]
+            num_time_cols = max(0, total_cols - len(modalities))
+            self.featurizer.exclude_last_n_cols = num_time_cols
+            self.print(
+                f"[FLAML Featurizer] Auto-configured exclude_last_n_cols={num_time_cols} "
+                f"({total_cols} total cols - {len(modalities)} modalities: {modalities})"
+            )
+        else:
+            self.featurizer.exclude_last_n_cols = 0
+
     def _extract_features_and_targets(
         self, batch: Dict[str, torch.Tensor], stage: str = "train"
     ) -> Tuple[np.ndarray, torch.Tensor]:
@@ -406,6 +429,8 @@ class FLAMLHealthModule(LightningModule):
         x = batch["features"]
         y = batch["targets"]
         demographics = batch.get("demographics")
+
+        self._resolve_featurizer_exclude_cols(x)
 
         x_np = x.cpu().numpy()
         if self.featurizer is not None:
@@ -575,6 +600,8 @@ class FLAMLHealthModule(LightningModule):
             checkpoint["flaml_automl"] = pickle.dumps(self.automl)
         if hasattr(self, "num_classes"):
             checkpoint["num_classes"] = self.num_classes
+        if self.featurizer is not None and hasattr(self.featurizer, "exclude_last_n_cols"):
+            checkpoint["featurizer_exclude_last_n_cols"] = self.featurizer.exclude_last_n_cols
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Restores the fitted FLAML AutoML object and metadata from the checkpoint."""
@@ -582,6 +609,8 @@ class FLAMLHealthModule(LightningModule):
             self.automl = pickle.loads(checkpoint["flaml_automl"])
         if "num_classes" in checkpoint:
             self.num_classes = checkpoint["num_classes"]
+        if "featurizer_exclude_last_n_cols" in checkpoint and self.featurizer is not None:
+            self.featurizer.exclude_last_n_cols = checkpoint["featurizer_exclude_last_n_cols"]
 
 
 
