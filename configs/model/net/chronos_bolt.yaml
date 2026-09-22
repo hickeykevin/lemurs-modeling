@@ -1,0 +1,9 @@
+_target_: src.models.components.chronos_bolt_net.ChronosBoltEncoderNet
+modalities: ${data.modalities}
+model_id: amazon/chronos-bolt-mini
+output_size: ${oc.select:data.aggregator.num_classes,2}
+use_sequence_data: ${model.use_sequence_data}
+freeze_encoder: true
+pooling: mean
+modality_pooling: mean
+torch_dtype: float32

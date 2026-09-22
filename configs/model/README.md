@@ -54,12 +54,24 @@ A naive lag benchmark that predicts that the user's current symptom state is exa
     uv run src/train.py model=lag data/sampler=lag
     ```
 
-### 4. `majority.yaml` (Majority Class Baseline)
-A naive baseline that completely ignores all input features (steps, calories, history) and always predicts the most frequent class observed in the training set.
-*   **Use Case:** Verifies whether a model has actually learned patterns or is simply guessing the most common class.
+### 5. `chronos_bolt.yaml` (Amazon Chronos-Bolt Foundation Model)
+Leverages Amazon's lightweight, patch-based time-series foundation model (`amazon/chronos-bolt-mini` by default). Unlike older models, it is channel-independent, fast, runs on both CPU and GPU, and accepts any sequence length $T$ without artificial 168-hour padding.
+*   **Requirements:** Requires `uv sync --extra chronos2`.
 *   **Command:**
     ```bash
-    uv run src/train.py model=majority
+    uv run python src/train.py model=chronos_bolt
+    ```
+*   **Override Model Size:**
+    ```bash
+    uv run python src/train.py model=chronos_bolt model.net.model_id=amazon/chronos-bolt-small
+    ```
+
+### 6. `chronos2.yaml` (OpenMHC Chronos-2 Foundation Model)
+The Stanford OpenMHC fine-tune of `amazon/chronos-2`. Strictly requires mapping modalities to a 19-channel Apple HealthKit schema and padding to a 168-hour weekly grid.
+*   **Requirements:** Requires `uv sync --extra chronos2`.
+*   **Command:**
+    ```bash
+    uv run python src/train.py model=chronos2
     ```
 
 ---

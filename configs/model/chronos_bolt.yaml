@@ -1,0 +1,13 @@
+# Requires the `chronos2` extra (`uv sync --extra chronos2`).
+# Wraps Amazon's Chronos-Bolt foundation model (amazon/chronos-bolt-mini).
+# Runs on CPU (fast) as well as GPU -- see src/models/components/chronos_bolt_net.py.
+defaults:
+  - net: chronos_bolt
+  - optimizer: adam
+  - scheduler: null
+
+_target_: src.models.health_module.HealthLitModule
+compile: false
+auto_class_weights: false
+class_weights: null
+use_sequence_data: true
