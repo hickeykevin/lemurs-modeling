@@ -74,6 +74,9 @@ Deep learning models (like `default.yaml`) are composed of multiple sub-configur
 * **Purpose**: Used by `FLAMLHealthModule` (`flaml.yaml`, `flaml_xgboost.yaml`) to convert a sampled `[Time, Modality]` sensor window into a tabular record for tree models, instead of a raw flatten.
 * **Example (`featurizer/summary_stats.yaml`)**: Targets `src.data.components.tabular_features.SummaryStatsFeaturizer` and lists which per-modality statistics to compute (`stats`), and how many trailing time-feature columns to exclude (`exclude_last_n_cols`).
 
+* * **Example (`featurizer/catch22.yaml`)**: Targets `src.data.components.catch22_features.Catch22Featurizer` — collapses each modality's window into the 22 canonical catch22 time-series features (Lubba et al., 2019) instead of the 5-stat summary. No minimum window length; undefined per-feature values (common on constant/all-zero windows) are replaced by `fill_value` rather than skipping the whole window.
+
+
 ---
 
 ## ⚡ CLI Examples for Common Scenarios
