@@ -28,6 +28,7 @@ dependencies = [
     "torchaudio>=2.11.0",
     "av>=18.0.0",
     "soundfile>=0.14.0",
+    "pycatch22"
 ]
 
 [project.optional-dependencies]
