@@ -18,12 +18,27 @@ The primary deep learning model for longitudinal sequence learning. It takes tim
     uv run src/train.py model=default
     ```
 
-### 2. `flaml.yaml` (AutoML Baseline)
-Integrates with Microsoft's **FLAML** (Fast and Lightweight AutoML) library. It flattens the input time-series window and automatically runs a search over traditional machine learning models (LightGBM, Random Forest, XGBoost) to find the best fit.
-*   **Use Case:** Establishes a highly competitive non-deep-learning baseline.
-*   **Command:**
+### 2. `flaml.yaml` & Specialized FLAML Models (AutoML Baselines)
+Integrates with Microsoft's **FLAML** (Fast and Lightweight AutoML) library. It flattens the input time-series window and automatically runs a search over traditional machine learning models to find the best fit.
+*   **`flaml.yaml` (Multi-Estimator AutoML)**: Sweeps across LightGBM, Random Forest, XGBoost, and Extra Trees.
     ```bash
-    uv run src/train.py model=flaml
+    uv run python src/train.py model=flaml
+    ```
+*   **`flaml_xgboost.yaml` (XGBoost)**: Pinned to XGBoost (`estimator_list: ['xgboost']`).
+    ```bash
+    uv run python src/train.py model=flaml_xgboost
+    ```
+*   **`flaml_rf.yaml` (Random Forest)**: Pinned to Random Forest (`estimator_list: ['rf']`).
+    ```bash
+    uv run python src/train.py model=flaml_rf
+    ```
+*   **`flaml_lr.yaml` (Logistic Regression)**: Pinned to Logistic Regression tuning L1 and L2 penalties (`estimator_list: ['lrl1', 'lrl2']`).
+    ```bash
+    uv run python src/train.py model=flaml_lr
+    ```
+*   **`flaml_svm.yaml` (Support Vector Machine)**: Tuned scikit-learn Pipeline combining `StandardScaler` and `SVC` (`estimator_list: ['svm_pipeline']`), searching over `C`, `kernel` (`rbf`, `linear`), and `gamma`.
+    ```bash
+    uv run python src/train.py model=flaml_svm
     ```
 
 ### 3. `lag.yaml` (Last-Value Baseline)

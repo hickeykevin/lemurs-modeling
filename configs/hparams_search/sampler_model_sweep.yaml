@@ -1,25 +1,19 @@
-# W&B Sweep Configuration: Sampler x Model x Modality Sweep
+# W&B Sweep Configuration: Rolling Sampler x FLAML Model x Modality Sweep
 #
 # Grid search (method: grid) -- exhaustive, not sampled. Every combination of
-# every parameter below runs exactly once (40 x 3 x 7 = 840 runs).
+# every parameter below runs exactly once (20 x 4 x 7 = 560 runs).
 #
 # Three swept axes, crossed:
-#   sampler_pkg -- rolling_<lookback>h_<window>h and offset_<lookback>h_<window>h,
+#   sampler_pkg -- rolling_<lookback>h_<window>h (20 configs):
 #     lookback in [24, 48, 72, 96, 120], window (resample_freq) in [4, 6, 8, 12].
-#     Every value here is a self-contained config in
-#     configs/data/sampler/sweep_configs/ -- picking one is a plain Hydra
-#     group override (data/sampler=<name>), so there is no risk of a class
-#     getting an argument it doesn't accept.
-#   model_pkg -- default (LSTM), transformer, flaml_xgboost (FLAML AutoML
-#     pinned to estimator_list=[xgboost], not FLAML's usual multi-estimator
-#     search -- see configs/model/flaml_xgboost.yaml). Each is likewise a
-#     self-contained config; no cross-model arg is set from this file, since
-#     e.g. automl_config only exists on FLAMLHealthModule and would error
-#     under default/transformer.
-#   modalities_choice -- all 7 non-empty subsets of {step, calorie, distance}.
-#     Configured via the data/modalities config group (e.g. data/modalities=step_distance),
-#     which automatically specifies data.modalities and selects the matching
-#     data/preprocessors so they can never drift out of sync.
+#     Every value here is a self-contained config in configs/data/sampler/sweep_configs/.
+#   model_pkg -- 4 FLAML AutoML models (4 configs):
+#     - flaml_xgboost (XGBoost)
+#     - flaml_rf (Random Forest)
+#     - flaml_lr (Logistic Regression L1 & L2)
+#     - flaml_svm (Scaled Support Vector Machine: StandardScaler + SVC)
+#   modalities_choice -- all 7 non-empty subsets of {step, calorie, distance} (7 configs):
+#     Configured via the data/modalities config group (e.g. data/modalities=step_distance).
 #
 # Fixed, not swept (see command: below): scaler=dual; os_filter=both;
 # collapse_strategy=none; use_demographics=true; use_sleep=false;
@@ -63,32 +57,13 @@ parameters:
       - rolling_120h_6h
       - rolling_120h_8h
       - rolling_120h_12h
-      - offset_24h_4h
-      - offset_24h_6h
-      - offset_24h_8h
-      - offset_24h_12h
-      - offset_48h_4h
-      - offset_48h_6h
-      - offset_48h_8h
-      - offset_48h_12h
-      - offset_72h_4h
-      - offset_72h_6h
-      - offset_72h_8h
-      - offset_72h_12h
-      - offset_96h_4h
-      - offset_96h_6h
-      - offset_96h_8h
-      - offset_96h_12h
-      - offset_120h_4h
-      - offset_120h_6h
-      - offset_120h_8h
-      - offset_120h_12h
 
   model_pkg:
     values:
-      - default        # LSTM
-      - transformer
-      - flaml_xgboost   # FLAML AutoML, pinned to XGBoost
+      - flaml_xgboost   # XGBoost
+      - flaml_rf        # Random Forest
+      - flaml_lr        # Logistic Regression (L1 & L2)
+      - flaml_svm       # Support Vector Machine (StandardScaler + SVC)
 
   modalities_choice:
     values:
