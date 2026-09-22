@@ -48,7 +48,7 @@ def test_simple_transformer_in_health_lit_module():
     y = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1])
     user_idx = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7])
 
-    batch = (x, y, user_idx)
+    batch = {"features": x, "targets": y, "user_indices": user_idx}
     loss, preds, targets, logits = lit_module.model_step(batch)
 
     assert loss.shape == ()

@@ -8,13 +8,23 @@ from lightning import LightningDataModule, Trainer
 from src.models.health_module import FLAMLHealthModule
 
 
+class DummyDataset:
+    def __init__(self, X, y):
+        self.X = X
+        self.y = y
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        return {"features": self.X[idx], "targets": self.y[idx]}
+
+
 class DummyDataModule(LightningDataModule):
     def __init__(self, X_train, y_train, X_val, y_val):
         super().__init__()
-        train_ds = TensorDataset(X_train, y_train)
-        val_ds = TensorDataset(X_val, y_val)
-        self._train_loader = DataLoader(train_ds, batch_size=10)
-        self._val_loader = DataLoader(val_ds, batch_size=10)
+        self._train_loader = DataLoader(DummyDataset(X_train, y_train), batch_size=10)
+        self._val_loader = DataLoader(DummyDataset(X_val, y_val), batch_size=10)
 
     def train_dataloader(self):
         return self._train_loader
@@ -60,7 +70,7 @@ def test_flaml_checkpoint_save_and_load():
     assert module.automl.best_estimator is not None
 
     # Get predictions before saving checkpoint
-    val_batch = (X_val, y_val)
+    val_batch = {"features": X_val, "targets": y_val}
     val_out_before = module.validation_step(val_batch, 0)
     preds_before = val_out_before["preds"]
     logits_before = val_out_before["logits"]
@@ -121,4 +131,104 @@ def test_flaml_auto_class_weights():
 
     assert hasattr(module.automl, "best_estimator")
     assert module.automl.best_estimator is not None
+
+
+def test_flaml_checkpoint_save_and_load_with_demographics():
+    """Tests that FLAMLHealthModule fits a model with demographics, saves a PyTorch Lightning checkpoint,
+    and loads the checkpoint successfully while preserving predictions, best estimator, and feature counts."""
+    np.random.seed(42)
+    torch.manual_seed(42)
+
+    batch_size = 40
+    time_steps = 6
+    features = 3
+    demo_dim = 5
+    num_classes = 2
+
+    X_train = torch.randn(batch_size, time_steps, features)
+    y_train = torch.randint(0, num_classes, (batch_size,))
+    demo_train = torch.randn(batch_size, demo_dim)
+
+    X_val = torch.randn(15, time_steps, features)
+    y_val = torch.randint(0, num_classes, (15,))
+    demo_val = torch.randn(15, demo_dim)
+
+    class DummyDemographicsDataset:
+        def __init__(self, X, y, demo):
+            self.X = X
+            self.y = y
+            self.demo = demo
+
+        def __len__(self):
+            return len(self.y)
+
+        def __getitem__(self, idx):
+            return {
+                "features": self.X[idx],
+                "targets": self.y[idx],
+                "demographics": self.demo[idx],
+            }
+
+    class DummyDemographicsDataModule(LightningDataModule):
+        def __init__(self):
+            super().__init__()
+            self._train_loader = DataLoader(
+                DummyDemographicsDataset(X_train, y_train, demo_train), batch_size=10
+            )
+            self._val_loader = DataLoader(
+                DummyDemographicsDataset(X_val, y_val, demo_val), batch_size=10
+            )
+
+        def train_dataloader(self):
+            return self._train_loader
+
+        def val_dataloader(self):
+            return self._val_loader
+
+    dm = DummyDemographicsDataModule()
+
+    automl_config = {
+        "time_budget": 2,
+        "estimator_list": ["rf"],
+        "verbose": 0,
+    }
+    module = FLAMLHealthModule(automl_config=automl_config, task="classification")
+
+    trainer = Trainer(
+        default_root_dir="logs/debug",
+        max_epochs=1,
+        accelerator="cpu",
+        logger=False,
+        enable_checkpointing=True,
+    )
+    trainer.fit(module, datamodule=dm)
+
+    assert hasattr(module.automl, "best_estimator")
+    assert module.automl.best_estimator is not None
+    assert module.automl.model.estimator.n_features_in_ == (time_steps * features) + demo_dim
+
+    val_batch = {"features": X_val, "targets": y_val, "demographics": demo_val}
+    val_out_before = module.validation_step(val_batch, 0)
+    preds_before = val_out_before["preds"]
+    logits_before = val_out_before["logits"]
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        ckpt_path = os.path.join(tmp_dir, "flaml_demo_test.ckpt")
+        trainer.save_checkpoint(ckpt_path)
+
+        assert os.path.exists(ckpt_path)
+
+        loaded_module = FLAMLHealthModule.load_from_checkpoint(ckpt_path)
+        assert hasattr(loaded_module.automl, "best_estimator")
+        assert loaded_module.automl.best_estimator == module.automl.best_estimator
+        assert loaded_module.automl.model.estimator.n_features_in_ == (time_steps * features) + demo_dim
+
+        loaded_module._trainer = trainer
+        val_out_after = loaded_module.validation_step(val_batch, 0)
+        preds_after = val_out_after["preds"]
+        logits_after = val_out_after["logits"]
+
+        torch.testing.assert_close(preds_before, preds_after)
+        torch.testing.assert_close(logits_before, logits_after)
+
 

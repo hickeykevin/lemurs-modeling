@@ -625,16 +625,19 @@ def test_health_dataset_return_index_appends_idx_last():
         modality_cols={"step": "steps"}, sampler=sampler, return_index=True,
     )
 
-    without_len = len(dataset_without[0])
+    without_item = dataset_without[0]
     with_item = dataset_with[0]
-    assert len(with_item) == without_len + 1
-    assert with_item[-1].dtype == torch.long
-    assert with_item[-1].item() == 0
+    assert isinstance(without_item, dict)
+    assert isinstance(with_item, dict)
+    assert "sample_idx" not in without_item
+    assert "sample_idx" in with_item
+    assert with_item["sample_idx"].dtype == torch.long
+    assert with_item["sample_idx"].item() == 0
 
     # idx recovers the correct source row via data_links.
     for i in range(len(dataset_with)):
         item = dataset_with[i]
-        idx = item[-1].item()
+        idx = item["sample_idx"].item()
         assert idx == i
         assert dataset_with.data_links.iloc[idx]["app_user_id"] == links.iloc[i]["app_user_id"]
 
@@ -896,13 +899,9 @@ def test_datamodule_with_sleep_features(mock_db_class):
     assert len(train_ds) > 0
     sample = train_ds[0]
 
-    # sample tuple elements:
-    # 0: seq features
-    # 1: target
-    # 2: user_idx
-    # 3: context vector (demographics + sleep features)
-    assert len(sample) == 4
-    context_vector = sample[3]
+    assert isinstance(sample, dict)
+    assert "demographics" in sample
+    context_vector = sample["demographics"]
 
     # Context vector length should match dm.demographics_dim
     assert len(context_vector) == dm.demographics_dim
@@ -1031,7 +1030,7 @@ def test_datamodule_with_distance_modality(mock_db_class):
     assert len(dm.data_train) > 0
     sample = dm.data_train[0]
     # Check sequence shape: [24 hours, 2 modalities]
-    assert sample[0].shape == (24, 2)
+    assert sample["features"].shape == (24, 2)
 
 
 

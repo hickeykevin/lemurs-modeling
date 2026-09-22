@@ -280,7 +280,8 @@ def test_datamodule_normalization(dummy_data):
         
         # Get a sample
         train_ds = dm.data_train
-        seq, target, *rest = train_ds[0]
+        sample = train_ds[0]
+        seq = sample["features"]
         
         # If mean was 15 (hypothetically), 20 would become (20-15)/std
         # The key is that the tensor should not be the raw [10, 20] values
@@ -538,7 +539,8 @@ def test_subject_scaler_normalization(mock_db_class):
     
     for ds in all_datasets:
         for i in range(len(ds)):
-            seq, *rest = ds[i]
+            sample = ds[i]
+            seq = sample["features"]
             assert torch.allclose(seq[:, :1], expected_seq, atol=1e-5)
 
 
@@ -608,7 +610,8 @@ def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     
     # 1. Check datamodule targets
     train_ds = dm.data_train
-    seq, target, *rest = train_ds[0]
+    sample = train_ds[0]
+    seq, target = sample["features"], sample["targets"]
     assert target.dtype == torch.float32
     
     # 2. Check model steps in regression mode
@@ -623,7 +626,11 @@ def test_regression_datamodule_and_model(mock_db_class, dummy_data):
     )
     
     # Simulate a training step
-    batch = (seq.unsqueeze(0), target.unsqueeze(0), torch.tensor([0]))
+    batch = {
+        "features": seq.unsqueeze(0),
+        "targets": target.unsqueeze(0),
+        "user_indices": torch.tensor([0]),
+    }
     loss = model.training_step(batch, 0)
     assert loss is not None
     assert loss.dtype == torch.float32
@@ -1110,10 +1117,11 @@ def test_datamodule_use_demographics_toggle(mock_db_class, dummy_data):
     assert dm.demographics_map is not None
     assert dm.default_demographics is not None
     
-    # 2. Verify dataset item length is 4 (x, y, user_idx, demographics)
+    # 2. Verify dataset item contains demographics
     train_ds = dm.data_train
     sample = train_ds[0]
-    assert len(sample) == 4
+    assert isinstance(sample, dict)
+    assert "demographics" in sample
 
 
 
