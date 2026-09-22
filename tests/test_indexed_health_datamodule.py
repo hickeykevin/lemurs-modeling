@@ -79,7 +79,7 @@ def test_index_recovers_the_correct_source_row():
     dm.setup()
     for i in range(len(dm.data_test)):
         sample = dm.data_test[i]
-        idx_tensor = sample[-1]
+        idx_tensor = sample["sample_idx"]
         assert torch.is_tensor(idx_tensor) and idx_tensor.dtype == torch.long
         recovered = dm.data_test.data_links.iloc[int(idx_tensor)]
         assert recovered["app_user_id"] in (1, 2)
