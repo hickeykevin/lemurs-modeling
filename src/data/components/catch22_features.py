@@ -27,13 +27,13 @@ class Catch22Featurizer:
         self.exclude_last_n_cols = exclude_last_n_cols
 
         # Get the catch22 feature names from pycatch22.
-        dummy = np.array([1.0, 2.0], dtype=np.float64)
+        # pycatch22 C library requires >= 3 points; 2 points causes a segfault.
+        dummy = np.array([1.0, 2.0, 3.0], dtype=np.float64)
         self.stats = pycatch22.catch22_all(dummy)["names"]
 
     def transform(self, x: np.ndarray) -> np.ndarray:
         x = np.asarray(x)
-# Accept either one sample [Time, Features] or a batch
-        # [N, Time, Features].
+        # Accept either one sample [Time, Features] or a batch [N, Time, Features].
         squeeze = x.ndim == 2
         if squeeze:
             x = x[None, ...]
@@ -54,17 +54,17 @@ class Catch22Featurizer:
         # Store 22 catch22 features for each modality.
         out = np.zeros((n, f, n_feats), dtype=np.float32)
 
-        if t > 0:
+        if t >= 3:
             for row in range(n):
                 for col in range(f):
                     series = x[row, :, col]  # this sample's, this modality's, full bin sequence
-                    result = pycatch22.catch22_all(series)  # attempted for every window, any length
+                    result = pycatch22.catch22_all(series)
                     values = np.asarray(result["values"], dtype=np.float64)
-                  #Catch22 sometimes returns NaN or inf for a feature 
-                  # when the time series is too short or constant. 
-                  # We replace only those problematic values with fill_value (default 0.0).
                     values = np.where(np.isfinite(values), values, self.fill_value)
                     out[row, col, :] = values
+        elif t > 0:
+            # Time series with t < 3 is too short for catch22 C calculations (requires >= 3 points)
+            out.fill(self.fill_value)
         # else: t == 0 (an empty window, e.g. an empty data split) -- out
         # stays all zeros from np.zeros() above, same convention as
         # SummaryStatsFeaturizer.
