@@ -78,3 +78,19 @@ def test_empty_time_dimension_returns_zeros():
     output = featurizer.transform(x)
     assert output.shape == (3, 4)
     assert np.all(output == 0.0)
+
+
+def test_sampler_num_time_features():
+    from src.data.components.samplers import (
+        RollingSampler, OffsetSampler, BlockSampler, IntervalAwareSampler, LagSampler
+    )
+    assert RollingSampler(include_time_features=True).num_time_features == 4
+    assert RollingSampler(include_time_features=False).num_time_features == 0
+    assert OffsetSampler(include_time_features=True).num_time_features == 2
+    assert OffsetSampler(include_time_features=False).num_time_features == 0
+    assert BlockSampler(include_time_features=True).num_time_features == 4
+    assert BlockSampler(include_time_features=False).num_time_features == 0
+    assert IntervalAwareSampler(include_time_features=True).num_time_features == 4
+    assert IntervalAwareSampler(include_time_features=False).num_time_features == 0
+    assert LagSampler().num_time_features == 0
+

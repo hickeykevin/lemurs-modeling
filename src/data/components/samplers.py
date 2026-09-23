@@ -34,6 +34,11 @@ class TimeSampler(ABC):
         """
         return None
 
+    @property
+    def num_time_features(self) -> int:
+        """Number of cyclic time features appended to the end of the sampled array."""
+        return 0
+
 class RollingSampler(TimeSampler):
     """New logic: Samples X hours exactly preceding the survey timestamp."""
     
@@ -41,6 +46,11 @@ class RollingSampler(TimeSampler):
         self.lookback_hours = lookback_hours
         self.resample_freq = resample_freq
         self.include_time_features = include_time_features
+
+    @property
+    def num_time_features(self) -> int:
+        """Appends sin/cos hour and sin/cos day-of-week (4 columns)."""
+        return 4 if self.include_time_features else 0
 
     def window_bounds(self, survey_timestamp):
         end_time = pd.Timestamp(survey_timestamp).floor(self.resample_freq)
@@ -130,6 +140,11 @@ class OffsetSampler(TimeSampler):
         self.end_offset_hours = end_offset_hours
         self.resample_freq = resample_freq
         self.include_time_features = include_time_features
+
+    @property
+    def num_time_features(self) -> int:
+        """Appends sin/cos hour (2 columns)."""
+        return 2 if self.include_time_features else 0
 
     def window_bounds(self, survey_timestamp):
         day_start = pd.Timestamp(pd.Timestamp(survey_timestamp).date())
@@ -231,6 +246,11 @@ class BlockSampler(TimeSampler):
     def __init__(self, lookback_days: int = 1, include_time_features: bool = True, **kwargs):
         self.lookback_days = lookback_days
         self.include_time_features = include_time_features
+
+    @property
+    def num_time_features(self) -> int:
+        """Appends sin/cos hour and sin/cos day-of-week (4 columns)."""
+        return 4 if self.include_time_features else 0
 
     def window_bounds(self, survey_timestamp):
         day_start = pd.Timestamp(pd.Timestamp(survey_timestamp).date())
@@ -439,6 +459,11 @@ class IntervalAwareSampler(TimeSampler):
         self._durations_h = np.array(
             [start - end for start, end in self._offsets], dtype=np.float64
         )
+
+    @property
+    def num_time_features(self) -> int:
+        """Appends sin/cos hour and sin/cos day-of-week (4 columns)."""
+        return 4 if self.include_time_features else 0
 
     def window_bounds(self, survey_timestamp):
         anchor = pd.Timestamp(survey_timestamp)

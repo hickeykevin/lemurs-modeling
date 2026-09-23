@@ -682,10 +682,11 @@ def test_flaml_regression_with_demographics():
 
 
 def test_flaml_featurizer_auto_exclude_last_n_cols():
-    """Verify that FLAMLHealthModule automatically sets exclude_last_n_cols from datamodule modalities."""
+    """Verify that FLAMLHealthModule automatically sets exclude_last_n_cols from sampler.num_time_features."""
     import torch
     from src.data.components.tabular_features import SummaryStatsFeaturizer
     from src.data.components.catch22_features import Catch22Featurizer
+    from src.data.components.samplers import RollingSampler
 
     B, T = 10, 8
     # 2 modalities + 4 time features = 6 columns
@@ -699,6 +700,7 @@ def test_flaml_featurizer_auto_exclude_last_n_cols():
 
     class DummyDataModule:
         modalities = ["step", "calorie"]  # 2 modalities
+        sampler = RollingSampler(include_time_features=True)
         def train_dataloader(self):
             return [batch]
         def val_dataloader(self):
@@ -722,7 +724,7 @@ def test_flaml_featurizer_auto_exclude_last_n_cols():
     assert feat.exclude_last_n_cols == "auto"
 
     X, _ = module._extract_features_and_targets(batch)
-    # After extraction, auto was resolved to 6 - 2 = 4
+    # After extraction, auto was resolved to sampler.num_time_features (4)
     assert feat.exclude_last_n_cols == 4
     # With 2 modalities and 1 stat ('mean'), X should have 2 columns
     assert X.shape == (B, 2)
@@ -750,6 +752,91 @@ def test_flaml_featurizer_auto_exclude_last_n_cols():
     fresh_module = FLAMLHealthModule(featurizer=fresh_feat, automl_config={})
     fresh_module.on_load_checkpoint(ckpt)
     assert fresh_feat.exclude_last_n_cols == 4
+
+
+def test_flaml_featurizer_auto_dual_scaler_preserves_both_streams():
+    """Verify that when DualScaler produces 2x modalities, both streams are retained."""
+    import torch
+    from src.data.components.tabular_features import SummaryStatsFeaturizer
+    from src.data.components.samplers import RollingSampler
+
+    B, T = 10, 8
+    # 2 modalities doubled by DualScaler (4 sensor channels) + 4 time features = 8 columns
+    x = torch.randn(B, T, 8)
+    y = torch.randint(0, 2, (B,))
+
+    batch = {
+        "features": x,
+        "targets": y,
+    }
+
+    class DummyDataModule:
+        sampler = RollingSampler(include_time_features=True)  # num_time_features = 4
+        def train_dataloader(self):
+            return [batch]
+        def val_dataloader(self):
+            return [batch]
+
+    class DummyTrainer:
+        datamodule = DummyDataModule()
+        should_stop = False
+        is_global_zero = True
+        progress_bar_callback = None
+
+    feat = SummaryStatsFeaturizer(stats=["mean", "std"], exclude_last_n_cols="auto")
+    module = FLAMLHealthModule(
+        featurizer=feat,
+        automl_config={"time_budget": 1, "estimator_list": ["lrl2"], "n_jobs": 1},
+    )
+    module.trainer = DummyTrainer()
+
+    X, _ = module._extract_features_and_targets(batch)
+    # Featurizer excludes only the 4 time columns from sampler
+    assert feat.exclude_last_n_cols == 4
+    # Remaining 4 sensor channels (both global & subject streams) * 2 stats = 8 features
+    assert X.shape == (B, 4 * 2)
+
+
+def test_flaml_featurizer_auto_offset_sampler():
+    """Verify that OffsetSampler's 2 time features are correctly auto-excluded."""
+    import torch
+    from src.data.components.tabular_features import SummaryStatsFeaturizer
+    from src.data.components.samplers import OffsetSampler
+
+    B, T = 10, 8
+    # 2 modalities + 2 time features = 4 columns
+    x = torch.randn(B, T, 4)
+    y = torch.randint(0, 2, (B,))
+
+    batch = {
+        "features": x,
+        "targets": y,
+    }
+
+    class DummyDataModule:
+        sampler = OffsetSampler(include_time_features=True)  # num_time_features = 2
+        def train_dataloader(self):
+            return [batch]
+        def val_dataloader(self):
+            return [batch]
+
+    class DummyTrainer:
+        datamodule = DummyDataModule()
+        should_stop = False
+        is_global_zero = True
+        progress_bar_callback = None
+
+    feat = SummaryStatsFeaturizer(stats=["mean"], exclude_last_n_cols="auto")
+    module = FLAMLHealthModule(
+        featurizer=feat,
+        automl_config={"time_budget": 1, "estimator_list": ["lrl2"], "n_jobs": 1},
+    )
+    module.trainer = DummyTrainer()
+
+    X, _ = module._extract_features_and_targets(batch)
+    assert feat.exclude_last_n_cols == 2
+    assert X.shape == (B, 2)
+
 
 
 

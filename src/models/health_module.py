@@ -385,27 +385,22 @@ class FLAMLHealthModule(LightningModule):
         return x.cpu().numpy().reshape(x.shape[0], -1)
 
     def _resolve_featurizer_exclude_cols(self, batch_features: torch.Tensor) -> None:
-        """Resolves 'auto' exclude_last_n_cols on the featurizer using datamodule modalities."""
+        """Resolves 'auto' exclude_last_n_cols on the featurizer using the sampler's num_time_features."""
         if self.featurizer is None or getattr(self.featurizer, "exclude_last_n_cols", None) not in (None, "auto"):
             return
 
         dm = getattr(getattr(self, "trainer", None), "datamodule", None)
-        modalities = None
-        if dm is not None:
-            modalities = getattr(dm, "modalities", None)
-            if modalities is None and hasattr(dm, "hparams"):
-                modalities = getattr(dm.hparams, "modalities", None)
+        sampler = getattr(dm, "sampler", None)
+        if sampler is None and hasattr(dm, "hparams"):
+            sampler = getattr(dm.hparams, "sampler", None)
 
-        if modalities is not None:
-            total_cols = batch_features.shape[-1]
-            num_time_cols = max(0, total_cols - len(modalities))
-            self.featurizer.exclude_last_n_cols = num_time_cols
-            self.print(
-                f"[FLAML Featurizer] Auto-configured exclude_last_n_cols={num_time_cols} "
-                f"({total_cols} total cols - {len(modalities)} modalities: {modalities})"
-            )
-        else:
-            self.featurizer.exclude_last_n_cols = 0
+        num_time_cols = getattr(sampler, "num_time_features", 0)
+        self.featurizer.exclude_last_n_cols = num_time_cols
+        sampler_name = sampler.__class__.__name__ if sampler is not None else "None"
+        self.print(
+            f"[FLAML Featurizer] Auto-configured exclude_last_n_cols={num_time_cols} "
+            f"from sampler ({sampler_name})"
+        )
 
     def _extract_features_and_targets(
         self, batch: Dict[str, torch.Tensor], stage: str = "train"
