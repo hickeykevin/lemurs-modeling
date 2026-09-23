@@ -1,29 +1,29 @@
 #!/bin/bash
 # Wrapper script for Sampler x Model x Modality sweep to translate W&B args to Hydra overrides safely
 
-ARGS=""
+ARGS=()
 
 for arg in "$@"; do
     case "$arg" in
         sampler_pkg=*)
             val="${arg#*=}"
-            ARGS="$ARGS \"data/sampler=sweep_configs/$val\""
+            ARGS+=("data/sampler=sweep_configs/$val")
             ;;
         model_pkg=*)
             val="${arg#*=}"
-            ARGS="$ARGS \"model=$val\""
+            ARGS+=("model=$val")
             ;;
         modalities_choice=*)
             val="${arg#*=}"
-            ARGS="$ARGS \"data/modalities=$val\""
+            ARGS+=("data/modalities=$val")
             ;;
         *)
-            ARGS="$ARGS \"$arg\""
+            ARGS+=("$arg")
             ;;
     esac
 done
 
-eval "uv run python src/train.py \
+exec uv run python src/train.py \
     eval_plan=cyclical \
     task_name=cyclical_sweep \
     logger=wandb \
@@ -36,4 +36,5 @@ eval "uv run python src/train.py \
     data.require_sensor_data=true \
     data.purge_hours=120.0 \
     trainer.max_epochs=75 \
-    \$ARGS"
+    "${ARGS[@]}"
+
