@@ -246,13 +246,23 @@ class HealthLitModule(LightningModule):
         # Dynamically build input size, user embedding, and demographics support on the net
         if self._trainer is not None and self.trainer.datamodule is not None:
             dm = self.trainer.datamodule
+            sampler = getattr(dm, "sampler", None)
+            if sampler is None and hasattr(dm, "hparams"):
+                sampler = getattr(dm.hparams, "sampler", None)
+            num_time_cols = getattr(sampler, "num_time_features", 0)
+
             if hasattr(dm, "data_train") and dm.data_train is not None:
                 train_ds = dm.data_train
                 if len(train_ds) > 0:
                     sample = train_ds[0]
                     input_size = sample["features"].shape[-1]
                     if hasattr(self.net, "init_input_size"):
-                        self.net.init_input_size(input_size)
+                        import inspect
+                        sig = inspect.signature(self.net.init_input_size)
+                        if "num_time_features" in sig.parameters:
+                            self.net.init_input_size(input_size, num_time_features=num_time_cols)
+                        else:
+                            self.net.init_input_size(input_size)
             if hasattr(dm, "demographics_dim") and dm.demographics_dim is not None:
                 if hasattr(self.net, "init_demographics"):
                     self.net.init_demographics(dm.demographics_dim)

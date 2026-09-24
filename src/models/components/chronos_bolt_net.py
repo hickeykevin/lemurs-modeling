@@ -75,27 +75,45 @@ class ChronosBoltEncoderNet(nn.Module):
         self.pooling = pooling
         self.modality_pooling = modality_pooling
         self.torch_dtype = torch_dtype
+        self.num_sensor_cols = len(self.modalities)
 
         # Base hidden size from known models or fallback to 384 (mini)
         self.embed_dim = BOLT_EMBED_DIMS.get(model_id, 384)
         self.representation_dim = (
-            self.embed_dim * len(self.modalities) if modality_pooling == "concat" else self.embed_dim
+            self.embed_dim * self.num_sensor_cols if modality_pooling == "concat" else self.embed_dim
         )
 
         self.pipeline = None  # Loaded lazily on first forward
         self.fc = nn.Linear(self.representation_dim + demographics_dim, output_size)
 
-    def init_input_size(self, input_size: int) -> None:
-        """Sanity-checks that input features contain at least our expected modalities."""
-        if input_size < len(self.modalities):
+    def init_input_size(self, input_size: int, num_time_features: Optional[int] = None) -> None:
+        """Dynamically configures sensor channel count and adjusts classification head.
+
+        Args:
+            input_size: Total number of features in each time step.
+            num_time_features: Number of trailing time/cyclic features produced by the sampler.
+                When provided, sensor_cols = max(len(modalities), input_size - num_time_features).
+                This cleanly handles DualScaler (2 * M sensor cols) vs single/no scaler (M cols).
+        """
+        if num_time_features is not None:
+            self.num_sensor_cols = max(len(self.modalities), input_size - num_time_features)
+        elif input_size >= 2 * len(self.modalities):
+            self.num_sensor_cols = 2 * len(self.modalities)
+        elif input_size >= len(self.modalities):
+            self.num_sensor_cols = len(self.modalities)
+        else:
             raise ValueError(
                 f"datamodule produced {input_size} feature columns, fewer than the "
                 f"{len(self.modalities)} modalities {self.modalities} this net expects"
             )
 
+        if self.modality_pooling == "concat":
+            self.representation_dim = self.embed_dim * self.num_sensor_cols
+            self.fc = nn.Linear(self.representation_dim + self.demographics_dim, self.output_size)
+
     def init_demographics(self, demographics_dim: int) -> None:
         """Adjusts the output linear projection to support static demographics."""
-        if demographics_dim > 0 and self.demographics_dim == 0:
+        if demographics_dim > 0 and self.demographics_dim != demographics_dim:
             self.demographics_dim = demographics_dim
             self.fc = nn.Linear(self.representation_dim + demographics_dim, self.fc.out_features)
 
@@ -132,8 +150,9 @@ class ChronosBoltEncoderNet(nn.Module):
         actual_d_model = getattr(pipeline.model.config, "d_model", self.embed_dim)
         if actual_d_model != self.embed_dim:
             self.embed_dim = actual_d_model
+            num_streams = getattr(self, "num_sensor_cols", len(self.modalities))
             self.representation_dim = (
-                self.embed_dim * len(self.modalities) if self.modality_pooling == "concat" else self.embed_dim
+                self.embed_dim * num_streams if self.modality_pooling == "concat" else self.embed_dim
             )
             self.fc = nn.Linear(self.representation_dim + self.demographics_dim, self.output_size).to(device)
 
@@ -143,12 +162,20 @@ class ChronosBoltEncoderNet(nn.Module):
     def forward(self, x: torch.Tensor, demographics: Optional[torch.Tensor] = None) -> torch.Tensor:
         self._ensure_pipeline(x.device)
 
-        # Keep only sensor modalities (ignore any trailing cyclic time features)
-        x_sensor = x[:, :, : len(self.modalities)]
+        # Determine number of sensor channels to encode
+        num_sensor_cols = getattr(self, "num_sensor_cols", None)
+        if num_sensor_cols is None:
+            if x.shape[-1] >= 2 * len(self.modalities):
+                num_sensor_cols = 2 * len(self.modalities)
+            else:
+                num_sensor_cols = min(x.shape[-1], len(self.modalities))
+
+        # Keep sensor modalities (both global & subject if dual scaler; ignore trailing cyclic time features)
+        x_sensor = x[:, :, :num_sensor_cols]
         b, t, f = x_sensor.shape
 
         # Reshape to channel-independent batch of 1D series: [B * F, T]
-        # Transpose so each modality is a separate univariate series
+        # Transpose so each modality/stream is a separate univariate series
         x_flat = x_sensor.permute(0, 2, 1).reshape(b * f, t)
 
         # Extract embeddings using ChronosBoltPipeline's native embed() API
@@ -167,10 +194,13 @@ class ChronosBoltEncoderNet(nn.Module):
         else:
             patch_pooled = embeds.mean(dim=1)  # [B * F, d_model]
 
-        # 2. Reshape to [B, F, d_model] and pool across modalities
+        # 2. Reshape to [B, F, d_model] and pool across modalities/streams
         mod_embeds = patch_pooled.view(b, f, -1)
         if self.modality_pooling == "concat":
             pooled = mod_embeds.reshape(b, -1)  # [B, F * d_model]
+            if pooled.shape[-1] + self.demographics_dim != self.fc.in_features:
+                self.representation_dim = pooled.shape[-1]
+                self.fc = nn.Linear(self.representation_dim + self.demographics_dim, self.output_size).to(x.device)
         else:
             pooled = mod_embeds.mean(dim=1)  # [B, d_model]
 

@@ -90,3 +90,43 @@ def test_chronos_bolt_forward_with_demographics():
     demo = torch.randn(2, 4)
     out = net(x, demographics=demo)
     assert out.shape == (2, 2)
+
+
+def test_chronos_bolt_dual_scaler_init():
+    """Verify that init_input_size recognizes DualScaler channels (2*M) and updates concat pooling."""
+    net = ChronosBoltEncoderNet(
+        modalities=["step", "calorie"],
+        modality_pooling="concat",
+        output_size=2,
+    )
+    # Total cols = 2 modalities * 2 (dual) + 4 time features = 8 cols
+    net.init_input_size(input_size=8, num_time_features=4)
+    assert net.num_sensor_cols == 4  # 2 global + 2 subject
+    assert net.representation_dim == net.embed_dim * 4
+    assert net.fc.in_features == net.embed_dim * 4
+
+    # Now with demographics
+    net.init_demographics(demographics_dim=6)
+    assert net.fc.in_features == (net.embed_dim * 4) + 6
+
+
+@pytest.mark.slow
+def test_chronos_bolt_forward_with_dual_scaler():
+    """Real forward pass verifying DualScaler streams are encoded alongside demographics."""
+    pytest.importorskip("chronos", reason="only runs where the chronos2 extra is installed")
+
+    net = ChronosBoltEncoderNet(
+        modalities=["step", "calorie"],
+        modality_pooling="concat",
+        model_id="amazon/chronos-bolt-mini",
+        output_size=2,
+    )
+    # DualScaler: 2 global + 2 subject + 4 time features = 8 cols
+    net.init_input_size(input_size=8, num_time_features=4)
+    net.init_demographics(demographics_dim=3)
+
+    x = torch.randn(2, 16, 8)
+    demo = torch.randn(2, 3)
+    out = net(x, demographics=demo)
+    assert out.shape == (2, 2)
+
