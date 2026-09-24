@@ -1,0 +1,69 @@
+# W&B Sweep Configuration: Rolling Sampler x Chronos-Bolt x Modality Sweep
+#
+# Grid search (method: grid) -- exhaustive, not sampled.
+# 20 samplers x 1 model x 7 modality combinations = 140 runs.
+#
+# Swept axes:
+#   sampler_pkg -- rolling_<lookback>h_<window>h (20 configs):
+#     lookback in [24, 48, 72, 96, 120], window (resample_freq) in [4, 6, 8, 12].
+#     Every value here is a self-contained config in configs/data/sampler/sweep_configs/.
+#   model_pkg -- pinned to chronos_bolt (1 config):
+#     - chronos_bolt (Amazon Chronos-Bolt Mini foundation model encoder)
+#   modalities_choice -- all 7 non-empty subsets of {step, calorie, distance} (7 configs):
+#     Configured via the data/modalities config group (e.g. data/modalities=step_distance).
+#
+# Fixed, not swept (see scripts/sampler_model_sweep_wrapper.sh):
+#   scaler=dual; os_filter=both; collapse_strategy=none;
+#   use_demographics=true; use_sleep=false; use_survey_context=false;
+#   require_sensor_data=true; purge_hours=120.0 (5 days); max_epochs=75.
+
+name: chronos_bolt_sampler_sweep
+project: lemurs-modeling
+program: src/train.py
+method: grid
+metric:
+  name: pooled/f1
+  goal: maximize
+
+parameters:
+  sampler_pkg:
+    values:
+      - rolling_24h_4h
+      - rolling_24h_6h
+      - rolling_24h_8h
+      - rolling_24h_12h
+      - rolling_48h_4h
+      - rolling_48h_6h
+      - rolling_48h_8h
+      - rolling_48h_12h
+      - rolling_72h_4h
+      - rolling_72h_6h
+      - rolling_72h_8h
+      - rolling_72h_12h
+      - rolling_96h_4h
+      - rolling_96h_6h
+      - rolling_96h_8h
+      - rolling_96h_12h
+      - rolling_120h_4h
+      - rolling_120h_6h
+      - rolling_120h_8h
+      - rolling_120h_12h
+
+  model_pkg:
+    values:
+      - chronos_bolt
+
+  modalities_choice:
+    values:
+      - step
+      - calorie
+      - distance
+      - step_calorie
+      - step_distance
+      - calorie_distance
+      - step_calorie_distance
+
+command:
+  - bash
+  - scripts/sampler_model_sweep_wrapper.sh
+  - ${args_no_hyphens}
