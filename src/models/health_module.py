@@ -370,7 +370,7 @@ class FLAMLHealthModule(LightningModule):
         
         self.automl = AutoML()
         self.task = task
-        self.featurizer = featurizer
+        self.featurizer = featurizer if (featurizer and hasattr(featurizer, "transform")) else None
 
         # Register custom learners (e.g. svm_pipeline)
         try:

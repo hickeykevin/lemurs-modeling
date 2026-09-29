@@ -3,7 +3,7 @@ defaults:
   - aggregator: suicide_risk
   - sampler: sweep_configs/offset_48h_6h
   - scaler: dual
-  - modalities: step_distance
+  - modalities: step
 
 _target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
 
@@ -23,12 +23,18 @@ random_state: ${seed}
 os_filter: both # both, ios, android
 
 collapse_strategy: none
-require_sensor_data: true
-use_survey_context: true
+require_sensor_data: false
+use_survey_context: false
+survey_context_mode: none
 include_time_features: false
 
-use_demographics: true
-use_sleep: true
+use_demographics: false
+use_age: false
+use_gender: false
+use_lgbt: false
+use_device_source: false
+use_sleep: false
+sleep_feature_mode: none
 
 purge_hours: null # gap (hours) purged at each fold boundary; null derives it from the sampler's lookback
 

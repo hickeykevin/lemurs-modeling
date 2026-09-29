@@ -3,7 +3,7 @@ defaults:
   - aggregator: suicide_risk
   - sampler: interval_aware
   - scaler: dual
-  - modalities: step_calorie
+  - modalities: step
 
 _target_: src.data.cv_health_datamodule.CVHealthDataModule
 
@@ -21,11 +21,17 @@ random_state: ${seed}
 os_filter: both # both, ios, android
 
 collapse_strategy: null # one sample per survey response; see configs/data/default.yaml
-require_sensor_data: true
-use_survey_context: true
-include_time_features: true
+require_sensor_data: false
+use_survey_context: false
+survey_context_mode: none
+include_time_features: false
 
-use_demographics: true
-use_sleep: true
+use_demographics: false
+use_age: false
+use_gender: false
+use_lgbt: false
+use_device_source: false
+use_sleep: false
+sleep_feature_mode: none
 
 exclude_user_ids: null

@@ -269,6 +269,7 @@ def test_referent_scaling_uses_training_statistics_only(two_survey_data):
             collapse_strategy="none",
             train_val_test_split=(0.5, 0.25, 0.25),
             use_demographics=False,
+            use_survey_context=True,
         )
         dm.setup()
 

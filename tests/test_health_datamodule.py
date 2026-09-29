@@ -1112,16 +1112,25 @@ def test_datamodule_use_demographics_toggle(mock_db_class, dummy_data):
     
     dm.setup()
     
-    # 1. Verify datamodule properties
-    assert dm.demographics_dim == 4
-    assert dm.demographics_map is not None
-    assert dm.default_demographics is not None
-    
-    # 2. Verify dataset item contains demographics
-    train_ds = dm.data_train
+    # 1. Verify datamodule properties with pure baseline (both False)
+    assert dm.demographics_dim == 0
+
+    # 2. Verify with device source only
+    dm_src = HealthDataModule(
+        exclude_user_ids=[],
+        aggregator=MeanAggregator(question_ids=[2]),
+        sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
+        use_demographics=False,
+        use_device_source=True,
+        use_survey_context=False,
+    )
+    dm_src.setup()
+    assert dm_src.demographics_dim == 4
+    train_ds = dm_src.data_train
     sample = train_ds[0]
     assert isinstance(sample, dict)
     assert "demographics" in sample
+    assert sample["demographics"].shape[0] == 4
 
 
 

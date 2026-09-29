@@ -3,7 +3,7 @@ defaults:
   - aggregator: suicide_risk
   - sampler: rolling
   - scaler: robust
-  - modalities: step_calorie
+  - modalities: step
 
 _target_: src.data.health_datamodule.HealthDataModule
 
@@ -19,8 +19,14 @@ collapse_strategy: none # mean, max, min, first, last, none -- none keeps one sa
 require_sensor_data: false # drop responses with no sensor data in their sampling window
 
 use_survey_context: false # which daily survey (morning/afternoon) a response is, and its referent period
-include_time_features: true
-use_demographics: true
+survey_context_mode: none # none, both, morning_only, referent_only
+include_time_features: false
+use_demographics: false
+use_age: false
+use_gender: false
+use_lgbt: false
+use_device_source: false
 use_sleep: false
+sleep_feature_mode: none # none, both, hours_only, category_only
 
 exclude_user_ids: null # null uses CohortBuilder.DEFAULT_EXCLUDED_USER_IDS

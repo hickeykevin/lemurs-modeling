@@ -54,13 +54,19 @@ class HealthDataModule(LightningDataModule):
         random_state: int = 42,
         split_mode: Literal["user", "longitudinal"] = "user",
         os_filter: Optional[Literal["ios", "android", "both"]] = "both",
-        collapse_strategy: str = "mean",
-        use_demographics: bool = True,
+        collapse_strategy: str = "none",
+        use_demographics: bool = False,
+        use_age: Optional[bool] = None,
+        use_gender: Optional[bool] = None,
+        use_lgbt: Optional[bool] = None,
+        use_device_source: Optional[bool] = None,
         use_sleep: bool = False,
+        sleep_feature_mode: str = "both",
         enrollment_lead_days: float = 7.0,
         enrollment_trail_days: float = 1.0,
-        require_sensor_data: bool = True,
-        use_survey_context: bool = True,
+        require_sensor_data: bool = False,
+        use_survey_context: bool = False,
+        survey_context_mode: str = "both",
         include_time_features: Optional[bool] = None,
         exclude_user_ids: Optional[List[int]] = None,
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
@@ -236,7 +242,13 @@ class HealthDataModule(LightningDataModule):
                     df["sleep_unknown"] = df["sleep_category"].isna().astype(float)
 
             # Process demographics and device source embeddings
-            demo_processor = DemographicsProcessor(use_demographics=self.hparams.use_demographics)
+            demo_processor = DemographicsProcessor(
+                use_demographics=self.hparams.use_demographics,
+                use_age=getattr(self.hparams, "use_age", None),
+                use_gender=getattr(self.hparams, "use_gender", None),
+                use_lgbt=getattr(self.hparams, "use_lgbt", None),
+                use_device_source=getattr(self.hparams, "use_device_source", None),
+            )
             self.demographics_map, self.default_demographics = demo_processor.fit_transform(
                 train_df=train_df,
                 demographics_df=demographics_df,
@@ -244,10 +256,28 @@ class HealthDataModule(LightningDataModule):
                 master_df=master_df,
             )
             self.demographics_dim = demo_processor.demographics_dim
+
+            sleep_mode = getattr(self.hparams, "sleep_feature_mode", "none")
             if self.hparams.use_sleep:
-                self.demographics_dim += 5
+                if sleep_mode == "hours_only":
+                    self.demographics_dim += 1
+                elif sleep_mode == "category_only":
+                    self.demographics_dim += 4
+                elif sleep_mode in ("none", None):
+                    self.demographics_dim += 0
+                else:
+                    self.demographics_dim += 5
+
+            survey_mode = getattr(self.hparams, "survey_context_mode", "none")
             if self.hparams.use_survey_context:
-                self.demographics_dim += 3
+                if survey_mode == "morning_only":
+                    self.demographics_dim += 1
+                elif survey_mode == "referent_only":
+                    self.demographics_dim += 2
+                elif survey_mode in ("none", None):
+                    self.demographics_dim += 0
+                else:
+                    self.demographics_dim += 3
 
             # If the sampler needs access to the labels (e.g. LagSampler), provide them now
             if hasattr(self.hparams.sampler, "set_labels"):
@@ -272,6 +302,8 @@ class HealthDataModule(LightningDataModule):
                 default_demographics=self.default_demographics,
                 use_sleep=self.hparams.use_sleep,
                 use_survey_context=self.hparams.use_survey_context,
+                sleep_feature_mode=sleep_mode,
+                survey_context_mode=survey_mode,
             )
             self.data_val = HealthDataset(
                 val_df, modality_dfs, self.hparams.modality_cols,
@@ -281,6 +313,8 @@ class HealthDataModule(LightningDataModule):
                 default_demographics=self.default_demographics,
                 use_sleep=self.hparams.use_sleep,
                 use_survey_context=self.hparams.use_survey_context,
+                sleep_feature_mode=sleep_mode,
+                survey_context_mode=survey_mode,
             )
             self.data_test = HealthDataset(
                 test_df, modality_dfs, self.hparams.modality_cols,
@@ -290,6 +324,8 @@ class HealthDataModule(LightningDataModule):
                 default_demographics=self.default_demographics,
                 use_sleep=self.hparams.use_sleep,
                 use_survey_context=self.hparams.use_survey_context,
+                sleep_feature_mode=sleep_mode,
+                survey_context_mode=survey_mode,
             )
 
     def _filter_to_covered_samples(

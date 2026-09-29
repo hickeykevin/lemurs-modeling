@@ -3,7 +3,7 @@ defaults:
   - aggregator: suicide_risk
   - sampler: sweep_configs/offset_48h_6h
   - scaler: dual
-  - modalities: step_distance
+  - modalities: step
 
 # IndexedHealthDataModule (not plain HealthDataModule) so data_val/data_test
 # carry return_index=True, letting PredictionCollectorCallback pool
@@ -21,11 +21,17 @@ random_state: ${seed}
 os_filter: both
 
 collapse_strategy: none
-require_sensor_data: true
-use_survey_context: true
+require_sensor_data: false
+use_survey_context: false
+survey_context_mode: none
 include_time_features: false
 
-use_demographics: true
-use_sleep: true
+use_demographics: false
+use_age: false
+use_gender: false
+use_lgbt: false
+use_device_source: false
+use_sleep: false
+sleep_feature_mode: none
 
 exclude_user_ids: null

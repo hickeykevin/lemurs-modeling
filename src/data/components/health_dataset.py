@@ -37,6 +37,8 @@ class HealthDataset(Dataset):
         default_demographics: Optional[np.ndarray] = None,
         use_sleep: bool = False,
         use_survey_context: bool = False,
+        sleep_feature_mode: str = "both",
+        survey_context_mode: str = "both",
         return_index: bool = False,
     ) -> None:
         """Initializes the HealthDataset.
@@ -63,24 +65,44 @@ class HealthDataset(Dataset):
         self.default_demographics = default_demographics
         self.use_sleep = use_sleep
         self.use_survey_context = use_survey_context
+        self.sleep_feature_mode = sleep_feature_mode
+        self.survey_context_mode = survey_context_mode
         self.return_index = return_index
 
         if self.use_survey_context:
-            context_cols = ["is_morning", "referent_hours_scaled", "referent_missing"]
-            for col in context_cols:
-                if col not in self.data_links.columns:
-                    self.data_links[col] = 1.0 if col == "referent_missing" else 0.0
-            self.context_features = self.data_links[context_cols].values.astype(np.float32)
+            if self.survey_context_mode == "morning_only":
+                context_cols = ["is_morning"]
+            elif self.survey_context_mode == "referent_only":
+                context_cols = ["referent_hours_scaled", "referent_missing"]
+            elif self.survey_context_mode in ("none", None):
+                context_cols = []
+            else:
+                context_cols = ["is_morning", "referent_hours_scaled", "referent_missing"]
+
+            if context_cols:
+                for col in context_cols:
+                    if col not in self.data_links.columns:
+                        self.data_links[col] = 1.0 if col == "referent_missing" else 0.0
+                self.context_features = self.data_links[context_cols].values.astype(np.float32)
 
         if self.use_sleep:
-            sleep_cols = ["sleep_hours_scaled", "sleep_class_0", "sleep_class_1", "sleep_class_2", "sleep_unknown"]
-            for col in sleep_cols:
-                if col not in self.data_links.columns:
-                    if col == "sleep_unknown":
-                        self.data_links[col] = 1.0
-                    else:
-                        self.data_links[col] = 0.0
-            self.sleep_features = self.data_links[sleep_cols].values.astype(np.float32)
+            if self.sleep_feature_mode == "hours_only":
+                sleep_cols = ["sleep_hours_scaled"]
+            elif self.sleep_feature_mode == "category_only":
+                sleep_cols = ["sleep_class_0", "sleep_class_1", "sleep_class_2", "sleep_unknown"]
+            elif self.sleep_feature_mode in ("none", None):
+                sleep_cols = []
+            else:
+                sleep_cols = ["sleep_hours_scaled", "sleep_class_0", "sleep_class_1", "sleep_class_2", "sleep_unknown"]
+
+            if sleep_cols:
+                for col in sleep_cols:
+                    if col not in self.data_links.columns:
+                        if col == "sleep_unknown":
+                            self.data_links[col] = 1.0
+                        else:
+                            self.data_links[col] = 0.0
+                self.sleep_features = self.data_links[sleep_cols].values.astype(np.float32)
 
         self._sequences, self._targets, self._user_indices = self._precompute(modality_dfs, modality_cols)
 
@@ -182,13 +204,16 @@ class HealthDataset(Dataset):
             parts = []
             if self.demographics_map is not None:
                 uid = self.data_links.iloc[idx]["app_user_id"]
-                parts.append(self.demographics_map.get(uid, self.default_demographics))
-            if self.use_sleep:
+                demo_vec = self.demographics_map.get(uid, self.default_demographics)
+                if demo_vec is not None and len(demo_vec) > 0:
+                    parts.append(demo_vec)
+            if self.use_sleep and hasattr(self, "sleep_features") and self.sleep_features.shape[1] > 0:
                 parts.append(self.sleep_features[idx])
-            if self.use_survey_context:
+            if self.use_survey_context and hasattr(self, "context_features") and self.context_features.shape[1] > 0:
                 parts.append(self.context_features[idx])
-            demo = np.concatenate(parts).astype(np.float32)
-            sample["demographics"] = torch.tensor(demo, dtype=torch.float32)
+            if parts:
+                demo = np.concatenate(parts).astype(np.float32)
+                sample["demographics"] = torch.tensor(demo, dtype=torch.float32)
 
         if self.return_index:
             sample["sample_idx"] = torch.tensor(idx, dtype=torch.long)

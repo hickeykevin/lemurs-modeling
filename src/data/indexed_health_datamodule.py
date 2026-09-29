@@ -56,6 +56,8 @@ class IndexedHealthDataModule(HealthDataModule):
                     default_demographics=self.default_demographics,
                     use_sleep=self.hparams.use_sleep,
                     use_survey_context=self.hparams.use_survey_context,
+                    sleep_feature_mode=getattr(self.hparams, "sleep_feature_mode", "none"),
+                    survey_context_mode=getattr(self.hparams, "survey_context_mode", "none"),
                     return_index=True,
                 ),
             )

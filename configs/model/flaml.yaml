@@ -2,7 +2,8 @@
 # Convert time-series data into summary features.
 
 defaults:
-  - featurizer: summary_stats
+  - featurizer: null
+  - _self_
   
 _target_: src.models.health_module.FLAMLHealthModule
 auto_class_weights: false
