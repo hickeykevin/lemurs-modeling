@@ -14,3 +14,12 @@ fill_value: 0.0
 # Can also be explicitly overridden with an integer (e.g. 0, 2, 4).
 exclude_last_n_cols: auto
 
+# Channel selection mode for multi-channel / DualScaler inputs:
+# - 'all': compute catch22 over all channels (both global and subject scaled) -> 44 feats/modality
+# - 'global': compute catch22 only over global-scaled channels (drops duplicate subject channels) -> 22 feats/modality
+# - 'subject': compute catch22 only over subject-scaled channels -> 22 feats/modality
+channel_mode: global
+
+# Number of sensor modalities. If null, auto-detected from datamodule.modalities in FLAMLHealthModule.
+num_modalities: null
+

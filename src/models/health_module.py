@@ -417,8 +417,8 @@ class FLAMLHealthModule(LightningModule):
         return x.cpu().numpy().reshape(x.shape[0], -1)
 
     def _resolve_featurizer_exclude_cols(self, batch_features: torch.Tensor) -> None:
-        """Resolves 'auto' exclude_last_n_cols on the featurizer using the sampler's num_time_features."""
-        if self.featurizer is None or getattr(self.featurizer, "exclude_last_n_cols", None) not in (None, "auto"):
+        """Resolves 'auto' exclude_last_n_cols and num_modalities on the featurizer."""
+        if self.featurizer is None:
             return
 
         dm = getattr(getattr(self, "trainer", None), "datamodule", None)
@@ -426,13 +426,25 @@ class FLAMLHealthModule(LightningModule):
         if sampler is None and hasattr(dm, "hparams"):
             sampler = getattr(dm.hparams, "sampler", None)
 
-        num_time_cols = getattr(sampler, "num_time_features", 0)
-        self.featurizer.exclude_last_n_cols = num_time_cols
-        sampler_name = sampler.__class__.__name__ if sampler is not None else "None"
-        self.print(
-            f"[FLAML Featurizer] Auto-configured exclude_last_n_cols={num_time_cols} "
-            f"from sampler ({sampler_name})"
-        )
+        if getattr(self.featurizer, "exclude_last_n_cols", None) in (None, "auto"):
+            num_time_cols = getattr(sampler, "num_time_features", 0)
+            self.featurizer.exclude_last_n_cols = num_time_cols
+            sampler_name = sampler.__class__.__name__ if sampler is not None else "None"
+            self.print(
+                f"[FLAML Featurizer] Auto-configured exclude_last_n_cols={num_time_cols} "
+                f"from sampler ({sampler_name})"
+            )
+
+        if getattr(self.featurizer, "num_modalities", None) is None:
+            modalities = getattr(dm, "modalities", None)
+            if modalities is None and hasattr(dm, "hparams"):
+                modalities = getattr(dm.hparams, "modalities", None)
+            if modalities is not None:
+                self.featurizer.num_modalities = len(modalities)
+                self.print(
+                    f"[FLAML Featurizer] Auto-configured num_modalities={len(modalities)} "
+                    f"({list(modalities)})"
+                )
 
     def _extract_features_and_targets(
         self, batch: Dict[str, torch.Tensor], stage: str = "train"

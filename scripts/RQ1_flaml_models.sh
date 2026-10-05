@@ -45,7 +45,7 @@ WANDB_LOG_ARGS=(
 if [ -n "$MODEL_VAL" ] && [ -n "$SAMPLER_VAL" ] && [ -n "$MODALITIES_VAL" ]; then
     SHORT_SAMPLER="${SAMPLER_VAL#rolling_}"
     SHORT_MODEL="${MODEL_VAL#flaml_}"
-    WANDB_LOG_ARGS+=("logger.wandb.name=RQ1_${SHORT_MODEL}_${SHORT_SAMPLER}_${MODALITIES_VAL}")
+    WANDB_LOG_ARGS+=("++logger.wandb.name=RQ1_${SHORT_MODEL}_${SHORT_SAMPLER}_${MODALITIES_VAL}")
 fi
 
 if [ "$HAS_UV_PREFIX" = true ]; then
