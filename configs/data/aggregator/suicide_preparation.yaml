@@ -7,6 +7,8 @@
 
 #labeling strategy:
 # - Any preparation item (questions 7) ≥ 2
+#   (previously set to ≥ 1, which is true for every response on the 1-5 scale
+#   used since 0014-fix-scale-answer-indexing.sql. Matches suicide_risk.yaml.)
 #OR
 # - Answer to question 8, 12, 13 --> YES
 
@@ -17,7 +19,7 @@ rules:
   rule_1:
     ids: [7]
     op: "ge"
-    val: 1.0
+    val: 2.0
   rule_2:
     ids: [8, 12, 13]
     op: "any_gt"
