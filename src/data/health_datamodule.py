@@ -73,6 +73,8 @@ class HealthDataModule(LightningDataModule):
         purge_hours: Optional[float] = None,
         prev_label_aggregators: Optional[Dict[str, LabelAggregator]] = None,
         sleep_carry_to_afternoon: bool = False,
+        prev_item_aggregator: Optional[LabelAggregator] = None,
+        prev_item_lags: int = 5,
         swap_val_test: bool = False,
         symmetric_purge_diagnostic: bool = False,
     ) -> None:
@@ -123,6 +125,11 @@ class HealthDataModule(LightningDataModule):
             sleep_carry_to_afternoon (bool): Sleep is only asked in the morning survey.
                 When True, an afternoon survey takes the same day's morning report
                 (missing if there is none). See CohortBuilder._attach_sleep.
+            prev_item_aggregator (Optional[LabelAggregator]): A theme aggregator whose
+                question ids select items; their raw scores on the user's previous
+                ``prev_item_lags`` surveys (any kind) join the demographics vector.
+                See CohortBuilder._add_previous_items.
+            prev_item_lags (int): Number of preceding surveys used.
             purge_hours (Optional[float]): Only used when split_mode="longitudinal".
                 Width of the gap dropped around each user's train/val and
                 val/test boundary, so a retained sample's sampler window
@@ -211,6 +218,8 @@ class HealthDataModule(LightningDataModule):
                     exclude_user_ids=self.hparams.exclude_user_ids,
                     prev_label_aggregators=self.hparams.prev_label_aggregators,
                     sleep_carry_to_afternoon=self.hparams.sleep_carry_to_afternoon,
+                    prev_item_aggregator=self.hparams.prev_item_aggregator,
+                    prev_item_lags=self.hparams.prev_item_lags,
                 )
                 modality_dfs, master_df, demographics_df = builder.build()
 
@@ -293,6 +302,10 @@ class HealthDataModule(LightningDataModule):
             # Labels from each user's previous survey, built by CohortBuilder
             prev_names = list((self.hparams.prev_label_aggregators or {}).keys())
             self.prev_label_cols = [f"prev_{n}" for n in prev_names] + (["prev_label_missing"] if prev_names else [])
+            if self.hparams.prev_item_aggregator is not None:
+                self.prev_label_cols += CohortBuilder.prev_item_columns(
+                    self.hparams.prev_item_aggregator.get_question_ids(), self.hparams.prev_item_lags
+                )
             self.demographics_dim += len(self.prev_label_cols)
 
             # If the sampler needs access to the labels (e.g. LagSampler), provide them now

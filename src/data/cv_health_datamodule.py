@@ -96,6 +96,8 @@ class CVHealthDataModule(IndexedHealthDataModule):
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
         prev_label_aggregators: Optional[Dict[str, Any]] = None,
         sleep_carry_to_afternoon: bool = False,
+        prev_item_aggregator: Optional[Any] = None,
+        prev_item_lags: int = 5,
     ) -> None:
         """Initializes the CVHealthDataModule."""
         super().__init__(
@@ -128,6 +130,8 @@ class CVHealthDataModule(IndexedHealthDataModule):
             prebuilt_cohort=prebuilt_cohort,
             prev_label_aggregators=prev_label_aggregators,
             sleep_carry_to_afternoon=sleep_carry_to_afternoon,
+            prev_item_aggregator=prev_item_aggregator,
+            prev_item_lags=prev_item_lags,
         )
         if high_risk_user_ids is None:
             high_risk_user_ids = _get_default_high_risk_user_ids()

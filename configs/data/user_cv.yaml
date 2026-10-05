@@ -5,6 +5,7 @@ defaults:
   - scaler: dual
   - modalities: step
   - prev_labels: none
+  - prev_items: none
 
 _target_: src.data.cv_health_datamodule.CVHealthDataModule
 

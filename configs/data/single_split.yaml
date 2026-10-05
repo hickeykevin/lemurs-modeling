@@ -5,6 +5,7 @@ defaults:
   - scaler: dual
   - modalities: step
   - prev_labels: none
+  - prev_items: none
 
 # IndexedHealthDataModule (not plain HealthDataModule) so data_val/data_test
 # carry return_index=True, letting PredictionCollectorCallback pool

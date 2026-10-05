@@ -1,0 +1,5 @@
+# @package data
+# Raw item scores of the positive_emotion theme on the user's previous prev_item_lags surveys (any kind).
+# The theme's binary rule is not used; only its question ids. See CohortBuilder._add_previous_items.
+defaults:
+  - /data/aggregator@prev_item_aggregator: positive_emotion

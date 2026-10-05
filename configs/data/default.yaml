@@ -5,6 +5,7 @@ defaults:
   - scaler: robust
   - modalities: step
   - prev_labels: none
+  - prev_items: none
 
 _target_: src.data.health_datamodule.HealthDataModule
 

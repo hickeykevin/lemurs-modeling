@@ -1,0 +1,3 @@
+# @package data
+# No previous-item features (default).
+prev_item_aggregator: null

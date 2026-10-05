@@ -34,6 +34,8 @@ class CohortBuilder:
         exclude_user_ids: Optional[List[int]] = None,
         prev_label_aggregators: Optional[Dict[str, LabelAggregator]] = None,
         sleep_carry_to_afternoon: bool = False,
+        prev_item_aggregator: Optional[LabelAggregator] = None,
+        prev_item_lags: int = 5,
     ):
         """Initializes the CohortBuilder.
 
@@ -59,6 +61,11 @@ class CohortBuilder:
                 ``prev_<name>``: that aggregator's label on the user's *previous*
                 daily survey (0 when there is none), plus one ``prev_label_missing``
                 flag for the user's first survey. See ``_add_previous_labels``.
+            prev_item_aggregator: Optional theme aggregator (e.g. social_stress). Its
+                *question ids* (not its binary rule) select the items whose raw scores on
+                the user's previous ``prev_item_lags`` daily surveys become features.
+                See ``_add_previous_items``.
+            prev_item_lags: How many preceding surveys of any kind (morning or afternoon).
         """
         self.modalities = modalities
         self.modality_cols = modality_cols
@@ -76,6 +83,8 @@ class CohortBuilder:
             self.DEFAULT_EXCLUDED_USER_IDS if exclude_user_ids is None else list(exclude_user_ids)
         )
         self.prev_label_aggregators = dict(prev_label_aggregators or {})
+        self.prev_item_aggregator = prev_item_aggregator
+        self.prev_item_lags = int(prev_item_lags)
 
     def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]:
         """Orchestrates the entire cohort building pipeline.
@@ -461,6 +470,7 @@ class CohortBuilder:
 
         # Attach labels from each user's previous survey, if requested
         master_df = self._add_previous_labels(master_df, survey_response_df, answer_df)
+        master_df = self._add_previous_items(master_df, survey_response_df, answer_df)
 
         # If use_sleep is enabled, compute and merge sleep features
         if getattr(self, 'use_sleep', False):
@@ -513,6 +523,63 @@ class CohortBuilder:
         return master_df.merge(
             stream[["survey_response_id", *prev_cols, "prev_label_missing"]], on="survey_response_id", how="left"
         )
+
+    @staticmethod
+    def prev_item_columns(item_ids: List[int], lags: int) -> List[str]:
+        """Column names written by ``_add_previous_items`` (also read by the datamodule)."""
+        cols = []
+        for k in range(1, lags + 1):
+            cols += [f"pi{k}_q{q}" for q in sorted(item_ids)] + [f"pi{k}_missing", f"pi{k}_gap_h"]
+        return cols
+
+    def _add_previous_items(
+        self, master_df: pd.DataFrame, survey_response_df: pd.DataFrame, answer_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Adds raw item scores from each user's previous ``prev_item_lags`` surveys.
+
+        The stream is the user's full daily-survey stream (morning and afternoon, after
+        duplicate removal and collapsing), so lag k is the k-th preceding survey of any
+        kind and is unaffected by later sample filtering. Every lag is strictly earlier
+        than the survey being predicted; the survey's own items are never included.
+
+        Per lag k (1 = most recent) adds ``pi{k}_q{id}`` (the item's numeric answer, 0
+        when absent), ``pi{k}_missing`` (1 when there is no such survey or none of the
+        items were answered on it) and ``pi{k}_gap_h`` (hours between that survey and
+        the target survey, 0 when there is no such survey).
+        """
+        if self.prev_item_aggregator is None or master_df.empty:
+            return master_df
+
+        ids = sorted(self.prev_item_aggregator.get_question_ids())
+        stream = (
+            survey_response_df[["id", "app_user_id", "timestamp"]]
+            .rename(columns={"id": "survey_response_id"})
+            .sort_values(["app_user_id", "timestamp"])
+            .reset_index(drop=True)
+        )
+        answers = answer_df[answer_df["question_id"].isin(ids)].copy()
+        clean = answers["answer"].astype(str).str.strip().str.lower()
+        answers["answer"] = clean.map({"yes": 1.0, "no": 0.0}).fillna(pd.to_numeric(answers["answer"], errors="coerce"))
+        wide = (
+            answers.dropna(subset=["answer"])
+            .pivot_table(index="survey_response_id", columns="question_id", values="answer", aggfunc="mean")
+            .reindex(columns=ids)
+        )
+        wide.columns = [f"q{q}" for q in ids]
+        stream = stream.merge(wide, left_on="survey_response_id", right_index=True, how="left")
+
+        item_cols = [f"q{q}" for q in ids]
+        out = {"survey_response_id": stream["survey_response_id"]}
+        grouped = stream.groupby("app_user_id")
+        for k in range(1, self.prev_item_lags + 1):
+            shifted = grouped[item_cols].shift(k)
+            gap = (stream["timestamp"] - grouped["timestamp"].shift(k)).dt.total_seconds() / 3600.0
+            out[f"pi{k}_missing"] = shifted.isna().all(axis=1).astype(float)
+            for c in item_cols:
+                out[f"pi{k}_{c}"] = shifted[c].fillna(0.0).astype(float)
+            out[f"pi{k}_gap_h"] = gap.fillna(0.0).astype(float)
+        feats = pd.DataFrame(out)[["survey_response_id", *self.prev_item_columns(ids, self.prev_item_lags)]]
+        return master_df.merge(feats, on="survey_response_id", how="left")
 
     def _add_referent_window(self, master_df: pd.DataFrame) -> pd.DataFrame:
         """Annotates each response with the period its answers actually describe.
