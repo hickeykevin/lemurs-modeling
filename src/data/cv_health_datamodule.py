@@ -7,7 +7,7 @@ from sklearn.model_selection import StratifiedGroupKFold
 
 from src.data.components.label_aggregators import LabelAggregator
 from src.data.components.samplers import TimeSampler
-from src.data.health_datamodule import HealthDataModule
+from src.data.indexed_health_datamodule import IndexedHealthDataModule
 
 
 def _get_default_high_risk_user_ids() -> List[int]:
@@ -26,7 +26,7 @@ def _get_default_high_risk_user_ids() -> List[int]:
     return ids
 
 
-class CVHealthDataModule(HealthDataModule):
+class CVHealthDataModule(IndexedHealthDataModule):
     """Repeated, stratified, user-grouped cross-validation over the cohort.
 
     Every split is grouped on ``app_user_id`` so no participant appears on both
@@ -49,6 +49,15 @@ class CVHealthDataModule(HealthDataModule):
 
     The validation set is carved from the training users with the same grouped,
     stratified procedure, so early stopping never sees a test user either.
+
+    Val/test datasets carry sample indices (via ``IndexedHealthDataModule``) so
+    ``UserCVPlan`` can save per-survey predictions for every held-out user.
+
+    **Subject scaling of held-out users.** With ``DualScaler``, a test user has no
+    fitted per-subject scaler, so ``SubjectScaler`` fits one on that user's own
+    test windows. No labels are involved, but it uses the user's sensor data from
+    the whole study period, i.e. it assumes a deployed system has seen enough of a
+    new user's data to know their baseline.
     """
 
     def __init__(

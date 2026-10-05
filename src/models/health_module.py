@@ -705,6 +705,10 @@ class BaselineHealthModule(LightningModule):
         - "lag": Predicts the current label using the label from the user's previous 
           survey (requires x to contain the previous label index).
         - "most_frequent": Always predicts the most frequent class observed in training.
+        - "user_rate": Predicts each participant's positive rate in the training split,
+          using no sensor data at all (unseen participants get the overall training
+          rate). Under per-user splits this measures how much of a metric is reachable
+          by knowing *who* a survey belongs to.
     """
     
     def __init__(self, strategy: str = "lag", num_classes: Optional[int] = None, **kwargs):
@@ -733,11 +737,13 @@ class BaselineHealthModule(LightningModule):
         dm = self.trainer.datamodule
         train_dataloader = dm.train_dataloader()
         
-        y_list = []
+        y_list, user_list = [], []
         for batch in train_dataloader:
             y = batch["targets"]
             y_list.append(y.cpu().numpy())
+            user_list.append(batch["user_indices"].cpu().numpy())
         y_train = np.concatenate(y_list, axis=0)
+        users_train = np.concatenate(user_list, axis=0)
 
         if not hasattr(self, "num_classes"):
             self.num_classes = _resolve_num_classes(
@@ -749,14 +755,37 @@ class BaselineHealthModule(LightningModule):
             counts = np.bincount(y_train)
             self.majority_class = int(np.argmax(counts))
             self.print(f"[Baseline] Strategy: most_frequent | Majority Class: {self.majority_class}")
+        elif self.strategy == "user_rate":
+            if self.num_classes != 2:
+                raise ValueError("strategy='user_rate' supports binary labels only")
+            # Index 0 is reserved for participants absent from training (see the
+            # datamodule's user_to_idx); they, and any gaps, get the overall rate.
+            overall = float(y_train.mean())
+            rates = np.full(int(users_train.max()) + 1, overall, dtype=np.float32)
+            for idx in np.unique(users_train):
+                if idx > 0:
+                    rates[idx] = y_train[users_train == idx].mean()
+            self.user_rates = torch.tensor(rates)
+            self.overall_rate = overall
+            self.print(f"[Baseline] Strategy: user_rate | {len(rates) - 1} participants | overall rate {overall:.3f}")
         else:
             self.print(f"[Baseline] Strategy: lag")
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, user_indices: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Produces logits based on the selected strategy."""
         batch_size = x.shape[0]
         logits = torch.full((batch_size, self.num_classes), -100.0, device=self.device)
-        
+
+        if self.strategy == "user_rate":
+            if user_indices is None:
+                raise ValueError("strategy='user_rate' needs the batch's user_indices")
+            idx = user_indices.long().cpu()
+            known = (idx > 0) & (idx < len(self.user_rates))
+            p = torch.where(known, self.user_rates[idx.clamp(0, len(self.user_rates) - 1)],
+                            torch.tensor(self.overall_rate)).clamp(1e-4, 1 - 1e-4)
+            # Log-probabilities as logits: softmax recovers exactly p.
+            return torch.stack([torch.log1p(-p), torch.log(p)], dim=1).to(self.device)
+
         if self.strategy == "most_frequent":
             logits[:, self.majority_class] = 100.0
         elif self.strategy == "lag":
@@ -777,7 +806,7 @@ class BaselineHealthModule(LightningModule):
 
     def model_step(self, batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         x, y = batch["features"], batch["targets"]
-        logits = self.forward(x)
+        logits = self.forward(x, batch.get("user_indices"))
         loss = torch.nn.functional.cross_entropy(logits, y)
         preds = torch.argmax(logits, dim=1)
         return loss, preds, y, logits

@@ -569,6 +569,175 @@ class IntervalAwareSampler(TimeSampler):
 
         return np.stack(all_modality_features, axis=-1)
 
+class MinuteGridSampler(TimeSampler):
+    """Spreads interval records onto a survey-anchored, minute-level grid.
+
+    Intended for encoders pretrained on minute-level wearable data (e.g. LSM-2,
+    PAT) and for inspecting how much temporal detail the raw records actually
+    carry. Health records are intervals whose lengths range from seconds to
+    half a day, so each record's value is distributed uniformly over the
+    minutes it overlaps (the same proportional rule as ``IntervalAwareSampler``,
+    at 1-minute resolution). A 12-hour record of 3,000 steps therefore becomes
+    ~4.2 steps/minute for 720 minutes: the total is preserved, but the timing
+    within the record is not recoverable.
+
+    The window ends at the survey timestamp floored to ``align_freq`` (matching
+    ``RollingSampler`` when ``align_freq`` equals its ``resample_freq``) and
+    spans ``lookback_hours`` before it.
+
+    Records longer than ``max_record_minutes`` can be excluded, leaving their
+    minutes unobserved so a masked-reconstruction encoder treats them as
+    missing rather than as a flat, low-intensity signal.
+
+    Channel order is ``[mod_0_value, mod_0_mask, mod_1_value, mod_1_mask, ...]``
+    (masks only when ``emit_mask``). A mask minute is 1.0 if any retained record
+    overlapped it, regardless of the value it contributed.
+
+    Args:
+        lookback_hours: Window length in hours.
+        align_freq: Frequency the survey timestamp is floored to before the
+            window is built, e.g. ``"1min"`` or ``"6h"``.
+        max_record_minutes: Drop records longer than this; ``None`` keeps all.
+        emit_mask: Whether to append a per-modality observed/missing channel.
+
+    Example:
+        >>> sampler = MinuteGridSampler(lookback_hours=24)
+        >>> grid = sampler(survey_ts, user_id, dfs, cols, ['step'])
+        >>> grid.shape
+        (1440, 2)
+    """
+
+    def __init__(
+        self,
+        lookback_hours: float = 24.0,
+        align_freq: str = "1min",
+        max_record_minutes: Optional[float] = None,
+        emit_mask: bool = True,
+        **kwargs,
+    ):
+        self.lookback_hours = lookback_hours
+        self.align_freq = align_freq
+        self.max_record_minutes = max_record_minutes
+        self.emit_mask = emit_mask
+        self.num_minutes = int(round(lookback_hours * 60))
+
+    def window_bounds(self, survey_timestamp):
+        end_time = pd.Timestamp(survey_timestamp).floor(self.align_freq)
+        return end_time - timedelta(minutes=self.num_minutes), end_time
+
+    def allocate(
+        self,
+        starts: np.ndarray,
+        ends: np.ndarray,
+        values: np.ndarray,
+        window_start: pd.Timestamp,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Distributes interval records over the minute grid.
+
+        Runs in O(records + minutes) using difference arrays: full minutes
+        inside a record receive its per-minute rate, and the partial minutes at
+        either end receive the rate scaled by their overlap.
+
+        Args:
+            starts, ends: Record bounds as ``datetime64[ns]`` arrays.
+            values: Record values.
+            window_start: Left edge of minute 0.
+
+        Returns:
+            ``(values, observed)``, each of shape ``[num_minutes]``.
+        """
+        M = self.num_minutes
+        grid = np.zeros(M, dtype=np.float64)
+        observed = np.zeros(M, dtype=np.float64)
+
+        origin = np.datetime64(pd.Timestamp(window_start).to_datetime64(), "ns")
+        a = (starts.astype("datetime64[ns]") - origin) / np.timedelta64(1, "m")
+        b = (ends.astype("datetime64[ns]") - origin) / np.timedelta64(1, "m")
+        values = values.astype(np.float64)
+
+        valid = (b >= a) & (b > 0) & (a < M)
+        if self.max_record_minutes is not None:
+            valid &= (b - a) <= self.max_record_minutes
+        a, b, values = a[valid], b[valid], values[valid]
+        if a.size == 0:
+            return grid.astype(np.float32), observed.astype(np.float32)
+
+        # Instantaneous records carry no duration to split; they go wholly to
+        # the minute containing their timestamp (if it lies in the window).
+        is_point = b <= a
+        if is_point.any():
+            idx = np.floor(a[is_point]).astype(np.int64)
+            keep = (idx >= 0) & (idx < M)
+            np.add.at(grid, idx[keep], values[is_point][keep])
+            np.add.at(observed, idx[keep], 1.0)
+
+        a, b, values = a[~is_point], b[~is_point], values[~is_point]
+        if a.size == 0:
+            return grid.astype(np.float32), (observed > 0).astype(np.float32)
+
+        # Rate uses the record's full duration, so any portion outside the
+        # window is dropped rather than redistributed inward.
+        rate = values / (b - a)
+        a, b = np.clip(a, 0, M), np.clip(b, 0, M)
+        ia, ib = np.floor(a).astype(np.int64), np.floor(b).astype(np.int64)
+
+        same = ia == ib
+        # Record contained within one minute.
+        s_idx = ia[same]
+        s_keep = s_idx < M
+        np.add.at(grid, s_idx[s_keep], (rate[same] * (b[same] - a[same]))[s_keep])
+
+        multi = ~same
+        ia_m, ib_m, a_m, b_m, r_m = ia[multi], ib[multi], a[multi], b[multi], rate[multi]
+        # Leading partial minute.
+        np.add.at(grid, ia_m, r_m * (ia_m + 1 - a_m))
+        # Trailing partial minute (absent when the record ends on a boundary).
+        tail = (ib_m < M) & (b_m > ib_m)
+        np.add.at(grid, ib_m[tail], (r_m * (b_m - ib_m))[tail])
+        # Full interior minutes [ia+1, ib) via a difference array.
+        diff = np.zeros(M + 1, dtype=np.float64)
+        np.add.at(diff, ia_m + 1, r_m)
+        np.add.at(diff, ib_m, -r_m)
+        grid += np.cumsum(diff)[:M]
+
+        # Coverage: minutes [floor(a), ceil(b)) touched by any record.
+        cov = np.zeros(M + 1, dtype=np.float64)
+        ic = np.minimum(np.ceil(b).astype(np.int64), M)
+        np.add.at(cov, ia, 1.0)
+        np.add.at(cov, ic, -1.0)
+        observed += np.cumsum(cov)[:M]
+
+        return grid.astype(np.float32), (observed > 0).astype(np.float32)
+
+    def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities):
+        window_start, window_end = self.window_bounds(survey_timestamp)
+
+        all_modality_features = []
+        for mod in modalities:
+            df = modality_dfs[mod]
+            val_col = modality_cols[mod]
+
+            has_end = "end_timestamp" in df.columns
+            end_series = df["end_timestamp"] if has_end else df["start_timestamp"]
+            mask = (
+                (df["app_user_id"] == app_user_id)
+                & (end_series >= window_start)
+                & (df["start_timestamp"] < window_end)
+            )
+            user_data = df[mask]
+
+            starts = user_data["start_timestamp"].values
+            ends = user_data["end_timestamp"].values if has_end else starts
+            values, observed = self.allocate(
+                starts, ends, user_data[val_col].values, window_start
+            )
+
+            all_modality_features.append(values)
+            if self.emit_mask:
+                all_modality_features.append(observed)
+
+        return np.stack(all_modality_features, axis=-1)
+
 class LagSampler(TimeSampler):
     """Sampler for the Lag-1 baseline.
     

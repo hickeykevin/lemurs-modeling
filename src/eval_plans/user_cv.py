@@ -1,6 +1,7 @@
 from collections import defaultdict
 from typing import Dict, Iterator, List
 
+import pandas as pd
 from omegaconf import DictConfig
 
 from src.eval_plans.base import (
@@ -12,6 +13,7 @@ from src.eval_plans.base import (
 )
 from src.eval_plans.cv_aggregation import aggregate_cv_metrics
 from src.eval_plans.runner import LOG_STEP_OFFSET
+from src.eval_plans.walk_forward import WalkForwardPlan
 
 
 
@@ -41,7 +43,10 @@ class UserCVPlan:
     name = "user_cv"
     log_step_offset = LOG_STEP_OFFSET
     requires_test = False  # honours cfg.test, matching cv_train.py
-    collect_predictions = False
+    # Per-survey test predictions are saved (not used for the headline metrics,
+    # which stay per-fold) so held-out users' predictions can be inspected, e.g.
+    # within-person AUROC on people the model never trained on.
+    collect_predictions = True
 
     def units(self, cfg: DictConfig, cohort: CohortCache) -> Iterator[RunUnit]:
         num_folds = cfg.data.get("num_folds", 5)
@@ -89,9 +94,29 @@ class UserCVPlan:
         for result in results:
             for key, value in result.metrics.items():
                 metrics_by_run[key].append(value)
+        self._save_predictions(results, ctx)
         return aggregate_cv_metrics(
             metrics_by_run, ctx.loggers, ctx.log, ctx.total_units, self.log_step_offset
         )
+
+    @staticmethod
+    def _save_predictions(results: List[UnitResult], ctx: RunContext) -> None:
+        """Writes every unit's test predictions to ``pooled_predictions.csv``.
+
+        Each row is tagged with its ``repeat`` and ``cv_fold``; ``fold_index`` is
+        the flat unit index. Within one repeat every user is tested exactly once,
+        so a single repeat's rows form one complete out-of-fold prediction set.
+        """
+        frames = []
+        for result in results:
+            if result.predictions is None or result.predictions.empty:
+                continue
+            frames.append(result.predictions.assign(
+                repeat=int(result.unit.tag["cv/repeat"]),
+                cv_fold=int(result.unit.tag["cv/fold"]),
+            ))
+        if frames:
+            WalkForwardPlan._save_pooled_predictions(ctx, pd.concat(frames, ignore_index=True))
 
     def step_for(self, unit: RunUnit) -> int:
         return default_step_for(self, unit)

@@ -1,0 +1,6 @@
+# Sensor-free baseline: predicts each participant's positive rate in the training
+# split. Under per-user splits (eval_plan=cyclical) it shows how much of a metric is
+# reachable just by knowing whose survey it is. See BaselineHealthModule.
+_target_: src.models.health_module.BaselineHealthModule
+strategy: user_rate
+num_classes: null

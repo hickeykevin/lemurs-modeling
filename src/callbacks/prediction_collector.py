@@ -111,6 +111,10 @@ class PredictionCollectorCallback(Callback):
             }
             for k in range(probs.shape[-1]):
                 entry[f"prob_class_{k}"] = float(probs[i, k])
+            # Previous-survey labels, when the cohort has them, so results can be
+            # split by what the user reported last time (onset vs persistence).
+            for col in getattr(dataset, "prev_label_cols", []):
+                entry[col] = float(row[col])
             self.rows.append(entry)
 
     def on_test_batch_end(
