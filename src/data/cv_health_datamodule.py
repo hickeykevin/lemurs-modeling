@@ -98,6 +98,8 @@ class CVHealthDataModule(IndexedHealthDataModule):
         sleep_carry_to_afternoon: bool = False,
         prev_item_aggregator: Optional[Any] = None,
         prev_item_lags: int = 5,
+        prev_item_centre: str = "none",
+        prev_item_sleep: bool = False,
     ) -> None:
         """Initializes the CVHealthDataModule."""
         super().__init__(
@@ -132,6 +134,8 @@ class CVHealthDataModule(IndexedHealthDataModule):
             sleep_carry_to_afternoon=sleep_carry_to_afternoon,
             prev_item_aggregator=prev_item_aggregator,
             prev_item_lags=prev_item_lags,
+            prev_item_centre=prev_item_centre,
+            prev_item_sleep=prev_item_sleep,
         )
         if high_risk_user_ids is None:
             high_risk_user_ids = _get_default_high_risk_user_ids()

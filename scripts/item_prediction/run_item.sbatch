@@ -19,6 +19,7 @@ if ! timeout 15 bash -c 'echo > /dev/tcp/lemurs.wpi.edu/22' 2>/dev/null; then
 fi
 EXTRA=""
 if [ "$PLAN" = "user_cv" ]; then EXTRA="test=true data.num_repeats=1"; else EXTRA="data.purge_hours=120.0"; fi
+for attempt in 1 2 3 4; do
 .venv/bin/python src/train.py task_name=item_prediction logger=csv trainer=cpu eval_plan=$PLAN $EXTRA \
   data/sampler=sweep_configs/rolling_72h_6h data/modalities=step data/scaler=dual \
   data.os_filter=both data.collapse_strategy=none data.use_demographics=false \
@@ -26,4 +27,6 @@ if [ "$PLAN" = "user_cv" ]; then EXTRA="test=true data.num_repeats=1"; else EXTR
   model=flaml_xgboost model.automl_config.metric=roc_auc model.auto_class_weights=true \
   model.use_sequence_features=false trainer.max_epochs=75 trainer.enable_checkpointing=false \
   callbacks.model_checkpoint=null callbacks.early_stopping=null \
-  hydra.run.dir=logs/item_prediction/runs/${PLAN}_${NAME} "$@"
+  hydra.run.dir=logs/item_prediction/runs/${PLAN}_${NAME} "$@" && break
+  echo "attempt $attempt failed (often the DB gateway); retrying in 90s"; sleep 90
+done

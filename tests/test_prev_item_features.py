@@ -94,3 +94,80 @@ def test_config_group_selects_the_theme_questions():
     assert sorted(hydra.utils.instantiate(cfg.data.prev_item_aggregator).get_question_ids()) == [31, 32, 33]
     with initialize_config_dir(config_dir=CONFIG_DIR, version_base="1.3"):
         assert compose(config_name="train").data.prev_item_aggregator is None
+
+
+def _centred(mode):
+    sr = pd.DataFrame({
+        "id": [1, 2, 3, 4, 5], "app_user_id": [1] * 5,
+        "timestamp": pd.date_range("2026-01-01", periods=5, freq="12h"),
+    })
+    answers = pd.DataFrame({"survey_response_id": [1, 2, 3, 4, 5], "question_id": [31] * 5, "answer": ["1", "3", "3", "5", "1"]})
+    b = CohortBuilder(modalities=[], modality_cols={}, preprocessors=None, aggregator=THEME,
+                      prev_item_aggregator=THEME, prev_item_lags=1, prev_item_centre=mode)
+    m = pd.DataFrame({"survey_response_id": [1, 2, 3, 4, 5], "app_user_id": [1] * 5})
+    return b._add_previous_items(m, sr, answers).set_index("survey_response_id")
+
+
+def test_past_mean_centres_on_surveys_strictly_before_the_target():
+    out = _centred("past_mean")
+    # Target 4: lag-1 = survey 3 (3); usual = mean of surveys 1-3 = 7/3 -> deviation 3 - 7/3.
+    assert abs(out.loc[4, "pi1_q31"] - (3 - 7 / 3)) < 1e-9
+    # Target 2: lag-1 = survey 1 (1); usual over surveys before 2 = survey 1 -> 0.
+    assert out.loc[2, "pi1_q31"] == 0.0
+    # The target's own answer (survey 5 = 1) must not move its own centring.
+    assert abs(out.loc[5, "pi1_q31"] - (5 - (1 + 3 + 3 + 5) / 4)) < 1e-9 + 0  # surveys 1-4
+
+
+def test_past_z_is_zero_with_too_little_history_and_keeps_the_missing_flag():
+    out = _centred("past_z")
+    # Target 3 has two earlier surveys (1, 3): usual 2, sd sqrt(2); lag-1 = survey 2 (3).
+    assert abs(out.loc[3, "pi1_q31"] - (3 - 2) / (2 ** 0.5)) < 1e-9
+    assert out.loc[2, "pi1_q31"] == 0.0  # only one earlier survey
+    assert out.loc[2, "pi1_missing"] == 0.0 and out.loc[1, "pi1_missing"] == 1.0
+
+
+def test_invalid_centre_mode_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        CohortBuilder(modalities=[], modality_cols={}, preprocessors=None, aggregator=THEME, prev_item_centre="bogus")
+
+
+def _sleep_out(centre="none"):
+    # User 1: morning (reports sleep), afternoon (none), morning (reports sleep), target afternoon.
+    sr = pd.DataFrame({
+        "id": [1, 2, 3, 4], "app_user_id": [1] * 4,
+        "timestamp": pd.to_datetime(["2026-01-01 09:00", "2026-01-01 15:00", "2026-01-02 09:00", "2026-01-02 15:00"]),
+    })
+    answers = pd.DataFrame({
+        "survey_response_id": [1, 1, 1, 2, 3, 3, 3, 4],
+        "question_id": [31, 54, 55, 31, 31, 54, 55, 31],
+        "answer": ["2", "10:00 PM", "6:00 AM", "3", "4", "11:00 PM", "5:00 AM", "1"],
+    })
+    b = CohortBuilder(modalities=[], modality_cols={}, preprocessors=None, aggregator=THEME,
+                      prev_item_aggregator=THEME, prev_item_lags=3, prev_item_centre=centre, prev_item_sleep=True)
+    m = pd.DataFrame({"survey_response_id": [1, 2, 3, 4], "app_user_id": [1] * 4})
+    return b._add_previous_items(m, sr, answers).set_index("survey_response_id")
+
+
+def test_sleep_history_is_per_lag_and_missing_on_afternoon_surveys():
+    out = _sleep_out()
+    # Target 4: lag 1 = survey 3 (6h sleep), lag 2 = survey 2 (afternoon, no report), lag 3 = survey 1 (8h).
+    assert out.loc[4, "pi1_sleep_hours"] == 6.0 and out.loc[4, "pi1_sleep_missing"] == 0.0
+    assert out.loc[4, "pi2_sleep_hours"] == 0.0 and out.loc[4, "pi2_sleep_missing"] == 1.0
+    assert out.loc[4, "pi3_sleep_hours"] == 8.0
+    # The afternoon survey still has its theme items, so its item-missing flag stays 0.
+    assert out.loc[4, "pi2_missing"] == 0.0 and out.loc[4, "pi2_q31"] == 3.0
+
+
+def test_sleep_history_columns_match_the_datamodule_naming():
+    out = _sleep_out()
+    assert [c for c in out.columns if c.startswith("pi")] == CohortBuilder.prev_item_columns([31, 32], 3, True)
+
+
+def test_sleep_history_with_past_z_uses_only_nights_before_the_target():
+    out = _sleep_out("past_z")
+    # Only one earlier night before target 3 -> too little history -> 0; target 4 has two nights (8h, 6h):
+    assert out.loc[3, "pi1_sleep_hours"] == 0.0
+    # usual 7h, sd sqrt(2); lag 1 = 6h -> (6-7)/sqrt(2)
+    assert abs(out.loc[4, "pi1_sleep_hours"] - (-1 / 2 ** 0.5)) < 1e-9

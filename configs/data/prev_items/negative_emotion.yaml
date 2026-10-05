@@ -3,3 +3,6 @@
 # The theme's binary rule is not used; only its question ids. See CohortBuilder._add_previous_items.
 defaults:
   - /data/aggregator@prev_item_aggregator: negative_emotion
+prev_item_lags: 5        # preceding surveys of any kind
+prev_item_centre: none   # none | past_mean | past_z (deviation from the user's usual before the target)
+prev_item_sleep: false   # true: also each lagged survey's sleep (hours, bedtime, wake time; morning surveys only)

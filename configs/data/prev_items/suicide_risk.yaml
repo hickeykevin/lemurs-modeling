@@ -1,0 +1,8 @@
+# @package data
+# Control: the suicide-risk items themselves (2, 3, 5, 7, 8, 12, 13), raw, on the previous
+# prev_item_lags surveys. The label's own history, as the benchmark any other theme must add to.
+defaults:
+  - /data/aggregator@prev_item_aggregator: suicide_risk
+prev_item_lags: 5
+prev_item_centre: none
+prev_item_sleep: false   # true: also each lagged survey's sleep (hours, bedtime, wake time; morning surveys only)

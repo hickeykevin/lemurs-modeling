@@ -1,0 +1,14 @@
+# @package data
+# Control: negative-emotion items (23-28, 36) together with the suicide-risk items, raw, on the
+# previous prev_item_lags surveys. Tests whether the theme adds to the label's own history.
+# Only the question ids are used (see CohortBuilder._add_previous_items); the rules are placeholders.
+prev_item_aggregator:
+  _target_: src.data.components.label_aggregators.RuleBasedAggregator
+  combination_logic: "any"
+  rules:
+    rule_1: {ids: [23, 24, 25, 26, 27, 28, 36], op: "sum", threshold: 14}
+    rule_2: {ids: [2, 3, 5, 7], op: "ge", val: 2.0}
+    rule_3: {ids: [8, 12, 13], op: "any_gt", val: 0}
+prev_item_lags: 5
+prev_item_centre: none
+prev_item_sleep: false   # true: also each lagged survey's sleep (hours, bedtime, wake time; morning surveys only)

@@ -75,6 +75,8 @@ class HealthDataModule(LightningDataModule):
         sleep_carry_to_afternoon: bool = False,
         prev_item_aggregator: Optional[LabelAggregator] = None,
         prev_item_lags: int = 5,
+        prev_item_centre: str = "none",
+        prev_item_sleep: bool = False,
         swap_val_test: bool = False,
         symmetric_purge_diagnostic: bool = False,
     ) -> None:
@@ -130,6 +132,8 @@ class HealthDataModule(LightningDataModule):
                 ``prev_item_lags`` surveys (any kind) join the demographics vector.
                 See CohortBuilder._add_previous_items.
             prev_item_lags (int): Number of preceding surveys used.
+            prev_item_centre (str): "none", "past_mean" or "past_z"; see CohortBuilder.
+            prev_item_sleep (bool): Add each lagged survey's reported sleep; see CohortBuilder.
             purge_hours (Optional[float]): Only used when split_mode="longitudinal".
                 Width of the gap dropped around each user's train/val and
                 val/test boundary, so a retained sample's sampler window
@@ -220,6 +224,8 @@ class HealthDataModule(LightningDataModule):
                     sleep_carry_to_afternoon=self.hparams.sleep_carry_to_afternoon,
                     prev_item_aggregator=self.hparams.prev_item_aggregator,
                     prev_item_lags=self.hparams.prev_item_lags,
+                    prev_item_centre=self.hparams.prev_item_centre,
+                    prev_item_sleep=self.hparams.prev_item_sleep,
                 )
                 modality_dfs, master_df, demographics_df = builder.build()
 
@@ -304,7 +310,8 @@ class HealthDataModule(LightningDataModule):
             self.prev_label_cols = [f"prev_{n}" for n in prev_names] + (["prev_label_missing"] if prev_names else [])
             if self.hparams.prev_item_aggregator is not None:
                 self.prev_label_cols += CohortBuilder.prev_item_columns(
-                    self.hparams.prev_item_aggregator.get_question_ids(), self.hparams.prev_item_lags
+                    self.hparams.prev_item_aggregator.get_question_ids(), self.hparams.prev_item_lags,
+                    self.hparams.prev_item_sleep,
                 )
             self.demographics_dim += len(self.prev_label_cols)
 

@@ -36,6 +36,8 @@ class CohortBuilder:
         sleep_carry_to_afternoon: bool = False,
         prev_item_aggregator: Optional[LabelAggregator] = None,
         prev_item_lags: int = 5,
+        prev_item_centre: str = "none",
+        prev_item_sleep: bool = False,
     ):
         """Initializes the CohortBuilder.
 
@@ -66,6 +68,12 @@ class CohortBuilder:
                 the user's previous ``prev_item_lags`` daily surveys become features.
                 See ``_add_previous_items``.
             prev_item_lags: How many preceding surveys of any kind (morning or afternoon).
+            prev_item_centre: "none", "past_mean" or "past_z". Replaces each lagged score by its
+                deviation from the user's mean (and, for past_z, SD) over the surveys strictly
+                before the target survey, so the model sees change from the person's usual
+                rather than their level. Zero where the user has too little history.
+            prev_item_sleep: Also add each lagged survey's reported sleep (hours, bedtime,
+                wake time; asked in the morning survey only) with its own missing flag.
         """
         self.modalities = modalities
         self.modality_cols = modality_cols
@@ -85,6 +93,10 @@ class CohortBuilder:
         self.prev_label_aggregators = dict(prev_label_aggregators or {})
         self.prev_item_aggregator = prev_item_aggregator
         self.prev_item_lags = int(prev_item_lags)
+        if prev_item_centre not in ("none", "past_mean", "past_z"):
+            raise ValueError(f"prev_item_centre must be 'none', 'past_mean' or 'past_z', got {prev_item_centre!r}")
+        self.prev_item_centre = prev_item_centre
+        self.prev_item_sleep = bool(prev_item_sleep)
 
     def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]:
         """Orchestrates the entire cohort building pipeline.
@@ -524,12 +536,17 @@ class CohortBuilder:
             stream[["survey_response_id", *prev_cols, "prev_label_missing"]], on="survey_response_id", how="left"
         )
 
+    PREV_SLEEP_COLS = ["sleep_hours", "sleep_bedtime", "sleep_waketime"]
+
     @staticmethod
-    def prev_item_columns(item_ids: List[int], lags: int) -> List[str]:
+    def prev_item_columns(item_ids: List[int], lags: int, sleep: bool = False) -> List[str]:
         """Column names written by ``_add_previous_items`` (also read by the datamodule)."""
         cols = []
         for k in range(1, lags + 1):
-            cols += [f"pi{k}_q{q}" for q in sorted(item_ids)] + [f"pi{k}_missing", f"pi{k}_gap_h"]
+            cols += [f"pi{k}_q{q}" for q in sorted(item_ids)]
+            if sleep:
+                cols += [f"pi{k}_{c}" for c in CohortBuilder.PREV_SLEEP_COLS] + [f"pi{k}_sleep_missing"]
+            cols += [f"pi{k}_missing", f"pi{k}_gap_h"]
         return cols
 
     def _add_previous_items(
@@ -569,16 +586,36 @@ class CohortBuilder:
         stream = stream.merge(wide, left_on="survey_response_id", right_index=True, how="left")
 
         item_cols = [f"q{q}" for q in ids]
+        sleep_cols = self.PREV_SLEEP_COLS if self.prev_item_sleep else []
+        if sleep_cols:
+            sleep = self._compute_sleep_features(answer_df)[["survey_response_id", *sleep_cols]]
+            stream = stream.merge(sleep, on="survey_response_id", how="left")
+            for c in sleep_cols:
+                stream[c] = stream[c].astype(float)
+        all_cols = item_cols + sleep_cols
         out = {"survey_response_id": stream["survey_response_id"]}
         grouped = stream.groupby("app_user_id")
+        if self.prev_item_centre != "none":
+            # The user's usual, from surveys strictly before each target survey.
+            usual = grouped[all_cols].transform(lambda c: c.shift(1).expanding().mean())
+            spread = grouped[all_cols].transform(lambda c: c.shift(1).expanding().std())
+            seen = grouped[all_cols].transform(lambda c: c.shift(1).expanding().count())
         for k in range(1, self.prev_item_lags + 1):
-            shifted = grouped[item_cols].shift(k)
+            raw = grouped[all_cols].shift(k)
+            shifted = raw
+            if self.prev_item_centre != "none":
+                shifted = shifted - usual
+                if self.prev_item_centre == "past_z":
+                    shifted = (shifted / spread.where(spread > 0)).where(seen >= 2)
+                shifted = shifted.where(seen >= 1)
             gap = (stream["timestamp"] - grouped["timestamp"].shift(k)).dt.total_seconds() / 3600.0
-            out[f"pi{k}_missing"] = shifted.isna().all(axis=1).astype(float)
-            for c in item_cols:
+            out[f"pi{k}_missing"] = raw[item_cols].isna().all(axis=1).astype(float)
+            for c in all_cols:
                 out[f"pi{k}_{c}"] = shifted[c].fillna(0.0).astype(float)
+            if sleep_cols:
+                out[f"pi{k}_sleep_missing"] = raw[sleep_cols].isna().all(axis=1).astype(float)
             out[f"pi{k}_gap_h"] = gap.fillna(0.0).astype(float)
-        feats = pd.DataFrame(out)[["survey_response_id", *self.prev_item_columns(ids, self.prev_item_lags)]]
+        feats = pd.DataFrame(out)[["survey_response_id", *self.prev_item_columns(ids, self.prev_item_lags, self.prev_item_sleep)]]
         return master_df.merge(feats, on="survey_response_id", how="left")
 
     def _add_referent_window(self, master_df: pd.DataFrame) -> pd.DataFrame:
