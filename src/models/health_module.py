@@ -4,6 +4,7 @@ import torch
 from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric, MinMetric, MeanSquaredError, MeanAbsoluteError
 import numpy as np
+import pandas as pd
 import pickle
 from functools import partial
 
@@ -327,6 +328,7 @@ class HealthLitModule(LightningModule):
 from flaml import AutoML
 #adding new import
 from src.data.components.tabular_features import SummaryStatsFeaturizer
+from src.utils.within_person import past_centre  # noqa: F401  (re-exported)
 
 
 class FLAMLHealthModule(LightningModule):
@@ -348,6 +350,8 @@ class FLAMLHealthModule(LightningModule):
         class_weights: Optional[List[float]] = None,
         #adding featurizer to init
         featurizer: Optional[SummaryStatsFeaturizer] = None,
+        use_sequence_features: bool = True,
+        within_person_centering: str = "none",
         **kwargs
     ):
         """Initializes the FLAMLHealthModule.
@@ -357,6 +361,17 @@ class FLAMLHealthModule(LightningModule):
             task (str): Type of AutoML task (e.g., 'classification', 'regression').
             auto_class_weights (bool): Whether to compute inverse-frequency sample weights automatically.
             class_weights (Optional[List[float]]): Explicit class weights list. Overrides auto_class_weights if set.
+            use_sequence_features (bool): If False, ignore the sensor sequence and fit on
+                the static vector alone (demographics / sleep / survey context / previous
+                labels) -- a no-sensors comparison on the identical cohort and folds.
+            within_person_centering (str): "none", "past_mean" or "past_z". With
+                "past_mean", each survey's sensor features are replaced by their deviation
+                from the same user's mean over that user's *earlier* surveys (any split of
+                this fold; features only, no labels), so the model cannot use a person's
+                usual level to identify them. "past_z" also divides by the user's
+                earlier-survey SD, removing how much a person typically varies as well.
+                See ``past_centre``. Static features (sleep, previous labels) are left
+                as they are.
         """
         try:
             from omegaconf import OmegaConf, DictConfig
@@ -371,6 +386,13 @@ class FLAMLHealthModule(LightningModule):
         self.automl = AutoML()
         self.task = task
         self.featurizer = featurizer if (featurizer and hasattr(featurizer, "transform")) else None
+        self.use_sequence_features = use_sequence_features
+        if within_person_centering not in ("none", "past_mean", "past_z"):
+            raise ValueError(
+                f"within_person_centering must be 'none', 'past_mean' or 'past_z', got {within_person_centering!r}"
+            )
+        self.within_person_centering = within_person_centering
+        self._centered: Dict[str, np.ndarray] = {}
 
         # Register custom learners (e.g. svm_pipeline)
         try:
@@ -438,7 +460,18 @@ class FLAMLHealthModule(LightningModule):
         self._resolve_featurizer_exclude_cols(x)
 
         x_np = x.cpu().numpy()
-        if self.featurizer is not None:
+        if self.within_person_centering != "none" and self.use_sequence_features:
+            if stage not in self._centered or "sample_idx" not in batch:
+                raise RuntimeError(
+                    f"within_person_centering needs precomputed '{stage}' features and batch['sample_idx'] "
+                    "(an indexed datamodule, e.g. eval_plan=cyclical or user_cv)"
+                )
+            features = self._centered[stage][batch["sample_idx"].cpu().numpy()]
+        elif not self.use_sequence_features:
+            if demographics is None:
+                raise ValueError("use_sequence_features=False needs static features (e.g. data.use_sleep or prev labels)")
+            features = np.empty((x_np.shape[0], 0), dtype=np.float32)
+        elif self.featurizer is not None:
             features = self.featurizer.transform(x_np)
         else:
             features = x_np.reshape(x_np.shape[0], -1)
@@ -450,6 +483,44 @@ class FLAMLHealthModule(LightningModule):
             features = np.concatenate([features, demo_np], axis=1)
 
         return features, y
+
+    def _sequence_features(self, sequences: np.ndarray) -> np.ndarray:
+        """Featurizes (or flattens) a [N, T, F] array of sensor windows."""
+        if self.featurizer is not None:
+            return self.featurizer.transform(sequences)
+        return sequences.reshape(sequences.shape[0], -1)
+
+    def _build_centered_features(self) -> None:
+        """Precomputes past-mean-centered sensor features for this fold's splits.
+
+        All splits are pooled so a survey's history includes the user's earlier
+        surveys wherever they landed (in cyclical CV, earlier folds can be test
+        or train). Only sensor features are used, never labels.
+        """
+        dm = self.trainer.datamodule
+        splits = {"train": dm.data_train, "val": dm.data_val, "test": dm.data_test}
+        frames, feats = [], []
+        for name, ds in splits.items():
+            if ds is None or len(ds) == 0:
+                continue
+            self._resolve_featurizer_exclude_cols(torch.from_numpy(ds._sequences[:1]))
+            feats.append(self._sequence_features(ds._sequences).astype(np.float64))
+            frames.append(pd.DataFrame({
+                "split": name,
+                "pos": np.arange(len(ds)),
+                "user": ds.data_links["app_user_id"].to_numpy(),
+                "ts": pd.to_datetime(ds.data_links["record_timestamp"]).to_numpy(),
+            }))
+        meta = pd.concat(frames, ignore_index=True)
+        X = np.concatenate(feats, axis=0)
+
+        out = past_centre(X, meta["user"].to_numpy(), meta["ts"].to_numpy(), self.within_person_centering)
+        for name in meta["split"].unique():
+            rows = (meta["split"] == name).to_numpy()
+            arr = np.empty((rows.sum(), X.shape[1]), dtype=np.float32)
+            arr[meta.loc[rows, "pos"].to_numpy()] = out[rows]
+            self._centered[name] = arr
+        self.print(f"[FLAML] within-person centering ({self.within_person_centering}) on {X.shape[1]} sensor features, {len(meta)} surveys")
 
     def setup(self, stage: str, **kwargs) -> None:
         """Collects the entire training set and fits the AutoML model."""
@@ -472,6 +543,14 @@ class FLAMLHealthModule(LightningModule):
             
             # Get the training dataloader from the datamodule
             train_dataloader = self.trainer.datamodule.train_dataloader()
+            if self.within_person_centering != "none" and self.use_sequence_features:
+                self._build_centered_features()
+                # The train set carries no sample_idx; walk it in order instead.
+                ds = self.trainer.datamodule.data_train
+                train_dataloader = [
+                    {**ds[i], "sample_idx": torch.tensor(i)} for i in range(len(ds))
+                ]
+                train_dataloader = [torch.utils.data.default_collate(train_dataloader)]
             
             X_list, y_list = [], []
             for batch in train_dataloader:

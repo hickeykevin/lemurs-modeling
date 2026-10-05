@@ -15,3 +15,5 @@ automl_config:
   n_jobs: 1
   log_file_name: ${paths.output_dir}/flaml.log
 task: 'classification'
+use_sequence_features: true # false = fit on the static vector only (no sensors)
+within_person_centering: none  # past_mean: minus the user's mean over earlier surveys; past_z: also divided by their SD

@@ -6,6 +6,24 @@ from typing import Dict, List, Optional, Any, Tuple
 from src.data.components.samplers import TimeSampler
 
 
+SLEEP_MODE_COLS: Dict[str, List[str]] = {
+    "none": [],
+    "hours_only": ["sleep_hours_scaled"],
+    "category_only": ["sleep_class_0", "sleep_class_1", "sleep_class_2", "sleep_unknown"],
+    "both": ["sleep_hours_scaled", "sleep_class_0", "sleep_class_1", "sleep_class_2", "sleep_unknown"],
+    # Within-person deviations only (see CohortBuilder._attach_sleep): how this
+    # night differs from the person's earlier nights, with no person-level values.
+    "timing_deviation": [
+        "sleep_missing", "sleep_hours_dev", "sleep_bedtime_dev", "sleep_waketime_dev", "sleep_midpoint_dev",
+    ],
+}
+
+
+def sleep_mode_cols(mode: Optional[str]) -> List[str]:
+    """Sleep feature columns for a ``sleep_feature_mode`` (unknown modes mean "both")."""
+    return SLEEP_MODE_COLS.get("none" if mode is None else mode, SLEEP_MODE_COLS["both"])
+
+
 class HealthDataset(Dataset):
     """General Multimodal Dataset for health metrics.
 
@@ -40,6 +58,7 @@ class HealthDataset(Dataset):
         sleep_feature_mode: str = "both",
         survey_context_mode: str = "both",
         return_index: bool = False,
+        prev_label_cols: Optional[List[str]] = None,
     ) -> None:
         """Initializes the HealthDataset.
 
@@ -54,6 +73,9 @@ class HealthDataset(Dataset):
                 results) opt in explicitly. The index is into this dataset's
                 own ``data_links`` (post ``reset_index(drop=True)``), so
                 ``dataset.data_links.iloc[idx]`` recovers the source row.
+            prev_label_cols: Columns of ``linked_data`` holding labels from each
+                user's previous survey (see CohortBuilder._add_previous_labels),
+                appended to the demographics vector after sleep and survey context.
         """
         self.data_links = linked_data.reset_index(drop=True)
         self.sampler = sampler
@@ -86,23 +108,23 @@ class HealthDataset(Dataset):
                 self.context_features = self.data_links[context_cols].values.astype(np.float32)
 
         if self.use_sleep:
-            if self.sleep_feature_mode == "hours_only":
-                sleep_cols = ["sleep_hours_scaled"]
-            elif self.sleep_feature_mode == "category_only":
-                sleep_cols = ["sleep_class_0", "sleep_class_1", "sleep_class_2", "sleep_unknown"]
-            elif self.sleep_feature_mode in ("none", None):
-                sleep_cols = []
-            else:
-                sleep_cols = ["sleep_hours_scaled", "sleep_class_0", "sleep_class_1", "sleep_class_2", "sleep_unknown"]
+            sleep_cols = sleep_mode_cols(self.sleep_feature_mode)
 
             if sleep_cols:
                 for col in sleep_cols:
                     if col not in self.data_links.columns:
-                        if col == "sleep_unknown":
+                        if col in ("sleep_unknown", "sleep_missing"):
                             self.data_links[col] = 1.0
                         else:
                             self.data_links[col] = 0.0
                 self.sleep_features = self.data_links[sleep_cols].values.astype(np.float32)
+
+        self.prev_label_cols = list(prev_label_cols or [])
+        if self.prev_label_cols:
+            missing = [c for c in self.prev_label_cols if c not in self.data_links.columns]
+            if missing:
+                raise ValueError(f"prev_label_cols {missing} not in the cohort; was it built with prev_label_aggregators?")
+            self.prev_label_features = self.data_links[self.prev_label_cols].values.astype(np.float32)
 
         self._sequences, self._targets, self._user_indices = self._precompute(modality_dfs, modality_cols)
 
@@ -200,7 +222,7 @@ class HealthDataset(Dataset):
             "user_indices": torch.tensor(self._user_indices[idx], dtype=torch.long),
         }
 
-        if self.demographics_map is not None or self.use_sleep or self.use_survey_context:
+        if self.demographics_map is not None or self.use_sleep or self.use_survey_context or self.prev_label_cols:
             parts = []
             if self.demographics_map is not None:
                 uid = self.data_links.iloc[idx]["app_user_id"]
@@ -211,6 +233,8 @@ class HealthDataset(Dataset):
                 parts.append(self.sleep_features[idx])
             if self.use_survey_context and hasattr(self, "context_features") and self.context_features.shape[1] > 0:
                 parts.append(self.context_features[idx])
+            if self.prev_label_cols:
+                parts.append(self.prev_label_features[idx])
             if parts:
                 demo = np.concatenate(parts).astype(np.float32)
                 sample["demographics"] = torch.tensor(demo, dtype=torch.float32)

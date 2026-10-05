@@ -1,0 +1,4 @@
+# log1p, then global standardization, on the modality value channels only.
+# Mask / time channels after them pass through. No per-person statistics.
+_target_: src.data.components.scalers.Log1pStandardScaler
+scale_dim: ${len:${data.modalities}}

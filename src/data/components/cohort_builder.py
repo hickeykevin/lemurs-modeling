@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Tuple, Optional, Literal
 from src.utils.database_service import DatabaseService
+from src.utils.within_person import past_centre
 from src.data.components.label_aggregators import LabelAggregator
 
 class CohortBuilder:
@@ -31,6 +32,8 @@ class CohortBuilder:
         enrollment_trail_days: float = 1.0,
         daily_survey_ids: Optional[List[int]] = None,
         exclude_user_ids: Optional[List[int]] = None,
+        prev_label_aggregators: Optional[Dict[str, LabelAggregator]] = None,
+        sleep_carry_to_afternoon: bool = False,
     ):
         """Initializes the CohortBuilder.
 
@@ -52,6 +55,10 @@ class CohortBuilder:
                 Defaults to ``[0, 1]`` (morning, afternoon).
             exclude_user_ids: Users dropped from every stream. Defaults to
                 ``DEFAULT_EXCLUDED_USER_IDS``; pass ``[]`` to keep all users.
+            prev_label_aggregators: Optional ``{name: aggregator}``. For each, adds
+                ``prev_<name>``: that aggregator's label on the user's *previous*
+                daily survey (0 when there is none), plus one ``prev_label_missing``
+                flag for the user's first survey. See ``_add_previous_labels``.
         """
         self.modalities = modalities
         self.modality_cols = modality_cols
@@ -64,9 +71,11 @@ class CohortBuilder:
         self.enrollment_lead_days = enrollment_lead_days
         self.enrollment_trail_days = enrollment_trail_days
         self.daily_survey_ids = [0, 1] if daily_survey_ids is None else list(daily_survey_ids)
+        self.sleep_carry_to_afternoon = sleep_carry_to_afternoon
         self.exclude_user_ids = (
             self.DEFAULT_EXCLUDED_USER_IDS if exclude_user_ids is None else list(exclude_user_ids)
         )
+        self.prev_label_aggregators = dict(prev_label_aggregators or {})
 
     def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]:
         """Orchestrates the entire cohort building pipeline.
@@ -306,11 +315,78 @@ class CohortBuilder:
 
         labels = sleep_hours.apply(categorize)
 
+        def clock(t) -> Optional[float]:
+            if isinstance(t, str):
+                try:
+                    dt = pd.to_datetime(t.strip().upper(), format="%I:%M %p")
+                    return dt.hour + dt.minute / 60.0
+                except (ValueError, TypeError):
+                    return None
+            return float(t) if isinstance(t, (int, float)) and not pd.isna(t) else None
+
+        # Timing on scales that do not wrap at midnight for typical nights:
+        # bedtime as hours after noon (22:00 -> 10, 02:00 -> 14), wake time as
+        # clock hours, midpoint on the bedtime scale.
+        bed = pivoted[asleep_id].map(clock)
+        wake = pivoted[awake_id].map(clock)
+        bedtime = (bed - 12.0) % 24.0
+        midpoint = bedtime + sleep_hours.astype(float) / 2.0
+        valid = sleep_hours.notna()
+
         res = pd.DataFrame({
             'sleep_hours': sleep_hours,
-            'sleep_category': labels
+            'sleep_category': labels,
+            'sleep_bedtime': bedtime.where(valid),
+            'sleep_waketime': wake.where(valid),
+            'sleep_midpoint': midpoint.where(valid),
         }).reset_index()
         return res
+
+    def _attach_sleep(self, sleep_df: pd.DataFrame, survey_response_df: pd.DataFrame) -> pd.DataFrame:
+        """Per-response sleep features, with within-person deviations and optional carry.
+
+        Deviations (``sleep_<x>_dev``) are past_z values: each night's value minus
+        the user's mean over their *earlier* reported nights, divided by the SD of
+        those nights (0 without at least two earlier nights). They are computed on
+        the stream of nights only, so an afternoon survey never counts as a night.
+
+        With ``sleep_carry_to_afternoon``, an afternoon survey (survey_id 1) takes
+        the latest same-day morning report made before it. Surveys left without a
+        report get ``sleep_missing = 1``.
+        """
+        cols = ["sleep_hours", "sleep_bedtime", "sleep_waketime", "sleep_midpoint"]
+        nights = sleep_df.merge(
+            survey_response_df[["id", "app_user_id", "timestamp"]].rename(columns={"id": "survey_response_id"}),
+            on="survey_response_id",
+        ).dropna(subset=["sleep_hours"])
+        if not nights.empty:
+            dev = past_centre(
+                nights[cols].to_numpy(dtype=float), nights["app_user_id"].to_numpy(),
+                nights["timestamp"].to_numpy(), "past_z",
+            )
+            for i, c in enumerate(cols):
+                nights[f"{c}_dev"] = dev[:, i]
+        keep = ["survey_response_id", "sleep_category", *cols, *[f"{c}_dev" for c in cols]]
+        out = sleep_df[["survey_response_id"]].merge(nights.reindex(columns=keep), on="survey_response_id", how="left")
+
+        if self.sleep_carry_to_afternoon and "survey_id" in survey_response_df.columns and not nights.empty:
+            sr = survey_response_df[["id", "app_user_id", "timestamp", "survey_id"]]
+            aft = sr[sr["survey_id"] == 1].rename(columns={"id": "survey_response_id"})
+            aft = aft[~aft["survey_response_id"].isin(out["survey_response_id"])]
+            morning = nights[["app_user_id", "timestamp", *keep]].rename(columns={"survey_response_id": "_src"})
+            carried = pd.merge_asof(
+                aft.sort_values("timestamp"), morning.sort_values("timestamp"),
+                on="timestamp", by="app_user_id", direction="backward",
+                suffixes=("", "_morning"),
+            )
+            # merge_asof drops the right-hand "on" column; recover the morning report's time
+            src_ts = carried["_src"].map(nights.set_index("survey_response_id")["timestamp"])
+            same_day = src_ts.dt.normalize() == carried["timestamp"].dt.normalize()
+            carried = carried[same_day.fillna(False)]
+            out = pd.concat([out, carried[keep]], ignore_index=True)
+
+        out["sleep_missing"] = out["sleep_hours"].isna().astype(float)
+        return out
 
     def _extract_and_aggregate_labels(self, db: DatabaseService) -> pd.DataFrame:
         """Fetches survey answers and aggregates them into daily clinical labels.
@@ -383,12 +459,60 @@ class CohortBuilder:
         # Attach the referent window each response describes
         master_df = self._add_referent_window(master_df)
 
+        # Attach labels from each user's previous survey, if requested
+        master_df = self._add_previous_labels(master_df, survey_response_df, answer_df)
+
         # If use_sleep is enabled, compute and merge sleep features
         if getattr(self, 'use_sleep', False):
-            sleep_df = self._compute_sleep_features(answer_df)
+            sleep_df = self._attach_sleep(self._compute_sleep_features(answer_df), survey_response_df)
             master_df = pd.merge(master_df, sleep_df, on='survey_response_id', how='left')
 
         return master_df
+
+    def _add_previous_labels(
+        self, master_df: pd.DataFrame, survey_response_df: pd.DataFrame, answer_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Adds each user's label on their previous daily survey, per extra aggregator.
+
+        "Previous" is the user's immediately preceding daily survey response in
+        the full response stream (after duplicate removal and collapsing), not the
+        previous row of ``master_df``, so it is unaffected by later sample
+        filtering such as ``require_sensor_data``. It is strictly earlier than the
+        survey being predicted, so it is information a deployed app would have.
+
+        Adds ``prev_<name>`` per aggregator (0 when there is no previous survey or
+        it lacks the aggregator's items) and ``prev_label_missing`` (1 for a
+        user's first survey).
+        """
+        if not self.prev_label_aggregators or master_df.empty:
+            return master_df
+
+        stream = (
+            survey_response_df[["id", "app_user_id", "timestamp"]]
+            .rename(columns={"id": "survey_response_id"})
+            .sort_values(["app_user_id", "timestamp"])
+            .reset_index(drop=True)
+        )
+        prev_cols = []
+        for name, aggregator in self.prev_label_aggregators.items():
+            answers = answer_df[answer_df["question_id"].isin(aggregator.get_question_ids())].copy()
+            if not getattr(aggregator, "requires_strings", False):
+                clean = answers["answer"].astype(str).str.strip().str.lower()
+                answers["answer"] = clean.map({"yes": 1.0, "no": 0.0}).fillna(
+                    pd.to_numeric(answers["answer"], errors="coerce")
+                )
+            answers = answers.dropna(subset=["answer"])
+            labels = aggregator(answers)[["survey_response_id", "answer"]].rename(columns={"answer": name})
+            stream = stream.merge(labels, on="survey_response_id", how="left")
+            col = f"prev_{name}"
+            stream[col] = stream.groupby("app_user_id")[name].shift(1)
+            prev_cols.append(col)
+
+        stream["prev_label_missing"] = stream[prev_cols].isna().all(axis=1).astype(float)
+        stream[prev_cols] = stream[prev_cols].fillna(0.0).astype(float)
+        return master_df.merge(
+            stream[["survey_response_id", *prev_cols, "prev_label_missing"]], on="survey_response_id", how="left"
+        )
 
     def _add_referent_window(self, master_df: pd.DataFrame) -> pd.DataFrame:
         """Annotates each response with the period its answers actually describe.

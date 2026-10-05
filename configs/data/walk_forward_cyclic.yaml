@@ -4,6 +4,7 @@ defaults:
   - sampler: sweep_configs/offset_48h_6h
   - scaler: dual
   - modalities: step
+  - prev_labels: none
 
 _target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
 
@@ -35,6 +36,7 @@ use_lgbt: false
 use_device_source: false
 use_sleep: false
 sleep_feature_mode: none
+sleep_carry_to_afternoon: false # afternoon surveys take the same day's morning sleep report
 
 purge_hours: null # gap (hours) purged at each fold boundary; null derives it from the sampler's lookback
 

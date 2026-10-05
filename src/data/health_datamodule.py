@@ -3,7 +3,7 @@ import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 from src.utils.database_service import DatabaseService
-from src.data.components.health_dataset import HealthDataset
+from src.data.components.health_dataset import HealthDataset, sleep_mode_cols
 from src.data.components.label_aggregators import LabelAggregator
 from src.data.components.samplers import TimeSampler
 from src.data.components.cohort_builder import CohortBuilder
@@ -71,6 +71,8 @@ class HealthDataModule(LightningDataModule):
         exclude_user_ids: Optional[List[int]] = None,
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
         purge_hours: Optional[float] = None,
+        prev_label_aggregators: Optional[Dict[str, LabelAggregator]] = None,
+        sleep_carry_to_afternoon: bool = False,
         swap_val_test: bool = False,
         symmetric_purge_diagnostic: bool = False,
     ) -> None:
@@ -114,6 +116,13 @@ class HealthDataModule(LightningDataModule):
                 cyclical time features in the sequence sampler.
             exclude_user_ids (Optional[List[int]]): Users dropped from every stream.
                 Defaults to CohortBuilder's test/discontinued accounts.
+            prev_label_aggregators (Optional[Dict[str, LabelAggregator]]): Extra
+                aggregators whose labels on each user's *previous* daily survey are
+                appended to the demographics vector, as ``prev_<name>`` plus one
+                ``prev_label_missing`` flag. See CohortBuilder._add_previous_labels.
+            sleep_carry_to_afternoon (bool): Sleep is only asked in the morning survey.
+                When True, an afternoon survey takes the same day's morning report
+                (missing if there is none). See CohortBuilder._attach_sleep.
             purge_hours (Optional[float]): Only used when split_mode="longitudinal".
                 Width of the gap dropped around each user's train/val and
                 val/test boundary, so a retained sample's sampler window
@@ -200,6 +209,8 @@ class HealthDataModule(LightningDataModule):
                     enrollment_lead_days=self.hparams.enrollment_lead_days,
                     enrollment_trail_days=self.hparams.enrollment_trail_days,
                     exclude_user_ids=self.hparams.exclude_user_ids,
+                    prev_label_aggregators=self.hparams.prev_label_aggregators,
+                    sleep_carry_to_afternoon=self.hparams.sleep_carry_to_afternoon,
                 )
                 modality_dfs, master_df, demographics_df = builder.build()
 
@@ -240,6 +251,13 @@ class HealthDataModule(LightningDataModule):
                     df["sleep_class_1"] = (df["sleep_category"] == 1).astype(float)
                     df["sleep_class_2"] = (df["sleep_category"] == 2).astype(float)
                     df["sleep_unknown"] = df["sleep_category"].isna().astype(float)
+                    # Within-person deviations are already relative to the person; a
+                    # survey without a report gets 0 and sleep_missing = 1.
+                    for col in ("sleep_hours_dev", "sleep_bedtime_dev", "sleep_waketime_dev", "sleep_midpoint_dev"):
+                        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0) if col in df else 0.0
+                    df["sleep_missing"] = (
+                        df["sleep_missing"].fillna(1.0) if "sleep_missing" in df else df["sleep_hours"].isna().astype(float)
+                    )
 
             # Process demographics and device source embeddings
             demo_processor = DemographicsProcessor(
@@ -259,14 +277,7 @@ class HealthDataModule(LightningDataModule):
 
             sleep_mode = getattr(self.hparams, "sleep_feature_mode", "none")
             if self.hparams.use_sleep:
-                if sleep_mode == "hours_only":
-                    self.demographics_dim += 1
-                elif sleep_mode == "category_only":
-                    self.demographics_dim += 4
-                elif sleep_mode in ("none", None):
-                    self.demographics_dim += 0
-                else:
-                    self.demographics_dim += 5
+                self.demographics_dim += len(sleep_mode_cols(sleep_mode))
 
             survey_mode = getattr(self.hparams, "survey_context_mode", "none")
             if self.hparams.use_survey_context:
@@ -278,6 +289,11 @@ class HealthDataModule(LightningDataModule):
                     self.demographics_dim += 0
                 else:
                     self.demographics_dim += 3
+
+            # Labels from each user's previous survey, built by CohortBuilder
+            prev_names = list((self.hparams.prev_label_aggregators or {}).keys())
+            self.prev_label_cols = [f"prev_{n}" for n in prev_names] + (["prev_label_missing"] if prev_names else [])
+            self.demographics_dim += len(self.prev_label_cols)
 
             # If the sampler needs access to the labels (e.g. LagSampler), provide them now
             if hasattr(self.hparams.sampler, "set_labels"):
@@ -304,6 +320,7 @@ class HealthDataModule(LightningDataModule):
                 use_survey_context=self.hparams.use_survey_context,
                 sleep_feature_mode=sleep_mode,
                 survey_context_mode=survey_mode,
+                prev_label_cols=self.prev_label_cols,
             )
             self.data_val = HealthDataset(
                 val_df, modality_dfs, self.hparams.modality_cols,
@@ -315,6 +332,7 @@ class HealthDataModule(LightningDataModule):
                 use_survey_context=self.hparams.use_survey_context,
                 sleep_feature_mode=sleep_mode,
                 survey_context_mode=survey_mode,
+                prev_label_cols=self.prev_label_cols,
             )
             self.data_test = HealthDataset(
                 test_df, modality_dfs, self.hparams.modality_cols,
@@ -326,6 +344,7 @@ class HealthDataModule(LightningDataModule):
                 use_survey_context=self.hparams.use_survey_context,
                 sleep_feature_mode=sleep_mode,
                 survey_context_mode=survey_mode,
+                prev_label_cols=self.prev_label_cols,
             )
 
     def _filter_to_covered_samples(

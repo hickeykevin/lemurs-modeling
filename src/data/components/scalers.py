@@ -172,3 +172,36 @@ class DualScaler:
             out = np.concatenate([global_scaled, subject_transformed], axis=-1)
             
         return out.astype(np.float32)
+
+
+class Log1pStandardScaler:
+    """log1p, then global standardization, on the first ``scale_dim`` columns.
+
+    Activity counts are zero-inflated and heavy-tailed; standardizing raw counts
+    lets a few large bins dominate. log1p compresses the tail first. Columns past
+    ``scale_dim`` (e.g. missing-data masks, time features) pass through unchanged.
+    Statistics are global (fit on the training split), so no per-person level or
+    spread is computed or encoded.
+    """
+
+    def __init__(self, scale_dim: Optional[int] = None, eps: float = 1e-8):
+        self.scale_dim = scale_dim
+        self.eps = eps
+        self.mean_: Optional[np.ndarray] = None
+        self.scale_: Optional[np.ndarray] = None
+
+    def _cols(self, X: np.ndarray) -> int:
+        return X.shape[1] if self.scale_dim is None else self.scale_dim
+
+    def fit(self, X: np.ndarray, y: Optional[np.ndarray] = None) -> "Log1pStandardScaler":
+        d = self._cols(X)
+        Z = np.log1p(np.clip(X[:, :d].astype(np.float64), 0.0, None))
+        self.mean_ = Z.mean(axis=0)
+        self.scale_ = np.maximum(Z.std(axis=0), self.eps)
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        d = self._cols(X)
+        out = X.astype(np.float64, copy=True)
+        out[:, :d] = (np.log1p(np.clip(out[:, :d], 0.0, None)) - self.mean_) / self.scale_
+        return out.astype(np.float32)

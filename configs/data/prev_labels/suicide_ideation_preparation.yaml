@@ -1,0 +1,8 @@
+# @package data
+# Adds the user's previous daily survey's suicide-ideation and suicide-preparation
+# labels (prev_suicide_ideation, prev_suicide_preparation) plus prev_label_missing to
+# the static feature vector. Together the two equal the previous survey's
+# suicide_risk label. See CohortBuilder._add_previous_labels.
+defaults:
+  - /data/aggregator@prev_label_aggregators.suicide_ideation: suicide_ideation
+  - /data/aggregator@prev_label_aggregators.suicide_preparation: suicide_preparation

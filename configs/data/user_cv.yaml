@@ -4,6 +4,7 @@ defaults:
   - sampler: interval_aware
   - scaler: dual
   - modalities: step
+  - prev_labels: none
 
 _target_: src.data.cv_health_datamodule.CVHealthDataModule
 
@@ -33,5 +34,6 @@ use_lgbt: false
 use_device_source: false
 use_sleep: false
 sleep_feature_mode: none
+sleep_carry_to_afternoon: false # afternoon surveys take the same day's morning sleep report
 
 exclude_user_ids: null

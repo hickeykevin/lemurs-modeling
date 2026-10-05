@@ -603,3 +603,57 @@ class LagSampler(TimeSampler):
         
         # Return as [1, 1] feature matrix
         return np.array([[prev_label]], dtype=np.float32)
+
+
+class MissingMaskSampler(TimeSampler):
+    """Wraps a sampler and adds one has-data mask channel per modality.
+
+    The wrapped sampler fills bins with no records with 0, so "no data" and
+    "no activity" look identical. This samples a column of ones through the
+    *same* sampler, so the mask uses exactly its window and binning: a bin's mask
+    is 1 when at least one record falls in it (as that sampler assigns records).
+    The wrapped sampler is not modified.
+
+    Output channels: ``[mod values..., mod masks..., time features...]``. The
+    masks sit before the time features so ``num_time_features`` still counts
+    trailing columns, and after the values so a scaler with
+    ``scale_dim = len(modalities)`` leaves them unscaled.
+    """
+
+    _ONE = "__has_record__"
+
+    def __init__(self, sampler: TimeSampler):
+        self.sampler = sampler
+
+    def __getattr__(self, name):
+        # Forward lookback_hours, resample_freq, etc. to the wrapped sampler.
+        if name == "sampler":
+            raise AttributeError(name)
+        return getattr(self.sampler, name)
+
+    @property
+    def include_time_features(self) -> bool:
+        return getattr(self.sampler, "include_time_features", False)
+
+    @include_time_features.setter
+    def include_time_features(self, value: bool) -> None:
+        self.sampler.include_time_features = value
+
+    @property
+    def num_time_features(self) -> int:
+        return self.sampler.num_time_features
+
+    def window_bounds(self, survey_timestamp):
+        return self.sampler.window_bounds(survey_timestamp)
+
+    def __call__(self, survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities) -> np.ndarray:
+        values = self.sampler(survey_timestamp, app_user_id, modality_dfs, modality_cols, modalities)
+        for mod in modalities:
+            if self._ONE not in modality_dfs[mod].columns:
+                modality_dfs[mod][self._ONE] = 1.0
+        counts = self.sampler(
+            survey_timestamp, app_user_id, modality_dfs, {m: self._ONE for m in modalities}, modalities
+        )
+        n = len(modalities)
+        masks = (counts[:, :n] > 0).astype(np.float32)
+        return np.concatenate([values[:, :n], masks, values[:, n:]], axis=-1).astype(np.float32)

@@ -58,6 +58,7 @@ class IndexedHealthDataModule(HealthDataModule):
                     use_survey_context=self.hparams.use_survey_context,
                     sleep_feature_mode=getattr(self.hparams, "sleep_feature_mode", "none"),
                     survey_context_mode=getattr(self.hparams, "survey_context_mode", "none"),
+                    prev_label_cols=getattr(self, "prev_label_cols", None),
                     return_index=True,
                 ),
             )

@@ -99,6 +99,8 @@ class WalkForwardHealthDataModule(IndexedHealthDataModule):
         exclude_user_ids: Optional[List[int]] = None,
         purge_hours: Optional[float] = None,
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
+        prev_label_aggregators: Optional[Dict[str, Any]] = None,
+        sleep_carry_to_afternoon: bool = False,
     ) -> None:
         """Initializes the WalkForwardHealthDataModule.
 
@@ -199,6 +201,8 @@ class WalkForwardHealthDataModule(IndexedHealthDataModule):
             include_time_features=include_time_features,
             exclude_user_ids=exclude_user_ids,
             prebuilt_cohort=prebuilt_cohort,
+            prev_label_aggregators=prev_label_aggregators,
+            sleep_carry_to_afternoon=sleep_carry_to_afternoon,
             purge_hours=purge_hours,
         )
         self.hparams.fold_sizing = fold_sizing

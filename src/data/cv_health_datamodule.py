@@ -85,6 +85,8 @@ class CVHealthDataModule(HealthDataModule):
         exclude_user_ids: Optional[List[int]] = None,
         high_risk_user_ids: Optional[List[int]] = None,
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
+        prev_label_aggregators: Optional[Dict[str, Any]] = None,
+        sleep_carry_to_afternoon: bool = False,
     ) -> None:
         """Initializes the CVHealthDataModule."""
         super().__init__(
@@ -115,6 +117,8 @@ class CVHealthDataModule(HealthDataModule):
             include_time_features=include_time_features,
             exclude_user_ids=exclude_user_ids,
             prebuilt_cohort=prebuilt_cohort,
+            prev_label_aggregators=prev_label_aggregators,
+            sleep_carry_to_afternoon=sleep_carry_to_afternoon,
         )
         if high_risk_user_ids is None:
             high_risk_user_ids = _get_default_high_risk_user_ids()

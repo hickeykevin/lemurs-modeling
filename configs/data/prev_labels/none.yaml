@@ -1,0 +1,3 @@
+# @package data
+# No previous-survey label features (default).
+prev_label_aggregators: null

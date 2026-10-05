@@ -1,0 +1,8 @@
+# rolling_72h_6h plus one has-data mask channel per modality (1 = at least one
+# record in the bin), so missing data is no longer indistinguishable from zero activity.
+_target_: src.data.components.samplers.MissingMaskSampler
+sampler:
+  _target_: src.data.components.samplers.RollingSampler
+  lookback_hours: 72.0
+  resample_freq: "6h"
+  include_time_features: true
