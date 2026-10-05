@@ -110,3 +110,37 @@ def test_wbm_encoder_net_forward_requires_mamba_ssm():
     logits = net(x)
     assert logits.shape == (2, 2)
 
+
+
+class _GradProbeEncoder(torch.nn.Module):
+    """Stand-in for the Mamba encoder that records whether autograd was enabled."""
+
+    def __init__(self, embed_dim):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.grad_enabled = []
+        self.w = torch.nn.Parameter(torch.zeros(1))
+
+    def forward(self, x):
+        self.grad_enabled.append(torch.is_grad_enabled())
+        return None, torch.zeros(x.shape[0], self.embed_dim)
+
+
+@pytest.mark.parametrize(
+    "freeze, training, expected",
+    [
+        (False, True, True),    # fine-tuning: gradients flow into the encoder
+        (False, False, False),  # eval / test (Lightning uses inference mode): must be off
+        (True, True, False),    # frozen encoder never needs gradients
+        (True, False, False),
+    ],
+)
+def test_encoder_gradients_only_while_training_an_unfrozen_encoder(freeze, training, expected):
+    net = WBMEncoderNet(modalities=["step"], output_size=2, resample_freq_hours=1.0, freeze_encoder=freeze)
+    probe = _GradProbeEncoder(net.embed_dim)
+    net._ensure_encoder = lambda device: None  # skip the checkpoint download / Mamba import
+    net.encoder = probe
+    net.train(training)
+    with torch.inference_mode(not training):
+        net(torch.randn(2, 168, 1))
+    assert probe.grad_enabled == [expected]

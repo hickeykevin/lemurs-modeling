@@ -1,9 +1,8 @@
 _target_: src.models.components.chronos2_net.Chronos2EncoderNet
 modalities: ${data.modalities}
-# Must match data.sampler's bin width (e.g. rolling.yaml's resample_freq: "6h" -> 6.0).
-# Not auto-derived from data.sampler.resample_freq (a string like "6h") since that
-# needs a custom OmegaConf resolver; override this alongside the sampler if you change it.
-resample_freq_hours: 6.0
+# Bin width of the sampler's output; tracks the sampler automatically (accepts "6h").
+# A number (hours) can still be passed explicitly, e.g. model.net.resample_freq_hours=6.0.
+resample_freq_hours: ${data.sampler.resample_freq}
 output_size: ${oc.select:data.aggregator.num_classes,2}
 use_sequence_data: ${model.use_sequence_data}
 freeze_encoder: true # required=true for now -- fine-tuning isn't supported yet, see chronos2_net.py
@@ -12,3 +11,14 @@ modality_channel_map: # our modality name -> one of the pretrained encoder's 19 
   step: iphone_steps
   distance: iphone_distance
   calorie: watch_energy
+# Embedding extraction (see Chronos2EncoderNet). Defaults follow Auer et al. (2025).
+# OpenMHC's original extraction: token_pooling=last, channel_pooling=mean,
+# drop_unmapped_channels=false, append_input_stats=false.
+token_pooling: mean # mean over observed context patches | reg | last
+layer_pooling: last # last | mean (average of all encoder blocks)
+channel_pooling: concat # concat | mean
+drop_unmapped_channels: true # encode only the channels our modalities map to
+append_input_stats: true # mean/std/min/max/last of each sensor column (global- and, with DualScaler, subject-scaled)
+append_time_features: true # time features of the bin ending at the survey (as the other models see)
+cache_embeddings: true # frozen encoder -> embed each sample once, not every epoch
+include_embedding: true # false = ablation: same head on input stats + time features only

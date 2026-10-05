@@ -414,7 +414,10 @@ class WBMEncoderNet(nn.Module):
             norm_stds=self._norm_stds,
         )
 
-        with torch.set_grad_enabled(not self.freeze_encoder):
+        # Gradients only while training an unfrozen encoder. In eval/test Lightning runs
+        # under inference mode, where the Mamba kernels cannot save tensors for backward
+        # ("Inference tensors cannot be saved for backward"), so grad must be off there.
+        with torch.set_grad_enabled(self.training and not self.freeze_encoder):
             _, r = self.encoder(weekly_x)
 
         if demographics is not None:
