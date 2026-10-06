@@ -1,0 +1,11 @@
+_target_: src.models.components.two_branch_net.TwoBranchNet
+input_size: ${len:${data.modalities}}   # corrected from the sampler output at setup
+sensor_hidden: 32
+item_hidden: 32
+dropout: 0.2
+head_hidden: 64
+output_size: ${oc.select:data.aggregator.num_classes,2}
+use_sensor_branch: true
+use_item_branch: true
+use_static_extras: true     # previous labels / sleep / demographics columns that precede the item history
+modality_dropout: 0.0       # per-sample chance (split over the two branches) of zeroing one embedding in training

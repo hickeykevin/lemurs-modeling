@@ -1,0 +1,18 @@
+user_cv ne_items_only_s7 data/prev_items=negative_emotion_plus_suicide_risk model.net.use_sensor_branch=false seed=7
+user_cv ne_sensors_only_s7 data/prev_items=negative_emotion_plus_suicide_risk model.net.use_item_branch=false model.net.use_static_extras=false seed=7
+user_cv ne_both_s7 data/prev_items=negative_emotion_plus_suicide_risk seed=7
+user_cv ne_both_mdrop_s7 data/prev_items=negative_emotion_plus_suicide_risk model.net.modality_dropout=0.5 seed=7
+user_cv su_items_only_s7 data/prev_items=suicide_risk model.net.use_sensor_branch=false seed=7
+user_cv su_both_s7 data/prev_items=suicide_risk seed=7
+user_cv ne_items_only_s8 data/prev_items=negative_emotion_plus_suicide_risk model.net.use_sensor_branch=false seed=8
+user_cv ne_sensors_only_s8 data/prev_items=negative_emotion_plus_suicide_risk model.net.use_item_branch=false model.net.use_static_extras=false seed=8
+user_cv ne_both_s8 data/prev_items=negative_emotion_plus_suicide_risk seed=8
+user_cv ne_both_mdrop_s8 data/prev_items=negative_emotion_plus_suicide_risk model.net.modality_dropout=0.5 seed=8
+user_cv su_items_only_s8 data/prev_items=suicide_risk model.net.use_sensor_branch=false seed=8
+user_cv su_both_s8 data/prev_items=suicide_risk seed=8
+user_cv ne_items_only_s9 data/prev_items=negative_emotion_plus_suicide_risk model.net.use_sensor_branch=false seed=9
+user_cv ne_sensors_only_s9 data/prev_items=negative_emotion_plus_suicide_risk model.net.use_item_branch=false model.net.use_static_extras=false seed=9
+user_cv ne_both_s9 data/prev_items=negative_emotion_plus_suicide_risk seed=9
+user_cv ne_both_mdrop_s9 data/prev_items=negative_emotion_plus_suicide_risk model.net.modality_dropout=0.5 seed=9
+user_cv su_items_only_s9 data/prev_items=suicide_risk model.net.use_sensor_branch=false seed=9
+user_cv su_both_s9 data/prev_items=suicide_risk seed=9

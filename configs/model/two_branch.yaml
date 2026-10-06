@@ -1,0 +1,13 @@
+# Sensor LSTM + item-history GRU, fused late. Needs data/prev_items=<theme> for the item branch.
+# Ablations on identical cohort/folds: model.net.use_sensor_branch=false (items only),
+# model.net.use_item_branch=false model.net.use_static_extras=false (sensors only).
+defaults:
+  - net: two_branch
+  - optimizer: adam
+  - scheduler: null
+
+_target_: src.models.health_module.HealthLitModule
+compile: false
+auto_class_weights: true
+class_weights: null
+use_sequence_data: true

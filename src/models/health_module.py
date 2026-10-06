@@ -267,6 +267,8 @@ class HealthLitModule(LightningModule):
             if hasattr(dm, "demographics_dim") and dm.demographics_dim is not None:
                 if hasattr(self.net, "init_demographics"):
                     self.net.init_demographics(dm.demographics_dim)
+            if getattr(dm, "prev_item_layout", None) is not None and hasattr(self.net, "init_item_sequence"):
+                self.net.init_item_sequence(*dm.prev_item_layout)
             self.net.to(self.device)  # Make sure weights are moved to correct device
 
         # Auto-compute inverse-frequency class weights from the training split.

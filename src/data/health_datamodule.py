@@ -313,6 +313,15 @@ class HealthDataModule(LightningDataModule):
                     self.hparams.prev_item_aggregator.get_question_ids(), self.hparams.prev_item_lags,
                     self.hparams.prev_item_sleep,
                 )
+                # (lags, columns per lag): lets a net read the history as a [lags, step] sequence.
+                # The history is the tail of the static vector, lag 1 (most recent) first.
+                ids = self.hparams.prev_item_aggregator.get_question_ids()
+                self.prev_item_layout = (
+                    int(self.hparams.prev_item_lags),
+                    len(CohortBuilder.prev_item_columns(ids, 1, self.hparams.prev_item_sleep)),
+                )
+            else:
+                self.prev_item_layout = None
             self.demographics_dim += len(self.prev_label_cols)
 
             # If the sampler needs access to the labels (e.g. LagSampler), provide them now
