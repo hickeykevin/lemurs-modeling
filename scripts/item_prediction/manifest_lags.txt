@@ -1,0 +1,4 @@
+user_cv ctl_suicide_history_L10 data/prev_items=suicide_risk data.prev_item_lags=10
+user_cv ctl_suicide_history_L20 data/prev_items=suicide_risk data.prev_item_lags=20
+user_cv ctl_negemo_plus_suicide_history_L10 data/prev_items=negative_emotion_plus_suicide_risk data.prev_item_lags=10
+user_cv ctl_negemo_plus_suicide_history_L20 data/prev_items=negative_emotion_plus_suicide_risk data.prev_item_lags=20
