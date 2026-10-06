@@ -2,7 +2,7 @@ _target_: src.models.components.tirex_net.TiRexEncoderNet
 modalities: ${data.modalities}
 output_size: ${oc.select:data.aggregator.num_classes,2}
 use_sequence_data: ${model.use_sequence_data}
-freeze_encoder: true          # fine-tuning is not supported (frozen, cached embeddings)
+freeze_encoder: true          # false = fine-tune (see finetune_blocks, encoder_lr_scale); true = frozen, cached
 checkpoint_repo_id: NX-AI/TiRex
 layer_pooling: all            # all (concat 12 blocks, the TiRex package's recipe) | mean | last
 second_block: subject         # subject (DualScaler) | mask (MissingMaskSampler) | none
@@ -11,3 +11,5 @@ append_time_features: true
 include_embedding: true       # false = stats-only ablation
 cache_embeddings: true
 batch_size: 512
+finetune_blocks: -1           # with freeze_encoder=false: train the last k sLSTM blocks (-1 = all 12 + input embedding)
+encoder_lr_scale: 0.02        # encoder lr = this x optimizer lr (adam 5e-4 -> 1e-5); the head uses the optimizer lr

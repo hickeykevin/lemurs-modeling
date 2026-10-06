@@ -154,8 +154,6 @@ def test_layout_mismatches_are_rejected():
         _net(second_block="none").init_input_size(2 * M + 2, num_time_features=2)
     with pytest.raises(ValueError):
         _net(second_block="mask").init_input_size(M + 2, num_time_features=2)
-    with pytest.raises(ValueError):
-        TiRexEncoderNet(modalities=["step"], freeze_encoder=False)
 
 
 def test_config_instantiates():
@@ -221,3 +219,113 @@ def test_cached_and_uncached_embeddings_agree():
     for n in (a, b):
         n.init_input_size(2 * M + 2, num_time_features=2)
     assert torch.allclose(a._embed(a.encoder_input(x)), b._embed(b.encoder_input(x)))
+
+
+# -- fine-tuning ------------------------------------------------------------------------------------
+class TrainableFakeTiRex(torch.nn.Module):
+    """Differentiable stand-in for the two steps of ``_embed_context``: each block is a Linear."""
+
+    config = _Cfg()
+
+    def __init__(self):
+        super().__init__()
+        self.input_patch_embedding = torch.nn.Linear(64, TIREX_EMBED_DIM)
+        self.blocks = torch.nn.ModuleList(torch.nn.Linear(TIREX_EMBED_DIM, TIREX_EMBED_DIM) for _ in range(TIREX_NUM_BLOCKS))
+
+    def _prepare_context_for_embedding(self, context, max_context):
+        n, t = context.shape
+        pad = 2048 - t
+        ctx = torch.cat([torch.full((n, pad), float("nan")), context], dim=1)
+        tok = ctx.unfold(-1, 32, 32)
+        mask = (~torch.isnan(tok)).float()
+        return torch.cat([torch.nan_to_num(tok, nan=0.0), mask], dim=-1), pad // 32
+
+    def _forward_model(self, x, return_all_hidden=False):
+        h = self.input_patch_embedding(x)
+        out = []
+        for blk in self.blocks:
+            h = torch.tanh(blk(h))
+            out.append(h)
+        return h, torch.stack(out, dim=-2)
+
+
+def _ft_net(**kw):
+    net = TiRexEncoderNet(modalities=["step", "distance"], freeze_encoder=False, **kw)
+    fake = TrainableFakeTiRex()
+    fake.requires_grad_(False)
+    for blk in list(fake.blocks)[-net.finetune_blocks:]:
+        blk.requires_grad_(True)
+    if net.finetune_blocks == TIREX_NUM_BLOCKS:
+        fake.input_patch_embedding.requires_grad_(True)
+    net.model = fake
+    net.init_input_size(2 * M + 2, num_time_features=2)
+    return net
+
+
+def test_finetuning_trains_only_the_selected_blocks():
+    net = _ft_net(finetune_blocks=2)
+    loss = torch.nn.functional.cross_entropy(net(_x()), torch.tensor([0, 1, 0, 1]))
+    loss.backward()
+    blocks = net.model.blocks
+    assert all(b.weight.grad is not None and b.weight.grad.abs().sum() > 0 for b in blocks[-2:])
+    assert all(b.weight.grad is None for b in blocks[:-2])
+    assert net.model.input_patch_embedding.weight.grad is None
+    assert not tirex_net._EMBED_CACHE  # nothing cached while fine-tuning
+
+
+def test_finetuning_param_groups_scale_the_encoder_lr():
+    net = _ft_net(finetune_blocks=-1, encoder_lr_scale=0.1)
+    groups = net.optimizer_param_groups()
+    assert len(groups) == 2 and "lr_scale" not in groups[0] and groups[1]["lr_scale"] == 0.1
+    n_enc = sum(p.numel() for p in groups[1]["params"])
+    assert n_enc == sum(p.numel() for p in net.model.parameters())  # all blocks + input embedding
+
+
+def test_trainable_and_frozen_paths_agree_on_the_same_weights():
+    net = _ft_net()
+    x = _x()
+    series = net.encoder_input(x)
+    with torch.no_grad():
+        a = net._embed_trainable(series)
+    # frozen path on the same fake, via _embed_context built from the same two steps
+    def embed_context(ctx):
+        e, p = net.model._prepare_context_for_embedding(ctx, None)
+        return net.model._forward_model(e, True)[1][:, p:]
+    net.model._embed_context = embed_context
+    b = net._encode(series)
+    assert torch.allclose(a, b, atol=1e-6)
+
+
+def test_lit_module_builds_per_group_learning_rates():
+    import functools
+    from types import SimpleNamespace
+
+    from src.models.health_module import HealthLitModule
+
+    net = _ft_net(encoder_lr_scale=0.02)
+    module = HealthLitModule(net=net, optimizer=functools.partial(torch.optim.Adam, lr=5e-4), scheduler=None,
+                             compile=False)
+    module._trainer = SimpleNamespace(model=module)  # configure_optimizers reads self.trainer.model
+    opt = module.configure_optimizers()["optimizer"]
+    assert [g["lr"] for g in opt.param_groups] == [5e-4, pytest.approx(1e-5)]
+
+
+def test_finetune_settings_validated():
+    with pytest.raises(ValueError):
+        TiRexEncoderNet(modalities=["step"], freeze_encoder=False, finetune_blocks=0)
+    with pytest.raises(ValueError):
+        TiRexEncoderNet(modalities=["step"], freeze_encoder=False, include_embedding=False)
+
+
+@pytest.mark.slow
+def test_real_weights_trainable_path_matches_frozen_path():
+    """The differentiable extraction gives the frozen embedding on the real checkpoint."""
+    pytest.importorskip("tirex")
+    torch.manual_seed(0)
+    series = torch.rand(4, M, T) * 100
+    frozen = TiRexEncoderNet(modalities=["step", "distance"], cache_embeddings=False)
+    frozen._ensure_model(torch.device("cpu"))
+    tuned = TiRexEncoderNet(modalities=["step", "distance"], freeze_encoder=False)
+    tuned._ensure_model(torch.device("cpu"))
+    with torch.no_grad():
+        assert torch.allclose(tuned._embed_trainable(series), frozen._encode(series), atol=1e-4)

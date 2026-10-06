@@ -33,8 +33,13 @@ time features]``. The second block is the subject-scaled copy under ``DualScaler
 (``second_block="mask"``); with ``"mask"``, bins with no records are passed to TiRex as
 NaN rather than as zero activity.
 
-The encoder is frozen and its embeddings cached per sample; fine-tuning is not supported.
-Runs on CPU (the package's pure-torch sLSTM) or GPU; the optional custom CUDA kernels
+By default the encoder is frozen and its embeddings cached per series. With
+``freeze_encoder=False`` the last ``finetune_blocks`` sLSTM blocks (all 12 with -1) are trained
+together with the head, through the same extraction (the package's ``_embed_context`` runs
+under ``torch.inference_mode``, so the differentiable path calls its two steps directly), at
+``encoder_lr_scale`` times the optimizer's learning rate (see ``optimizer_param_groups``).
+Nothing is cached then. TiRex has no dropout or normalisation layers with training-mode
+behaviour, so the encoder stays in eval mode either way. Runs on CPU (the package's pure-torch sLSTM) or GPU; the optional custom CUDA kernels
 (``tirex-ts[cuda]``) are not needed.
 """
 
@@ -94,12 +99,16 @@ class TiRexEncoderNet(nn.Module):
         include_embedding: bool = True,
         cache_embeddings: bool = True,
         batch_size: int = 512,
+        finetune_blocks: int = -1,
+        encoder_lr_scale: float = 0.02,
     ) -> None:
         super().__init__()
         if not use_sequence_data:
             raise ValueError("TiRexEncoderNet always requires sequence data (use_sequence_data=False is unsupported)")
-        if not freeze_encoder:
-            raise ValueError("TiRexEncoderNet does not support fine-tuning: embeddings are extracted frozen and cached.")
+        if not freeze_encoder and not include_embedding:
+            raise ValueError("freeze_encoder=False needs include_embedding=True (there is nothing to fine-tune)")
+        if not -1 <= finetune_blocks <= TIREX_NUM_BLOCKS or finetune_blocks == 0:
+            raise ValueError(f"finetune_blocks must be -1 (all) or 1..{TIREX_NUM_BLOCKS}, got {finetune_blocks}")
         if layer_pooling not in LAYER_POOLING_MODES:
             raise ValueError(f"layer_pooling must be one of {LAYER_POOLING_MODES}, got {layer_pooling!r}")
         if second_block not in SECOND_BLOCK_MODES:
@@ -117,6 +126,8 @@ class TiRexEncoderNet(nn.Module):
         self.include_embedding = include_embedding
         self.cache_embeddings = cache_embeddings
         self.batch_size = batch_size
+        self.finetune_blocks = TIREX_NUM_BLOCKS if finetune_blocks == -1 else finetune_blocks
+        self.encoder_lr_scale = encoder_lr_scale
         self.demographics_dim = demographics_dim
         # Located by init_input_size once the datamodule's column layout is known.
         self.second_cols: Optional[slice] = None
@@ -178,8 +189,24 @@ class TiRexEncoderNet(nn.Module):
         model = load_model(self.checkpoint_repo_id, device=str(device), backend="torch")
         model.eval()
         model.requires_grad_(False)
+        if not self.freeze_encoder:
+            for block in list(model.blocks)[-self.finetune_blocks :]:
+                block.requires_grad_(True)
+            if self.finetune_blocks == TIREX_NUM_BLOCKS:
+                model.input_patch_embedding.requires_grad_(True)
         self.model = model
         self.add_module("encoder", model)
+
+    def optimizer_param_groups(self) -> List[dict]:
+        """Head at the optimizer's learning rate, trainable encoder blocks at
+        ``encoder_lr_scale`` times it (read by ``HealthLitModule.configure_optimizers``).
+        Loads the encoder if needed so its parameters exist before the optimizer is built."""
+        groups = [{"params": list(self.fc.parameters())}]
+        if not self.freeze_encoder:
+            self._ensure_model(self.fc.weight.device)
+            trainable = [p for p in self.model.parameters() if p.requires_grad]
+            groups.append({"params": trainable, "lr_scale": self.encoder_lr_scale})
+        return groups
 
     def _cache_key(self) -> Tuple:
         return (self.checkpoint_repo_id, self.layer_pooling)
@@ -250,6 +277,16 @@ class TiRexEncoderNet(nn.Module):
         z = torch.round((flat - loc) / scale, decimals=4).to(torch.float32).numpy()
         return [z[i].tobytes() for i in range(z.shape[0])]
 
+    def _embed_trainable(self, series: torch.Tensor) -> torch.Tensor:
+        """Same extraction as ``_encode`` but with gradients (``_embed_context`` without its
+        ``inference_mode`` wrapper), for ``freeze_encoder=False``."""
+        b, m, t = series.shape
+        flat = series.reshape(b * m, t)
+        input_embeds, padded = self.model._prepare_context_for_embedding(flat, None)
+        _, hidden = self.model._forward_model(input_embeds, return_all_hidden=True)
+        per_series = self.pool(hidden[:, padded:, :, :].float(), t)
+        return self._assemble(per_series, b, m).to(series.device)
+
     def _embed(self, series: torch.Tensor) -> torch.Tensor:
         b, m, t = series.shape
         flat = series.reshape(b * m, t)
@@ -270,7 +307,11 @@ class TiRexEncoderNet(nn.Module):
         features = []
         if self.include_embedding:
             self._ensure_model(x.device)
-            features.append(self._embed(self.encoder_input(x)))
+            first = next(self.model.parameters(), None)
+            if first is not None and first.device != x.device:
+                self.model.to(x.device)  # in place: optimizer references to its parameters stay valid
+            series = self.encoder_input(x)
+            features.append(self._embed(series) if self.freeze_encoder else self._embed_trainable(series))
         if self.append_input_stats:
             features.append(Chronos2EncoderNet.input_stats(x_sensor))
             if self.second_block == "subject" and self.second_cols is not None:
