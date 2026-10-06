@@ -1,0 +1,6 @@
+user_cv suihist_nosensors data/prev_items=suicide_risk model.use_sequence_features=false
+user_cv suihist_sensors data/prev_items=suicide_risk
+user_cv suihist_sensors_pastz data/prev_items=suicide_risk model.within_person_centering=past_z
+user_cv negsui_nosensors data/prev_items=negative_emotion_plus_suicide_risk model.use_sequence_features=false
+user_cv negsui_sensors data/prev_items=negative_emotion_plus_suicide_risk
+user_cv negsui_sensors_pastz data/prev_items=negative_emotion_plus_suicide_risk model.within_person_centering=past_z
