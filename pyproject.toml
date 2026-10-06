@@ -47,6 +47,13 @@ chronos2 = [
     "huggingface_hub>=0.24.0",
     "chronos-forecasting==2.3.0",
 ]
+# For model=tirex (src/models/components/tirex_net.py): NX-AI's TiRex (xLSTM) forecasting
+# model, used as a frozen feature extractor. The base package runs on CPU; the optional
+# `tirex-ts[cuda]` kernels are not required. `uv sync --extra tirex`.
+tirex = [
+    "huggingface_hub>=0.24.0",
+    "tirex-ts==1.4.2",
+]
 
 
 [tool.pytest.ini_options]
