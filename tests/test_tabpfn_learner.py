@@ -66,3 +66,34 @@ def test_real_tabpfn_3_5_learns_a_simple_signal():
     Xte, yte = _data(n=200, seed=1)
     m = TabPFNModel(model_version="v3.5").fit(X, y)
     assert roc_auc_score(yte, m.predict_proba(Xte)[:, 1]) > 0.8
+
+
+def test_finetuned_learner_runs_through_flaml(monkeypatch):
+    from flaml import AutoML
+
+    made = {}
+
+    def fake(self):
+        made["finetune"] = self.finetune
+        return LogisticRegression()
+
+    monkeypatch.setattr(TabPFNModel, "_make_classifier", fake)
+    X, y = _data()
+    automl = AutoML()
+    flaml_custom.register_custom_learners(automl)
+    automl.fit(X, y, task="classification", estimator_list=["tabpfn_ft"], time_budget=10, metric="roc_auc", verbose=0)
+    assert automl.best_estimator == "tabpfn_ft" and made["finetune"] is True
+
+
+def test_classes_fall_back_when_the_classifier_does_not_expose_them(monkeypatch):
+    class NoClasses:
+        def fit(self, X, y):
+            self._lr = LogisticRegression().fit(X, y)
+            return self
+
+        def predict_proba(self, X):
+            return self._lr.predict_proba(X)
+
+    monkeypatch.setattr(TabPFNModel, "_make_classifier", lambda self: NoClasses())
+    X, y = _data()
+    assert list(TabPFNModel(finetune=True).fit(X, y).classes_) == [0, 1]

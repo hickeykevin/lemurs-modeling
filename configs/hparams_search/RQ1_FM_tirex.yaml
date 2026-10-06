@@ -1,0 +1,74 @@
+# Generated foundation-model sweep (see scripts/RQ_foundation_models.sh).
+name: RQ1_FM_tirex
+description: 'RQ1: frozen TiRex (averaged blocks) + linear head x 20 samplers x 7
+  modality sets = 140 runs, same fixed settings as RQ1_dl_models (75 epochs).'
+project: lemurs-modeling
+program: src/train.py
+method: grid
+metric:
+  name: pooled/auroc
+  goal: maximize
+parameters:
+  sampler_pkg:
+    values:
+    - rolling_24h_4h
+    - rolling_24h_6h
+    - rolling_24h_8h
+    - rolling_24h_12h
+    - rolling_48h_4h
+    - rolling_48h_6h
+    - rolling_48h_8h
+    - rolling_48h_12h
+    - rolling_72h_4h
+    - rolling_72h_6h
+    - rolling_72h_8h
+    - rolling_72h_12h
+    - rolling_96h_4h
+    - rolling_96h_6h
+    - rolling_96h_8h
+    - rolling_96h_12h
+    - rolling_120h_4h
+    - rolling_120h_6h
+    - rolling_120h_8h
+    - rolling_120h_12h
+  model_pkg:
+    values:
+    - tirex
+  modalities_choice:
+    values:
+    - step
+    - calorie
+    - distance
+    - step_calorie
+    - step_distance
+    - calorie_distance
+    - step_calorie_distance
+  wandb_group:
+    value: RQ1_FM_tirex
+command:
+- bash
+- scripts/RQ_foundation_models.sh
+- uv
+- run
+- python
+- src/train.py
+- eval_plan=cyclical
+- task_name=cyclical_sweep
+- logger=wandb
+- data/scaler=dual
+- data.os_filter=both
+- data.collapse_strategy=none
+- data.use_demographics=false
+- data.use_sleep=true
+- data.sleep_feature_mode=hours_only
+- data.use_survey_context=false
+- data.require_sensor_data=true
+- data.purge_hours=120.0
+- trainer.enable_checkpointing=false
+- callbacks.model_checkpoint=null
+- callbacks.early_stopping=null
+- model.auto_class_weights=true
+- trainer=gpu
+- trainer.max_epochs=75
+- model.net.layer_pooling=mean
+- ${args_no_hyphens}

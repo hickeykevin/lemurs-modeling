@@ -4,7 +4,7 @@
 # Needs the `tirex` extra (`uv sync --extra tirex`); uses the GPU when one is available.
 _target_: src.data.components.tirex_features.TiRexFeaturizer
 layer_pooling: mean            # mean (512 dims per modality) | all (12 blocks, 6,144) | last
-append_summary_stats: true
+append_summary_stats: false     # true = also SummaryStatsFeaturizer output (mixed; not used in the sweeps)
 stats: [mean, median, std, min, max]
 exclude_last_n_cols: auto      # resolved by FLAMLHealthModule from the sampler's time features
 num_modalities: null           # resolved by FLAMLHealthModule from datamodule.modalities

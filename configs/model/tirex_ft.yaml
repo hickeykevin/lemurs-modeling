@@ -1,0 +1,13 @@
+# TiRex fine-tuned with its linear head: the last 2 sLSTM blocks are trained at 0.1 x the
+# optimizer lr (adam 5e-4 -> 5e-5). Fine-tuning all 12 blocks diverges to NaN on this data
+# (with or without gradient clipping); the last 2 and last 6 blocks are stable and score alike.
+# Train for a fine-tuning budget (e.g. trainer.max_epochs=15), not the frozen models' 75.
+defaults:
+  - tirex
+  - _self_
+
+net:
+  freeze_encoder: false
+  finetune_blocks: 2
+  encoder_lr_scale: 0.1
+  layer_pooling: mean

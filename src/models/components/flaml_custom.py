@@ -81,16 +81,23 @@ class TabPFNModel:
         n_estimators: Any = "auto",
         device: str = "auto",
         random_state: int = 0,
+        finetune: bool = False,
+        finetune_epochs: int = 30,
+        finetune_lr: float = 1e-5,
         **kwargs: Any,  # FLAML may pass n_jobs etc.; TabPFN manages its own parallelism
     ) -> None:
         self.model_version = model_version
         self.n_estimators = n_estimators
         self.device = device
         self.random_state = random_state
+        self.finetune = finetune
+        self.finetune_epochs = finetune_epochs
+        self.finetune_lr = finetune_lr
 
     def get_params(self, deep: bool = True) -> Dict[str, Any]:
         return {"model_version": self.model_version, "n_estimators": self.n_estimators,
-                "device": self.device, "random_state": self.random_state}
+                "device": self.device, "random_state": self.random_state, "finetune": self.finetune,
+                "finetune_epochs": self.finetune_epochs, "finetune_lr": self.finetune_lr}
 
     def set_params(self, **params: Any) -> "TabPFNModel":
         for k, v in params.items():
@@ -101,6 +108,17 @@ class TabPFNModel:
         from tabpfn import TabPFNClassifier
         from tabpfn.constants import ModelVersion
 
+        if self.finetune:
+            # Prior Labs' own fine-tuning loop: AdamW, early stopping on a 10% split of the
+            # training data, gradient clipping, lr warmup/schedule; no checkpoints written.
+            import torch
+            from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
+
+            device = ("cuda" if torch.cuda.is_available() else "cpu") if self.device == "auto" else self.device
+            return FinetunedTabPFNClassifier(
+                device=device, epochs=self.finetune_epochs, learning_rate=self.finetune_lr,
+                random_state=self.random_state, model_version=ModelVersion(self.model_version),
+            )
         return TabPFNClassifier.create_default_for_version(
             ModelVersion(self.model_version),
             n_estimators=self.n_estimators,
@@ -111,7 +129,10 @@ class TabPFNModel:
     def fit(self, X: Any, y: Any, sample_weight: Optional[np.ndarray] = None, **fit_params: Any) -> "TabPFNModel":
         self.model_ = self._make_classifier()
         self.model_.fit(np.asarray(X, dtype=np.float32), np.asarray(y))
-        self.classes_ = self.model_.classes_
+        # FinetunedTabPFNClassifier does not expose classes_; fall back to the labels' classes.
+        self.classes_ = getattr(self.model_, "classes_", None)
+        if self.classes_ is None:
+            self.classes_ = np.unique(np.asarray(y))
         return self
 
     def predict_proba(self, X: Any) -> np.ndarray:
@@ -134,7 +155,16 @@ class TabPFNEstimator(SKLearnEstimator):
         self.estimator_class = TabPFNModel
 
 
+class TabPFNFinetunedEstimator(TabPFNEstimator):
+    """FLAML learner for TabPFN fine-tuned on the training fold (Prior Labs' fine-tuning loop)."""
+
+    @classmethod
+    def search_space(cls, **params: Any) -> Dict[str, Dict[str, Any]]:
+        return {"finetune": {"domain": tune.choice([True]), "init_value": True}}
+
+
 def register_custom_learners(automl: AutoML) -> None:
     """Registers custom estimators into a FLAML AutoML instance."""
     automl.add_learner("svm_pipeline", SVMPipelineEstimator)
     automl.add_learner("tabpfn", TabPFNEstimator)
+    automl.add_learner("tabpfn_ft", TabPFNFinetunedEstimator)

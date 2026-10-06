@@ -1,0 +1,71 @@
+# Generated foundation-model sweep (see scripts/RQ_foundation_models.sh).
+name: RQ2_FM_tirex_featurizer
+description: 'RQ2: the 4 FLAML models on frozen TiRex embeddings (featurizer=tirex,
+  embedding only) x 20 samplers, step_distance = 80 runs.'
+project: lemurs-modeling
+program: src/train.py
+method: grid
+metric:
+  name: pooled/auroc
+  goal: maximize
+parameters:
+  sampler_pkg:
+    values:
+    - rolling_24h_4h
+    - rolling_24h_6h
+    - rolling_24h_8h
+    - rolling_24h_12h
+    - rolling_48h_4h
+    - rolling_48h_6h
+    - rolling_48h_8h
+    - rolling_48h_12h
+    - rolling_72h_4h
+    - rolling_72h_6h
+    - rolling_72h_8h
+    - rolling_72h_12h
+    - rolling_96h_4h
+    - rolling_96h_6h
+    - rolling_96h_8h
+    - rolling_96h_12h
+    - rolling_120h_4h
+    - rolling_120h_6h
+    - rolling_120h_8h
+    - rolling_120h_12h
+  model_pkg:
+    values:
+    - flaml_xgboost
+    - flaml_rf
+    - flaml_lr
+    - flaml_svm
+  featurizer_pkg:
+    values:
+    - tirex
+  wandb_group:
+    value: RQ2_FM_tirex_featurizer
+command:
+- bash
+- scripts/RQ_foundation_models.sh
+- uv
+- run
+- python
+- src/train.py
+- eval_plan=cyclical
+- task_name=cyclical_sweep
+- logger=wandb
+- data/scaler=dual
+- data.os_filter=both
+- data.collapse_strategy=none
+- data.use_demographics=false
+- data.use_sleep=true
+- data.sleep_feature_mode=hours_only
+- data.use_survey_context=false
+- data.require_sensor_data=true
+- data.purge_hours=120.0
+- trainer.enable_checkpointing=false
+- callbacks.model_checkpoint=null
+- callbacks.early_stopping=null
+- model.auto_class_weights=true
+- trainer.max_epochs=75
+- model.automl_config.metric=roc_auc
+- data/modalities=step_distance
+- ${args_no_hyphens}
