@@ -54,6 +54,11 @@ tirex = [
     "huggingface_hub>=0.24.0",
     "tirex-ts==1.4.2",
 ]
+# For model=tabpfn: Prior Labs' TabPFN-3.5 tabular foundation model (in-context learning,
+# no training). Weights: non-commercial licence (Prior-Labs/tabpfn_3_5 on Hugging Face).
+tabpfn = [
+    "tabpfn==9.1.0",
+]
 
 
 [tool.pytest.ini_options]

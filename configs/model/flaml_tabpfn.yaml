@@ -1,0 +1,20 @@
+# TabPFN-3.5 (Prior Labs tabular foundation model) as a fifth FLAML model next to xgboost /
+# rf / lr / svm, on the same features and folds. No tuning: the learner's search space is one
+# point. Needs the `tabpfn` extra and a one-time licence acceptance (export TABPFN_TOKEN=...);
+# weights are under a non-commercial licence. Uses the GPU when available.
+defaults:
+  - featurizer: null
+  - _self_
+
+_target_: src.models.health_module.FLAMLHealthModule
+auto_class_weights: false
+class_weights: null
+automl_config:
+  time_budget: 120 # one TabPFN fit + predict; generous so the single trial is not cut off on CPU
+  metric: 'f1'
+  estimator_list: ['tabpfn']
+  n_jobs: 1
+  log_file_name: ${paths.output_dir}/flaml.log
+task: 'classification'
+use_sequence_features: true # false = fit on the static vector only (no sensors)
+within_person_centering: none
