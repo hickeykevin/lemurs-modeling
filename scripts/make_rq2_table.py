@@ -5,7 +5,7 @@ combination (step_distance), grouped by model and featurizer, reporting mean and
 pooled metric across the runs, i.e. across the 20 lookback x bin-size settings.
 
 Rows follow the layout of the table in working_paper/sections/results.tex. The Foundation block holds
-TabPFN-3.5 and TiRex, frozen and fine-tuned. Bold marks the best value per column within each block
+TabPFN-3.5, TiRex and Chronos-Bolt, frozen and fine-tuned. Bold marks the best value per column within each block
 (RQ2.1 / RQ2.2); a dagger marks the best pipeline per category by balanced accuracy.
 
 With --check <results.tex>, every number of the existing table's non-foundation rows is compared with
@@ -37,6 +37,8 @@ ROWS = [
     ("2.1", "Foundation", "TabPFN-3.5 (fine-tuned)", "RQ1_FM_tabpfn", "flaml_tabpfn_ft", "raw"),
     ("2.1", "Foundation", "TiRex (frozen)", "RQ1_FM_tirex", "tirex", None),
     ("2.1", "Foundation", "TiRex (fine-tuned)", "RQ1_FM_tirex_ft", "tirex_ft", None),
+    ("2.1", "Foundation", "Chronos-Bolt (frozen)", "RQ1_FM_chronos_bolt", "chronos_bolt", None),
+    ("2.1", "Foundation", "Chronos-Bolt (fine-tuned)", "RQ1_FM_chronos_bolt_ft", "chronos_bolt_ft", None),
 ]
 for _model, _name in (("flaml_lr", "Logistic reg."), ("flaml_svm", "SVM"), ("flaml_rf", "Random forest"), ("flaml_xgboost", "XGBoost")):
     ROWS += [("2.2", _name, "+ Summary Stats", "RQ2_flaml_features", _model, "summary_stats"),

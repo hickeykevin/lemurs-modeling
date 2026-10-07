@@ -56,6 +56,10 @@ FOUNDATION_SWEEPS = {
                  "default_featurizer": "none (raw sequences)", "model_type": "FoundationSequential"},
     "4tn2se89": {"experiment": "RQ1_FM_tirex_ft", "description": "RQ1 TiRex fine-tuned (last 2 blocks) + linear head",
                  "default_featurizer": "none (raw sequences)", "model_type": "FoundationSequential"},
+    "s0z4lhpp": {"experiment": "RQ1_FM_chronos_bolt", "description": "RQ1 Chronos-Bolt (mini) frozen + linear head",
+                 "default_featurizer": "none (raw sequences)", "model_type": "FoundationSequential"},
+    "7fl7hn9y": {"experiment": "RQ1_FM_chronos_bolt_ft", "description": "RQ1 Chronos-Bolt (mini) fine-tuned (last 2 blocks) + linear head",
+                 "default_featurizer": "none (raw sequences)", "model_type": "FoundationSequential"},
 }
 
 for _meta in SWEEPS.values():
