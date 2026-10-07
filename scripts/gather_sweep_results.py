@@ -58,8 +58,14 @@ FOUNDATION_SWEEPS = {
                  "default_featurizer": "none (raw sequences)", "model_type": "FoundationSequential"},
 }
 
+for _meta in SWEEPS.values():
+    _meta.setdefault("data_snapshot", "live database, 2026-09-29 to 2026-10-01")
+for _meta in FOUNDATION_SWEEPS.values():
+    _meta.setdefault("data_snapshot", "data/db_snapshots/2026-10-07")
+
 SWEEP_SETS = {
     "standard": (SWEEPS, "reports/sweep_results", "all_sweeps_results.csv"),
+    "all": ({**SWEEPS, **FOUNDATION_SWEEPS}, "reports/sweep_results", "all_sweeps_results.csv"),
     "foundation": (FOUNDATION_SWEEPS, "reports/sweep_results_foundation", "all_foundation_sweeps_results.csv"),
 }
 
@@ -241,6 +247,7 @@ def fetch_all_sweeps(sweeps: Dict[str, Dict[str, Any]]) -> pd.DataFrame:
                 "num_modalities": count_modalities(modalities_choice),
                 "featurizer_pkg": featurizer_pkg,
                 **metric_columns(summary),
+                "data_snapshot": meta.get("data_snapshot"),
             })
 
     return pd.DataFrame(all_records)
@@ -293,7 +300,7 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--set", choices=sorted(SWEEP_SETS), default="standard",
-                        help="standard: FLAML + DL + RQ2 featurizer sweeps; foundation: TabPFN / TiRex sweeps")
+                        help="standard: FLAML + DL + RQ2 featurizer sweeps; foundation: TabPFN / TiRex sweeps; all: both")
     parser.add_argument("--out-dir", default=None, help="where to write the CSVs (default depends on --set)")
     parser.add_argument("--backfill-reruns", action="store_true",
                         help="fill runs without pooled metrics from finished standalone re-runs (see backfill_reruns)")
@@ -313,7 +320,7 @@ def main():
     for c in copied:
         print(f"backfilled {c['run_name']} (sweep run {c['sweep_run_id']}) from re-run {c['rerun_id']}: pooled AUROC {c['pooled_auroc']:.3f}")
     if args.legacy_columns:
-        df = df.drop(columns=STANDARD_EXTRA_COLUMNS)
+        df = df.drop(columns=STANDARD_EXTRA_COLUMNS + ["data_snapshot"])
 
     master_path = out_dir / master_name
     df.to_csv(master_path, index=False)
