@@ -217,3 +217,43 @@ def test_resolve_ssh_pkey_from_single_line_with_spaces():
 
 
 
+
+
+def test_snapshot_cache_writes_once_then_serves_without_connecting(tmp_path, monkeypatch):
+    import pandas as pd
+
+    monkeypatch.setenv("LEMURS_DB_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("LEMURS_SSH_HOST", "example.invalid")
+    db = DatabaseService()
+    assert db.connect() is True  # deferred: no tunnel opened when a cache is configured
+
+    calls = {"connect": 0, "sql": 0}
+
+    def fake_connect(self):
+        calls["connect"] += 1
+        self.connection = MagicMock(closed=False)
+        return True
+
+    def fake_read_sql(query, conn):
+        calls["sql"] += 1
+        return pd.DataFrame({"id": [1, 2], "v": [3.0, 4.0]})
+
+    monkeypatch.setattr(DatabaseService, "_connect_once", fake_connect)
+    monkeypatch.setattr(pd, "read_sql", fake_read_sql)
+    first = db.extract_from_database("step")
+    assert (tmp_path / "step.pkl").exists() and calls == {"connect": 1, "sql": 1}
+
+    db2 = DatabaseService()
+    second = db2.extract_from_database("step")
+    assert calls == {"connect": 1, "sql": 1}  # served from the snapshot
+    pd.testing.assert_frame_equal(first, second)
+
+
+def test_connect_retries_transient_failures(monkeypatch):
+    monkeypatch.delenv("LEMURS_DB_CACHE_DIR", raising=False)
+    monkeypatch.setenv("LEMURS_SSH_HOST", "example.invalid")
+    monkeypatch.setenv("LEMURS_DB_CONNECT_ATTEMPTS", "3")
+    monkeypatch.setenv("LEMURS_DB_CONNECT_BACKOFF_S", "0")
+    outcomes = iter([False, False, True])
+    monkeypatch.setattr(DatabaseService, "_connect_once", lambda self: next(outcomes))
+    assert DatabaseService().connect() is True

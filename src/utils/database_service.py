@@ -73,6 +73,17 @@ class DatabaseService:
         self.connection = None
         self.tunnel: Optional[SSHTunnelForwarder] = None
 
+        # Optional on-disk snapshot of extracted tables (opt-in). With LEMURS_DB_CACHE_DIR set,
+        # extract_from_database() reads <dir>/<table>.pkl when present and writes it after
+        # the first query, so many parallel runs (sweeps) share one data snapshot and do not
+        # each open an SSH tunnel. Delete the directory to refresh the snapshot.
+        cache_dir = os.getenv("LEMURS_DB_CACHE_DIR")
+        self.cache_dir = cache_dir if cache_dir else None
+        # Connection attempts before giving up (the SSH gateway intermittently refuses or
+        # times out when many jobs connect at once); waits grow with each attempt.
+        self.connect_attempts = max(1, int(os.getenv("LEMURS_DB_CONNECT_ATTEMPTS", "4")))
+        self.connect_backoff_s = float(os.getenv("LEMURS_DB_CONNECT_BACKOFF_S", "20"))
+
     def _resolve_ssh_pkey(self):
         """
         Resolve the private key from raw key string, key path, or existing PKey object.
@@ -133,6 +144,31 @@ class DatabaseService:
         return key_source
 
     def connect(self) -> bool:
+        """Connect through the SSH tunnel, retrying with backoff.
+
+        With a snapshot cache configured the connection is deferred: ``extract_from_database``
+        connects only if a table is not cached yet, so fully cached runs never connect.
+        """
+        if self.cache_dir:
+            return True
+        return self._connect_with_retry()
+
+    def _connect_with_retry(self) -> bool:
+        import random
+        import time
+
+        if not self.ssh_host:  # a configuration error: retrying cannot fix it
+            return self._connect_once()
+        for attempt in range(1, self.connect_attempts + 1):
+            if self._connect_once():
+                return True
+            if attempt < self.connect_attempts:
+                wait = self.connect_backoff_s * attempt * (1.0 + random.random())
+                logger.warning(f"Database connection attempt {attempt}/{self.connect_attempts} failed; retrying in {wait:.0f}s")
+                time.sleep(wait)
+        return False
+
+    def _connect_once(self) -> bool:
         """Connect to PostgreSQL database through an encrypted SSH tunnel."""
         try:
             if not self.ssh_host:
@@ -207,9 +243,17 @@ class DatabaseService:
         Raises:
             Exception: If database connection fails or query execution fails
         """
+        cache_path = None
+        if self.cache_dir:
+            from pathlib import Path
+
+            cache_path = Path(self.cache_dir) / f"{table_name}.pkl"  # pickle keeps JSON/object columns exact
+            if cache_path.exists():
+                return pd.read_pickle(cache_path)
+
         # Connect if not already connected
         if not self.connection or self.connection.closed:
-            if not self.connect():
+            if not self._connect_with_retry():
                 raise Exception("Failed to connect to database")
         
         try:
@@ -232,6 +276,12 @@ class DatabaseService:
                 query = f"SELECT * FROM {table_name}"
 
             df = pd.read_sql(query, self.connection)
+            if cache_path is not None:
+                # Atomic write, so parallel runs never read a half-written snapshot.
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = cache_path.with_suffix(f".tmp{os.getpid()}")
+                df.to_pickle(tmp)
+                os.replace(tmp, cache_path)
             return df
 
         except Exception as e:
