@@ -176,6 +176,7 @@ def fetch_all_sweeps() -> pd.DataFrame:
             fold_auroc_mean = summary.get("fold/test/auroc_mean")
             fold_f1_mean = summary.get("fold/test/f1_mean")
             fold_spec_mean = summary.get("fold/test/specificity_mean")
+            fold_bal_acc_mean = summary.get("fold/test/balanced_accuracy_mean")
 
             # Bootstrap CIs if present
             auroc_ci_low = summary.get("pooled/auroc_ci_low")
@@ -202,7 +203,6 @@ def fetch_all_sweeps() -> pd.DataFrame:
                 "pooled_recall": recall,
                 "pooled_specificity": specificity,
                 "pooled_sens_at_spec_0.9": sens_at_spec,
-                "pooled_balanced_accuracy": balanced_accuracy,
                 "within_person_auroc_mean": wp_auroc_mean,
                 "within_person_auroc_median": wp_auroc_median,
                 "fold_test_auroc_mean": fold_auroc_mean,
@@ -210,6 +210,9 @@ def fetch_all_sweeps() -> pd.DataFrame:
                 "fold_test_spec_mean": fold_spec_mean,
                 "pooled_auroc_ci_low": auroc_ci_low,
                 "pooled_auroc_ci_high": auroc_ci_high,
+                # Appended last so the earlier columns keep their order across exports.
+                "pooled_balanced_accuracy": balanced_accuracy,
+                "fold_test_balanced_accuracy_mean": fold_bal_acc_mean,
             })
 
     df = pd.DataFrame(all_records)
@@ -217,7 +220,11 @@ def fetch_all_sweeps() -> pd.DataFrame:
 
 
 def main():
-    out_dir = Path("reports/sweep_results")
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out-dir", default="reports/sweep_results", help="where to write the CSVs")
+    out_dir = Path(parser.parse_args().out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df = fetch_all_sweeps()
