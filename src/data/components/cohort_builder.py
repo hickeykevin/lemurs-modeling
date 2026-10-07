@@ -16,7 +16,7 @@ class CohortBuilder:
     #: Test accounts and discontinued/anomalous participants excluded from every
     #: stream. Overridable via ``exclude_user_ids`` so that fixtures and future
     #: cohorts are not bound to these specific IDs.
-    DEFAULT_EXCLUDED_USER_IDS = [1, 2, 3, 10, 12, 21, 22, 43, 44]  # 12: avantika-test
+    DEFAULT_EXCLUDED_USER_IDS = [1, 2, 3, 10, 12, 21, 22, 30, 43, 44, 53, 54, 55]  # 12: avantika-test
 
     def __init__(
         self,
