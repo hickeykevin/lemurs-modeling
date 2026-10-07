@@ -9,7 +9,7 @@
 
 if [ -z "$1" ]; then
     echo "Error: No sweep ID provided."
-    echo "Usage: sbatch scripts/parallel_sweep.sbatch <sweep_id> [num_workers]"
+    echo "Usage: LEMURS_DB_CACHE_DIR=<snapshot dir> sbatch --export=ALL scripts/parallel_sweep.sbatch <sweep_id> [num_workers]"
     exit 1
 fi
 
@@ -35,6 +35,14 @@ export VECLIB_MAXIMUM_THREADS=$THREADS_PER_WORKER
 export NUMEXPR_NUM_THREADS=$THREADS_PER_WORKER
 
 mkdir -p logs
+
+# Every run reads the database snapshot instead of opening its own SSH tunnel (many parallel
+# tunnels time out). Build one with scripts/make_db_snapshot.sbatch; see DatabaseService.
+if [ -z "${LEMURS_DB_CACHE_DIR:-}" ] || [ ! -d "$LEMURS_DB_CACHE_DIR" ]; then
+    echo "LEMURS_DB_CACHE_DIR must point at an existing database snapshot"; exit 1
+fi
+export LEMURS_DB_CACHE_DIR
+echo "database snapshot: $LEMURS_DB_CACHE_DIR ($(ls $LEMURS_DB_CACHE_DIR/*.pkl | wc -l) tables)"
 
 echo "Allocating $TOTAL_CPUS CPUs: launching $NUM_WORKERS W&B Agents ($THREADS_PER_WORKER threads each) for sweep: $SWEEP_ID..."
 
