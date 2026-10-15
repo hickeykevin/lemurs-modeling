@@ -1,0 +1,11 @@
+# Chronos-Bolt (mini) fine-tuned with its linear head: the last 2 of 4 encoder blocks (+ final
+# norm) train at 0.1 x the optimizer lr (adam 5e-4 -> 5e-5), mirroring model=tirex_ft.
+# Train for a fine-tuning budget (e.g. trainer.max_epochs=15), not the frozen models' 75.
+defaults:
+  - chronos_bolt
+  - _self_
+
+net:
+  freeze_encoder: false
+  finetune_blocks: 2
+  encoder_lr_scale: 0.1

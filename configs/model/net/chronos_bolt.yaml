@@ -3,7 +3,14 @@ modalities: ${data.modalities}
 model_id: amazon/chronos-bolt-mini
 output_size: ${oc.select:data.aggregator.num_classes,2}
 use_sequence_data: ${model.use_sequence_data}
-freeze_encoder: true
-pooling: mean
-modality_pooling: mean
+freeze_encoder: true          # false = fine-tune the last finetune_blocks encoder blocks
+finetune_blocks: -1           # -1 = all 4 (mini) + input patch embedding
+encoder_lr_scale: 0.02        # encoder lr = this x optimizer lr; the head uses the optimizer lr
+token_pooling: mean           # mean over observed patches | reg ([REG] token)
+second_block: subject         # subject (DualScaler) | mask (MissingMaskSampler) | none
+append_input_stats: true      # per-modality mean/std/min/max/last (level that instance-norm removes)
+append_time_features: true
+include_embedding: true       # false = stats-only ablation
+cache_embeddings: true
+batch_size: 1024
 torch_dtype: float32
