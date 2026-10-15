@@ -15,7 +15,7 @@ class CohortBuilder:
     #: Test accounts and discontinued/anomalous participants excluded from every
     #: stream. Overridable via ``exclude_user_ids`` so that fixtures and future
     #: cohorts are not bound to these specific IDs.
-    DEFAULT_EXCLUDED_USER_IDS = [1, 2, 3, 10, 21, 22, 43, 44]
+    DEFAULT_EXCLUDED_USER_IDS = [1, 2, 3, 10, 12, 21, 22, 30, 43, 44, 53, 54, 55]  # 12: avantika-test
 
     def __init__(
         self,
@@ -325,6 +325,12 @@ class CohortBuilder:
         answer_df = db.extract_from_database("answer")
         survey_response_df = db.extract_from_database("survey_response")
         survey_response_df['timestamp'] = pd.to_datetime(survey_response_df["timestamp"]).astype("datetime64[ns]")
+
+        # Remove test and discontinued users here too, not only from the sensor and
+        # demographic streams: otherwise their labels survive whenever sensor
+        # coverage is not required (and in any label-only analysis).
+        survey_response_df = survey_response_df[~survey_response_df["app_user_id"].isin(self.exclude_user_ids)]
+        answer_df = answer_df[answer_df["survey_response_id"].isin(survey_response_df["id"])]
 
         # Keep only the daily EMA surveys (0=morning, 1=afternoon). The PHQ-9
         # (survey 2) runs on a separate cadence and asks about the preceding two

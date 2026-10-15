@@ -10,7 +10,9 @@
 #    whole aggregator. Moved into rule_1 alongside 2/3 below.
 
 #labeling strategy:
-# - Any ideation item (questions 2,3,5) ≥ 1
+# - Any ideation item (questions 2,3,5) ≥ 2
+#   (≥ 2, not ≥ 1: answers are stored 1-5 since 0014-fix-scale-answer-indexing.sql,
+#   so "≥ 1" was true for every response. Matches suicide_risk.yaml.)
 
 _target_: src.data.components.label_aggregators.RuleBasedAggregator
 combination_logic: "any"
@@ -18,5 +20,5 @@ rules:
   rule_1:
     ids: [2, 3, 5]
     op: "ge"
-    val: 1.0
+    val: 2.0
 
