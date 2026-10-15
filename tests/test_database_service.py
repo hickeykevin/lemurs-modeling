@@ -216,4 +216,10 @@ def test_resolve_ssh_pkey_from_single_line_with_spaces():
     assert pkey.get_name() == "ssh-ed25519"
 
 
-
+def test_connect_retries_transient_failures(monkeypatch):
+    monkeypatch.setenv("LEMURS_SSH_HOST", "example.invalid")
+    monkeypatch.setenv("LEMURS_DB_CONNECT_ATTEMPTS", "3")
+    monkeypatch.setenv("LEMURS_DB_CONNECT_BACKOFF_S", "0")
+    outcomes = iter([False, False, True])
+    monkeypatch.setattr(DatabaseService, "_connect_once", lambda self: next(outcomes))
+    assert DatabaseService().connect() is True

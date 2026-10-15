@@ -73,6 +73,11 @@ class DatabaseService:
         self.connection = None
         self.tunnel: Optional[SSHTunnelForwarder] = None
 
+        # Connection attempts before giving up (the SSH gateway intermittently refuses or
+        # times out when many jobs connect at once); waits grow with each attempt.
+        self.connect_attempts = max(1, int(os.getenv("LEMURS_DB_CONNECT_ATTEMPTS", "4")))
+        self.connect_backoff_s = float(os.getenv("LEMURS_DB_CONNECT_BACKOFF_S", "20"))
+
     def _resolve_ssh_pkey(self):
         """
         Resolve the private key from raw key string, key path, or existing PKey object.
@@ -133,6 +138,25 @@ class DatabaseService:
         return key_source
 
     def connect(self) -> bool:
+        """Connect through the SSH tunnel, retrying with backoff on transient failures."""
+        return self._connect_with_retry()
+
+    def _connect_with_retry(self) -> bool:
+        import random
+        import time
+
+        if not self.ssh_host:  # a configuration error: retrying cannot fix it
+            return self._connect_once()
+        for attempt in range(1, self.connect_attempts + 1):
+            if self._connect_once():
+                return True
+            if attempt < self.connect_attempts:
+                wait = self.connect_backoff_s * attempt * (1.0 + random.random())
+                logger.warning(f"Database connection attempt {attempt}/{self.connect_attempts} failed; retrying in {wait:.0f}s")
+                time.sleep(wait)
+        return False
+
+    def _connect_once(self) -> bool:
         """Connect to PostgreSQL database through an encrypted SSH tunnel."""
         try:
             if not self.ssh_host:

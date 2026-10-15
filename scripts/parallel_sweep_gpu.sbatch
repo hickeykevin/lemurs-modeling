@@ -13,13 +13,6 @@ cd /home/khickey/lemurs-modeling
 [ -z "$1" ] && { echo "usage: sbatch scripts/parallel_sweep_gpu.sbatch <sweep_id> [num_agents]"; exit 1; }
 SWEEP_ID=$1; [[ "$SWEEP_ID" != */* ]] && SWEEP_ID="hickeykevin/lemurs-modeling/$SWEEP_ID"
 N=${2:-3}
-# Every run reads the database snapshot instead of opening its own SSH tunnel (many parallel
-# tunnels time out). Create it once with LEMURS_DB_CACHE_DIR set; see DatabaseService.
-if [ -z "${LEMURS_DB_CACHE_DIR:-}" ] || [ ! -d "$LEMURS_DB_CACHE_DIR" ]; then
-  echo "LEMURS_DB_CACHE_DIR must point at an existing database snapshot"; exit 1
-fi
-export LEMURS_DB_CACHE_DIR
-echo "database snapshot: $LEMURS_DB_CACHE_DIR ($(ls $LEMURS_DB_CACHE_DIR | wc -l) tables)"
 T=$(( ${SLURM_CPUS_PER_TASK:-16} / N )); [ "$T" -lt 1 ] && T=1
 export OMP_NUM_THREADS=$T MKL_NUM_THREADS=$T OPENBLAS_NUM_THREADS=$T NUMEXPR_NUM_THREADS=$T
 echo "host=$(hostname) $(nvidia-smi --query-gpu=name --format=csv,noheader) | $N agents x $T threads | sweep $SWEEP_ID"
