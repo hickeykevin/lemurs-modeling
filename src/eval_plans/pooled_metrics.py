@@ -74,7 +74,20 @@ def _pooled_classification_metrics(
     """
     from src.callbacks.evaluation_callbacks import SensitivityAtSpecificityScalar
 
-    from torchmetrics.classification import F1Score, AUROC, Precision, Recall, Specificity, Accuracy
+    from torchmetrics.classification import (
+        BinaryF1Score,
+        BinaryAUROC,
+        BinaryRecall,
+        BinarySpecificity,
+        BinaryPrecision,
+        BinarySensitivityAtSpecificity,
+        F1Score,
+        AUROC,
+        Recall,
+        Specificity,
+        Precision,
+        Accuracy,
+    )
 
     # np.asarray(..., copy=True) rather than as_tensor(...) directly: probs
     # (a DataFrame .to_numpy() slice) may not be writable, which torch warns
@@ -82,26 +95,66 @@ def _pooled_classification_metrics(
     probs_t = torch.from_numpy(np.asarray(probs, dtype=np.float32).copy())
     targets_t = torch.from_numpy(np.asarray(y_true, dtype=np.int64).copy())
 
-    f1 = F1Score(task="multiclass", num_classes=2, average=params["f1_average"])
-    auroc = AUROC(task="multiclass", num_classes=2, average=params["auroc_average"])
-    precision = Precision(task="multiclass", num_classes=2, average=params["precision_average"])
-    recall = Recall(task="multiclass", num_classes=2, average=params["recall_average"])
-    specificity = Specificity(task="multiclass", num_classes=2, average=params["specificity_average"])
-    sens_at_spec = SensitivityAtSpecificityScalar(
-        task="multiclass", num_classes=2,
-        min_specificity=params["min_specificity"],
-        average=params["sensitivity_at_specificity_average"],
-    )
-    balanced_accuracy = Accuracy(task="multiclass", num_classes=2, average="macro")
+    # Dynamically determine the number of classes from probability columns
+    num_classes = probs.shape[1] if probs.ndim > 1 else len(np.unique(y_true))
+
+    if num_classes == 2:
+        # Dedicated binary metrics using positive-class probabilities (column 1)
+        pos_probs_t = probs_t[:, 1]
+
+        # In standard ML literature:
+        # - F1 is Macro F1 (unweighted harmonic mean across both classes to prevent majority dominance)
+        # - Recall is true positive-class Sensitivity: TP / (TP + FN)
+        # - Specificity is true negative-class Specificity: TN / (TN + FP)
+        # - Precision is true positive-class PPV: TP / (TP + FP)
+        # - Balanced Accuracy is (Sensitivity + Specificity) / 2
+        f1_metric = F1Score(task="multiclass", num_classes=2, average="macro")
+        auroc_metric = BinaryAUROC()
+        recall_metric = BinaryRecall()
+        specificity_metric = BinarySpecificity()
+        precision_metric = BinaryPrecision()
+        sens_at_spec_metric = BinarySensitivityAtSpecificity(min_specificity=params["min_specificity"])
+
+        f1_val = float(f1_metric(probs_t, targets_t))
+        auroc_val = float(auroc_metric(pos_probs_t, targets_t))
+        recall_val = float(recall_metric(pos_probs_t, targets_t))
+        specificity_val = float(specificity_metric(pos_probs_t, targets_t))
+        precision_val = float(precision_metric(pos_probs_t, targets_t))
+
+        sens_res = sens_at_spec_metric(pos_probs_t, targets_t)
+        sens_at_spec_val = float(sens_res[0] if isinstance(sens_res, tuple) else sens_res)
+
+        balanced_acc_val = (recall_val + specificity_val) / 2.0
+    else:
+        # Multiclass fallback (C > 2) using macro-averaged metrics
+        f1_metric = F1Score(task="multiclass", num_classes=num_classes, average=params["f1_average"])
+        auroc_metric = AUROC(task="multiclass", num_classes=num_classes, average=params["auroc_average"])
+        recall_metric = Recall(task="multiclass", num_classes=num_classes, average=params["recall_average"])
+        specificity_metric = Specificity(task="multiclass", num_classes=num_classes, average=params["specificity_average"])
+        precision_metric = Precision(task="multiclass", num_classes=num_classes, average=params["precision_average"])
+        sens_at_spec_metric = SensitivityAtSpecificityScalar(
+            task="multiclass", num_classes=num_classes,
+            min_specificity=params["min_specificity"],
+            average=params["sensitivity_at_specificity_average"],
+        )
+        balanced_acc_metric = Accuracy(task="multiclass", num_classes=num_classes, average="macro")
+
+        f1_val = float(f1_metric(probs_t, targets_t))
+        auroc_val = float(auroc_metric(probs_t, targets_t))
+        recall_val = float(recall_metric(probs_t, targets_t))
+        specificity_val = float(specificity_metric(probs_t, targets_t))
+        precision_val = float(precision_metric(probs_t, targets_t))
+        sens_at_spec_val = float(sens_at_spec_metric(probs_t, targets_t))
+        balanced_acc_val = float(balanced_acc_metric(probs_t, targets_t))
 
     return {
-        "f1": float(f1(probs_t, targets_t)),
-        "auroc": float(auroc(probs_t, targets_t)),
-        "precision": float(precision(probs_t, targets_t)),
-        "recall": float(recall(probs_t, targets_t)),
-        "specificity": float(specificity(probs_t, targets_t)),
-        "sensitivity_at_specificity": float(sens_at_spec(probs_t, targets_t)),
-        "balanced_accuracy": float(balanced_accuracy(probs_t, targets_t)),
+        "f1": f1_val,
+        "auroc": auroc_val,
+        "precision": precision_val,
+        "recall": recall_val,
+        "specificity": specificity_val,
+        "sensitivity_at_specificity": sens_at_spec_val,
+        "balanced_accuracy": balanced_acc_val,
     }
 
 

@@ -22,14 +22,58 @@ class Catch22Featurizer:
         self,
         fill_value: float = 0.0,
         exclude_last_n_cols: Union[int, str, None] = "auto",
+        channel_mode: str = "global",
+        num_modalities: Optional[int] = None,
     ) -> None:
+        if channel_mode not in ("all", "global", "subject"):
+            raise ValueError(f"Unknown channel_mode '{channel_mode}'. Supported: 'all', 'global', 'subject'")
         self.fill_value = fill_value
         self.exclude_last_n_cols = exclude_last_n_cols
+        self.channel_mode = channel_mode
+        self.num_modalities = num_modalities
 
         # Get the catch22 feature names from pycatch22.
         # pycatch22 C library requires >= 3 points; 2 points causes a segfault.
         dummy = np.array([1.0, 2.0, 3.0], dtype=np.float64)
         self.stats = pycatch22.catch22_all(dummy)["names"]
+
+    def _select_channels(self, x: np.ndarray) -> np.ndarray:
+        """Selects modality channels according to channel_mode and num_modalities.
+
+        DualScaler outputs channels in contiguous modality blocks:
+        [global_mod_0..global_mod_{M-1}, subject_mod_0..subject_mod_{M-1}].
+        When channel_mode is 'global' or 'subject', this extracts the corresponding
+        M-column block, avoiding duplicate Catch22 calculations while preserving all
+        distinct sensor modalities in their original order.
+        """
+        if self.channel_mode == "all":
+            return x
+
+        n_cols = x.shape[-1]
+        m = self.num_modalities
+
+        if m is not None:
+            if n_cols == 2 * m:
+                # DualScaler is present: first m cols are global, next m are subject
+                if self.channel_mode == "global":
+                    return x[:, :, :m]
+                elif self.channel_mode == "subject":
+                    return x[:, :, m:2 * m]
+            elif n_cols == m:
+                # Single scaler or unscaled: already 1 stream per modality, keep all
+                return x
+            else:
+                # If n_cols doesn't match 2*m or m, fallback safely if evenly doubled
+                if n_cols % 2 == 0 and n_cols > 0:
+                    mid = n_cols // 2
+                    return x[:, :, :mid] if self.channel_mode == "global" else x[:, :, mid:2 * mid]
+                return x
+        else:
+            # If num_modalities was not specified, infer from even split if doubled
+            if n_cols % 2 == 0 and n_cols > 0:
+                mid = n_cols // 2
+                return x[:, :, :mid] if self.channel_mode == "global" else x[:, :, mid:2 * mid]
+            return x
 
     def transform(self, x: np.ndarray) -> np.ndarray:
         x = np.asarray(x)
@@ -51,6 +95,9 @@ class Catch22Featurizer:
             )
         x = x[:, :, :n_cols].astype(np.float64)
 
+        # Select channels based on channel_mode (e.g. deduplicate DualScaler)
+        x = self._select_channels(x)
+
         n, t, f = x.shape  # samples, time steps, modality/feature columns
         n_feats = len(self.stats)
         # Store 22 catch22 features for each modality.
@@ -71,8 +118,6 @@ class Catch22Featurizer:
         # stays all zeros from np.zeros() above, same convention as
         # SummaryStatsFeaturizer.
 
-        # For an empty time window, keep the initialized zero values.
-
         out = out.reshape(n, f * n_feats)
         return out[0] if squeeze else out
 
@@ -83,4 +128,15 @@ class Catch22Featurizer:
         if len(names) < total:
             names = names + [f"col{i}" for i in range(len(names), total)]
         names = names[:total]
+
+        # Filter column names if channel_mode selected a subset
+        if self.channel_mode in ("global", "subject") and names:
+            m = self.num_modalities
+            if m is not None:
+                if len(names) == 2 * m:
+                    names = names[:m] if self.channel_mode == "global" else names[m:2 * m]
+            elif len(names) % 2 == 0 and len(names) > 0:
+                mid = len(names) // 2
+                names = names[:mid] if self.channel_mode == "global" else names[mid:2 * mid]
+
         return [f"{name}__{stat}" for name in names for stat in self.stats]
