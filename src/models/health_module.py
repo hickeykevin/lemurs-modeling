@@ -307,7 +307,19 @@ class HealthLitModule(LightningModule):
         Returns:
             A dictionary containing the optimizer and optionally a learning rate scheduler.
         """
-        optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
+        params = self.trainer.model.parameters()
+        # A net may ask for per-group learning rates (e.g. a fine-tuned pretrained encoder at a
+        # fraction of the head's): groups carry "lr_scale" relative to the optimizer's lr.
+        if hasattr(self.net, "optimizer_param_groups"):
+            base_lr = getattr(self.hparams.optimizer, "keywords", {}).get("lr")
+            params = []
+            for group in self.net.optimizer_param_groups():
+                group = dict(group)
+                scale = group.pop("lr_scale", None)
+                if scale is not None and base_lr is not None:
+                    group["lr"] = base_lr * scale
+                params.append(group)
+        optimizer = self.hparams.optimizer(params=params)
         if self.hparams.scheduler is not None:
             scheduler = self.hparams.scheduler(optimizer=optimizer)
             return {
