@@ -1,0 +1,14 @@
+{
+ "note": "W&B sweeps (project hickeykevin/lemurs-modeling) behind all_sweeps_results.csv. They ran 2026-10-07/08 from commit 864b576 (branch model/sampler-model-sweep, kept as an archive), reading the database rows in row_manifest_2026-10-07.json with the participant exclusion list below. Sweeps marked RQ1 cover all 7 modality sets; the paper's RQ2 table and RQ3 heatmap use their step_distance rows.",
+ "excluded_user_ids": [1, 2, 3, 10, 12, 21, 22, 30, 43, 44, 53, 54, 55],
+ "sweeps": {
+  "RQ1_flaml_models": {"id": "sgz1pspb", "runs": 560, "pipelines": ["lr", "svm", "rf", "xgboost"]},
+  "RQ2_flaml_features": {"id": "f8xqu6ep", "runs": 160, "pipelines": ["lr_stats", "svm_stats", "rf_stats", "xgboost_stats", "lr_catch22", "svm_catch22", "rf_catch22", "xgboost_catch22"]},
+  "RQ1_DL_models": {"id": "akgaeik3", "runs": 280, "pipelines": ["lstm", "transformer"]},
+  "RQ1_FM_tabpfn": {"id": "e5yrbc5s", "runs": 280, "pipelines": ["tabpfn", "tabpfn_ft"]},
+  "RQ1_FM_tirex": {"id": "5q9v11ka", "runs": 140, "pipelines": ["tirex"]},
+  "RQ1_FM_tirex_ft": {"id": "ojyu2sae", "runs": 140, "pipelines": ["tirex_ft"]},
+  "RQ1_FM_chronos_bolt": {"id": "37hj9im9", "runs": 140, "pipelines": ["chronos_bolt"]},
+  "RQ1_FM_chronos_bolt_ft": {"id": "1h2si29c", "runs": 140, "pipelines": ["chronos_bolt_ft"]}
+ }
+}

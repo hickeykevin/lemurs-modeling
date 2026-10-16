@@ -1,390 +1,109 @@
-<div align="center">
+# LEMURS modeling: RQ2 / RQ3 reproduction
 
-# 🚶 Lemurs Modeling Framework
+Code to reproduce the model comparison (RQ2 results table) and the lookback × bin-width
+analysis (RQ3 heatmap) of *Passive Sensing of Suicide Risk in College Students: How Far
+Back Should We Look?*. Each number in that table and heatmap comes from one run of
+`src/train.py`: a pipeline (a table row) on one of 20 lookback × bin-width settings, using
+step and distance data.
 
-[![python](https://img.shields.io/badge/-Python_3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
-[![pytorch](https://img.shields.io/badge/PyTorch_2.0+-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/get-started/locally/)
-[![lightning](https://img.shields.io/badge/-Lightning_2.0+-792ee5?logo=pytorchlightning&logoColor=white)](https://pytorchlightning.ai/)
-[![hydra](https://img.shields.io/badge/Config-Hydra_1.3-89b8cd)](https://hydra.cc/)
-[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![black](https://img.shields.io/badge/Code%20Style-Black-black.svg?labelColor=gray)](https://black.readthedocs.io/en/stable/)
-
-*Modeling, feature engineering, and evaluation framework for the Lemurs health study.*
-
-Built with **PyTorch Lightning** and **Hydra** for highly scalable, modular, and reproducible machine learning experiments.
-
-</div>
-
----
-
-## 📌 Introduction
-
-This repository contains the modeling logic, time-series feature generators, and clinical target binarization utilities for processing raw mobile sensor and ecological momentary assessment (EMA) data.
-
-To make onboarding as smooth as possible for team members new to **PyTorch Lightning** or **Hydra**, this documentation is organized into two practical walkthrough tutorials and reference sub-guides:
-* [**🚶 Tutorial 1: Getting Started and Local Runs**](#-tutorial-1-getting-started-and-local-runs): Covers environment installation, executing standard baseline models, inspecting local logs/checkpoints, and clean-up.
-* [**⚡ Tutorial 2: Creating a Custom Transformer Module & GPU Training**](#-tutorial-2-creating-a-custom-transformer-module--gpu-training): Teaches you how to build a new network component from scratch, write its YAML configuration, target GPU hardware, and master command-line overrides.
-* [**⚙️ Advanced Customization & Reference**](#-advanced-customization--reference): Deep-dives into clinical aggregators, visualization playgrounds, hyperparameter tuning sweeps, and SLURM submissions.
-
----
-
-## 📁 Repository Structure
-
-```
-├── configs                   <- Hydra configuration YAML files (the "brain")
-│   ├── callbacks                <- Logging, checkpointing, and early stopping callbacks
-│   ├── data                     <- Datamodule configs (including samplers, aggregators)
-│   ├── debug                    <- Troubleshooting configurations
-│   ├── experiment               <- Named experiments (override groups)
-│   ├── logger                   <- Logging options (WandB, CSV, TensorBoard)
-│   ├── model                    <- Model architectures, optimizers, and schedulers
-│   ├── trainer                  <- PyTorch Lightning trainer flags (CPU, GPU, epochs)
-│   ├── eval.yaml             <- Entry config for model testing
-│   └── train.yaml            <- Entry config for model training
-│
-├── notebooks                 <- Interactive Jupyter / Streamlit dashboards
-│
-├── scripts                   <- Bash utility scripts (Slurm sweeps, wrappers)
-│
-├── src                       <- Core Python source code
-│   ├── data                     <- Data loading, train-test splits, database extractors
-│   │   └── components              <- Time-series samplers and label aggregators
-│   ├── models                   <- PyTorch Lightning Modules and Neural Nets
-│   │   └── components              <- Concrete models (LSTM, simple networks)
-│   ├── utils                    <- Callbacks, helper tools, and rich printing formatters
-│   ├── train.py                 <- Main model training execution script
-│   └── eval.py                  <- Main model checkpoint evaluation script
-│
-├── tests                     <- Pytest unit and integration smoke tests
-└── pyproject.toml            <- Package dependencies and build configurations
-```
-
-For more detailed guides on core modules, refer to:
-* ⚙️ [configs/README.md](configs/README.md) - Hydra configuration brain
-* 📊 [configs/data/README.md](configs/data/README.md) - Data presets, samplers & aggregators
-* 📈 [configs/trainer/README.md](configs/trainer/README.md) - Trainer devices & epoch limits
-* 📊 [src/data/README.md](src/data/README.md) - Pipeline architecture & DataModules
-* 🧠 [src/models/README.md](src/models/README.md) - Class hierarchy & Neural Networks
-* 🛠️ [src/utils/README.md](src/utils/README.md) - Helper utilities & Callbacks
-* 💻 [src/README.md](src/README.md) - Entrypoint scripts usage & GUI guide
-
----
-
-## 🚶 Tutorial 1: Getting Started and Local Runs
-
-Follow this walkthrough to learn how to check out a branch, run model training locally, inspect generated logs, override parameters, and safely submit your code.
-
-### Step 1: Installation & Setup
-First, install **uv** (our package manager), clone the repository, and sync virtual environment dependencies:
-```bash
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Clone and sync environment
-git clone https://github.com/hickeykevin/lemurs-modeling.git
-cd lemurs-modeling
-uv sync
-```
-
-Next, set up your local environment configurations by copying the `.env.example` file:
-```bash
-cp .env.example .env
-```
-Open the `.env` file in your editor and fill in the required connection settings.
-> [!IMPORTANT]
-> **Database Credentials**: To connect to the training databases, you need access credentials. If you do not have these keys, ask the project **Administrator** for the required connection credentials.
-
-### Step 2: Initialize Your Branch
-Before modifying any configuration files or writing code, create a dedicated branch off an up-to-date local `main`:
-```bash
-git checkout main
-git pull origin main
-git checkout -b feat/modeling-my-first-run
-```
-
-### Step 3: Run the Default Baseline
-Verify your setup by launching the baseline configuration on your CPU:
-```bash
-uv run src/train.py
-```
-This command triggers a baseline run that connects to the database, extracts steps/sensor sequences, pairs them with daily survey answers, compiles them via standard splits, and trains a PyTorch LSTM classifier model.
-
-### Step 4: Inspect the Logs and Checkpoints
-By default, the CSV logger is enabled in [configs/train.yaml](configs/train.yaml). Every training execution creates a unique, timestamped folder under `logs/`:
-```
-logs/
-└── train/
-    └── runs/
-        └── YYYY-MM-DD_HH-MM-SS/      <- Your unique run folder
-            ├── .hydra/               # Complete composed YAML configurations
-            │   ├── config.yaml       # Full parameter dictionary used
-            │   ├── overrides.yaml    # Command line arguments passed
-            │   └── hydra.yaml        # Hydra internal runtime variables
-            ├── csv/                  # CSV formatted training progress logs
-            │   └── metrics.csv       # Loss and accuracy per epoch
-            └── checkpoints/          
-                └── last.ckpt          # Saved model weights at the end of training
-```
-
-### Step 5: Overriding Hyperparameters (Creating a New Run)
-Instead of modifying YAML configuration files on disk, you can override any setting directly from your command line. For example, to run a quick test with a modified learning rate and epoch count:
-```bash
-uv run src/train.py model.optimizer.lr=0.01 trainer.max_epochs=5
-```
-Executing this command creates a **new**, separate timestamped folder under `logs/train/runs/` tracking this specific run's outputs. Refer to [configs/model/README.md](configs/model/README.md) and [configs/README.md](configs/README.md) for more details on available models and settings.
-
-### Step 6: Close Out the Branch
-Since we were just running local experiments and did not make any source code changes, we do not need to commit anything. We can simply clean up by discarding any local configuration changes, returning to `main`, and deleting our temporary branch. 
-
-*(Note: The procedure for staging, committing, and pushing actual code modifications is detailed in Step 6 of **Tutorial 2**).*
+## Setup
 
 ```bash
-# Return to the main branch
-git checkout main
-
-# Delete the temporary branch
-git branch -D feat/modeling-my-first-run
+uv sync --extra tabpfn --extra tirex --extra chronos   # extras only needed for the foundation models
+cp .env.example .env                                    # then fill in the database credentials
 ```
 
----
+Runs read the LEMURS study database (PostgreSQL behind an SSH gateway), so they need study
+data access. No study data is stored in this repository.
 
-## ⚡ Tutorial 2: Creating a Custom Transformer Module & GPU Training
+## Data: which participants and rows
 
-Follow this walkthrough to implement a new network component, define its configuration, launch it using GPU acceleration, and learn how to manage Hydra parameters.
+The database keeps growing, so the paper's cohort is pinned by
+`results/row_manifest_2026-10-07.json`. It records, for each table the runs read, the row
+ids that existed on 2026-10-07 (17:58 UTC) and a hash of their contents; it holds no data.
+With it set (the default, `data.row_manifest`), only those rows are read, and the log says
+whether they still match:
 
-### Step 1: Initialize Your Feature Branch
-Start by checking out a clean branch off `main`:
-```bash
-git checkout main
-git pull origin main
-git checkout -b feat/modeling-transformer-baseline
+```
+Table 'step': 16139 pinned rows match the manifest
 ```
 
-### Step 2: Implement the PyTorch Network
-Assume we create a custom network class (e.g., a self-attention model) inside `src/models/components/transformer.py`:
-```python
-import torch
-import torch.nn as nn
+If rows were since edited or deleted, the log warns and results can differ. Set
+`data.row_manifest=null` to use the current database instead.
 
-class TransformerComponent(nn.Module):
-    # Your custom PyTorch layers go here...
-    ...
-```
+Participants: 39 have surveys after excluding test and discontinued accounts
+(`CohortBuilder.DEFAULT_EXCLUDED_USER_IDS`); 27–29 of them have step and distance data
+around enough surveys to enter the evaluation, depending on the setting.
+`results/cohort_by_sampler.csv` lists them per setting, with survey and positive-label counts.
 
-### Step 3: Create the Config File
-Based on the "new" model we just made, create the associated configuration file at `configs/model/transformer.yaml`. This file defines the `_target_` import path and hyperparameter defaults (for more details on config composition and structures, see [configs/model/README.md](configs/model/README.md) and [configs/README.md](configs/README.md)):
-```yaml
-_target_: src.models.health_module.HealthLitModule
-net:
-  _target_: src.models.components.transformer.TransformerComponent
-  hidden_dim: 128
-  num_heads: 4
-optimizer:
-  _target_: torch.optim.AdamW
-  lr: 0.001
-```
+## Fixed protocol
 
-### Step 4: Run Your Model on GPU
-We then can launch training using the newly defined model configuration and swap the trainer to use GPU acceleration (if available, else run `trainer=cpu`):
-```bash
-uv run src/train.py model=transformer trainer=gpu
-```
+These are the config defaults, so every run uses them:
 
-### Step 5: Parameter Overrides vs Config Groups (CLI Cheat Sheet)
-When overriding configurations from your terminal, distinguish between **structural changes** (swapping full configs) and **value changes** (leaf parameters):
+| | |
+|---|---|
+| Label | suicide risk: any of items 2/3/5/7 ≥ 2 or any endorsement of 8/12/13 (`configs/data/aggregator/suicide_risk.yaml`) |
+| Input | step + distance, summed into bins over the lookback window before each survey, plus hours slept |
+| Scaling | dual scaler: global and per-participant standardisation (`configs/data/scaler/dual.yaml`) |
+| Evaluation | cyclical walk-forward CV per participant: 5 folds, each testing 20% of a participant's surveys, 120 h purge around each fold boundary; metrics pooled over all folds' predictions |
+| Training | inverse-frequency class weights; tabular models tuned by FLAML for ROC AUC (30 s budget; TabPFN 120 s / 600 s); neural models 75 epochs (fine-tuned encoders 15), no early stopping; seed 7 |
 
-1. **Config Groups (Structural Choices)**
-   Swaps an entire module or configuration file. Use the group directory name and file basename (without `.yaml`):
-   * `model=transformer` (swaps model to use `configs/model/transformer.yaml`)
-   * `trainer=gpu` (swaps hardware trainer settings to use `configs/trainer/gpu.yaml`)
-   * `data/sampler=rolling_hour` (swaps data sampler to use `configs/data/sampler/rolling_hour.yaml`)
+## Running
 
-2. **Simple Parameters (Nested Leaf Parameters)**
-   Directly alters a specific value inside a YAML config file using dot-notation:
-   * `model.net.hidden_dim=256` (changes network hidden dimension)
-   * `model.optimizer.lr=0.005` (changes optimizer learning rate)
-   * `trainer.max_epochs=20` (changes maximum epochs)
-   * `+trainer.val_check_interval=0.25` (adds a new configuration field with a `+` prefix)
-
----
-
-## ⚙️ Advanced Customization & Reference
-
-### 1. Exploring Clinical Targets (Aggregators)
-An aggregator translates multiple raw EMA questionnaire answers into a single target label (0 or 1) for classification.
-
-Available clinical targets you can override (`data/aggregator=preset_name`):
-* `suicide_risk`: Targets self-harm and active ideation indicators.
-* `social_stress`: Targets interpersonal conflict.
-* `emotion_regulation`: Targets behavioral coping mechanisms.
-* `minority_stress`: Targets discrimination and minority stress factors.
-* `positive_emotion` / `negative_emotion`: Targets mood valences.
-
-To customize threshold rules on the fly:
-```bash
-# Make suicide risk criteria stricter (require a score of at least 3 on the first rule group)
-uv run src/train.py data/aggregator=suicide_risk data.aggregator.rules.rule_1.val=3
-```
-
-### 2. Interactive Exploration Dashboards
-We provide Streamlit dashboards to visualize how configurations process raw steps:
-```bash
-# Run the Interactive Sampler Playground
-uv run streamlit run notebooks/sampler_dashboard.py
-```
-This lets you select users, preview the active sampling lookback window, and check the generated feature tensor structure in real-time.
-
-### 3. Hydra Configuration GUI
-We provide an interactive Streamlit GUI to compose configurations and launch runs visually:
-```bash
-uv run streamlit run src/app.py
-```
-
-#### Running on a Remote Slurm Cluster (via `sinteractive`)
-If you are working on a remote cluster and want to run the GUI from a compute node using `sinteractive` (to avoid executing computation on the login node):
-
-1. **Start your interactive session**:
-   ```bash
-   sinteractive
-   ```
-   *Enter your resources when prompted (e.g. 2 CPUs, 8192 MB memory, short partition).*
-
-2. **Identify your assigned compute node**:
-   Look at your command prompt. It will show the compute node hostname, e.g. `username@node042:~/lemurs-modeling$`. In this case, your compute node is `node042`.
-
-3. **Launch the Streamlit app**:
-   ```bash
-   uv run streamlit run src/app.py
-   ```
-
-4. **Establish the SSH Tunnel from your local machine**:
-   Open a **new terminal window on your local computer** (not connected to the cluster) and run:
-   ```bash
-   ssh -L 8501:node042:8501 username@login.cluster.edu
-   ```
-   *(Replace `node042` with your actual compute node name, and `login.cluster.edu` with the login node hostname you normally SSH to).*
-
-5. **Access the GUI**:
-   Open your browser and navigate to `http://localhost:8501`.
-
-### 4. Writing Experiment Config Files
-Save complex CLI override combinations as an **Experiment Config** inside `configs/experiment/`.
-
-Here is an example structure of `configs/experiment/lstm_health.yaml`:
-```yaml
-# @package _global_
-
-defaults:
-  - override /data: health
-  - override /model: health
-  - override /model/net: lstm
-  - override /callbacks: [confusion_matrix, classification_metrics]
-  - override /trainer: gpu
-
-tags: ["health", "lstm"]
-seed: 42
-
-model:
-  net:
-    hidden_size: 32
-    dropout: 0.2
-
-trainer:
-  max_epochs: 100
-```
-Run the experiment with:
-```bash
-uv run src/train.py experiment=lstm_health
-```
-
-### 5. Hyperparameter Sweeps with Optuna
-To search for the best learning rates, batch sizes, and model shapes automatically, run a multi-run sweep using the Optuna optimizer plugin:
-```bash
-uv run src/train.py -m hparams_search=health_optuna experiment=lstm_health
-```
-Optuna dynamically executes trials based on the search space defined in `configs/hparams_search/health_optuna.yaml` and logs the best trial configuration to your run logs.
-
-### 6. Cross-Validation (Group K-Fold)
-
-For robust evaluation on longitudinal health data, you can run Group K-Fold cross validation grouped by `app_user_id` (ensuring disjoint user populations across train, validation, and test splits).
-
-Run cross-validation from the command line:
-```bash
-# Run 5-fold cross-validation
-uv run python src/train.py eval_plan=user_cv data=user_cv data.num_folds=5
-
-# Run Leave-One-User-Out cross-validation (evaluates on all users, one-by-one)
-uv run python src/train.py eval_plan=user_cv data=user_cv data.num_folds=-1
-```
-
-All folds are logged under a single run prefix (e.g., logging to WandB or local CSV), with fold-specific metrics formatted as `fold/val_loss` and aggregated final statistics logged at the end as `test/auroc_mean` and `test/auroc_ci_low`.
-
-
-### 7. Distributed Training & Cluster Submissions
-For large-scale training across multiple GPUs or cluster nodes:
-```bash
-# Train on 4 GPUs with Distributed Data Parallel (DDP)
-uv run src/train.py trainer=ddp trainer.devices=4
-```
-
-To submit runs to a **SLURM cluster**, use our wrapper configs or batch submit scripts:
-```bash
-sbatch scripts/run_sweep.sbatch
-```
-
-### 8. Debugging & Troubleshooting
-
-To troubleshoot bugs in your models, data pipelines, or training loops, you can combine interactive debugging with quick trial-run configurations:
-
-#### A. Interactive Debugging with pdb
-Insert a standard breakpoint anywhere in your Python code (such as inside `src/models/health_module.py` or `src/data/health_datamodule.py`) using:
-```python
-import pdb; pdb.set_trace()
-```
-When running training or evaluation from the terminal, execution will halt at the breakpoint, letting you inspect tensors, shapes, and variables interactively.
-
-#### B. Quick Debug Runs (Hydra Config Overrides)
-Running a full dataset or training run takes time. You can use Hydra's debug configs to run fast test suites:
-
-*   **Fast Development Run (`debug=fdr`)**:
-    Runs exactly 1 training, 1 validation, and 1 test batch. This is extremely useful to verify that the entire training loop completes without crashing (useful when combined with `pdb` traces):
-    ```bash
-    uv run src/train.py debug=fdr
-    ```
-*   **Limit Batch Run (`debug=limit`)**:
-    Runs only 10 training, 10 validation, and 10 test batches for up to 3 epochs. Useful for checking if loss decreases or if metrics update correctly:
-    ```bash
-    uv run src/train.py debug=limit
-    ```
-*   **Overfitting Check (`debug=overfit`)**:
-    Forces the model to overfit on a tiny fraction of the data to verify that the network architecture is capable of learning:
-    ```bash
-    uv run src/train.py debug=overfit
-    ```
-
-### 9. Model Evaluation & Testing
-
-To evaluate a trained model checkpoint (`.ckpt`) on the test dataset split, use `src/eval.py`.
-
-#### Standard Evaluation
-By default, you can evaluate a checkpoint using:
-```bash
-uv run src/eval.py model=default data=default ckpt_path=/path/to/checkpoint.ckpt
-```
-
-#### Re-using Configuration from a Previous Run
-To evaluate a checkpoint using the **exact configuration** used during its training (to avoid parameter mismatches or having to manually specify every configuration value), point Hydra directly to the run's saved config directory (typically located in the `.hydra/` subdirectory inside the timestamped training run folder) using the `--config-dir` and `--config-name` flags:
+One run, e.g. XGBoost on summary statistics with a 72 h lookback and 6 h bins:
 
 ```bash
-uv run src/eval.py \
-  --config-dir logs/train/runs/<run_timestamp>/.hydra \
-  --config-name config \
-  ckpt_path=logs/train/runs/<run_timestamp>/checkpoints/last.ckpt
+uv run python src/train.py model=flaml_xgboost model/featurizer=summary_stats \
+    data/sampler=sweep_configs/rolling_72h_6h
 ```
 
-> [!NOTE]
-> *   `config.yaml` is the complete composed config saved under `.hydra/`, so we pass `--config-name config`.
-> *   Since the saved configuration is already composed, you must use the `+` prefix and quotes to append/override callbacks groups (e.g., `"+callbacks=[classification_metrics,confusion_matrix]"`). without the quotes, shells like `zsh` will fail with pattern matching errors.
+The sampler is `rolling_<lookback>_<bin>` for lookback 24/48/72/96/120 h and bin 4/6/8/12 h.
+The model part of the command for each table row:
 
----
+| Row | Overrides |
+|---|---|
+| LR / SVM / RF / XGBoost, raw window | `model=flaml_lr` · `flaml_svm` · `flaml_rf` · `flaml_xgboost` |
+| … on summary statistics | add `model/featurizer=summary_stats` |
+| … on catch22 features | add `model/featurizer=catch22` |
+| LSTM / Transformer | `model=lstm` · `model=transformer` |
+| TabPFN-3.5 frozen / fine-tuned | `model=flaml_tabpfn` · `model=flaml_tabpfn_ft` |
+| TiRex frozen / fine-tuned | `model=tirex trainer=gpu` · `model=tirex_ft trainer=gpu trainer.max_epochs=15` |
+| Chronos-Bolt frozen / fine-tuned | `model=chronos_bolt trainer=gpu` · `model=chronos_bolt_ft trainer=gpu trainer.max_epochs=15` |
 
+The whole grid (20 rows × 20 settings = 400 runs), or part of it:
+
+```bash
+bash scripts/run_rq2.sh                                   # everything
+SAMPLERS="72h_6h 120h_4h" bash scripts/run_rq2.sh xgboost_stats transformer
+```
+
+Add `logger=wandb` (or `EXTRA="logger=wandb"` for the script) to log to Weights & Biases.
+
+## Outputs and reference results
+
+Each run writes to `logs/<task_name>/runs/<timestamp>/`: `pooled_predictions.csv` (one row
+per test survey across all folds) and the logged metrics, including the `pooled/*` values
+the paper reports (balanced accuracy, AUROC, F1, precision, recall, specificity, AUPRC, with
+participant-level bootstrap CIs).
+
+`results/all_sweeps_results.csv` has the paper's runs (one row per run). The RQ2 table and
+RQ3 heatmap use its `modalities_choice == "step_distance"` rows: the table gives each
+pipeline's mean ± SD over the 20 settings, and the heatmap gives the per-setting values.
+`results/sweep_ids.json` maps the rows to their W&B sweeps.
+
+Re-runs match the cohort exactly. Metrics can still differ slightly, because FLAML's search
+runs on a wall-clock budget (so it depends on hardware) and GPU training is not bit-for-bit
+deterministic.
+
+## Layout
+
+```
+configs/   Hydra configs; the defaults are the fixed protocol above
+src/       data pipeline (cohort, sampling, scaling), models, evaluation, train.py
+scripts/   run_rq2.sh
+results/   reference results, row manifest, per-setting cohort
+tests/     pytest
+```
+
+The full research history (other modality sets, ablations, earlier models) is on the
+`model/sampler-model-sweep` branch.
