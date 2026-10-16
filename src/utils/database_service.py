@@ -21,6 +21,7 @@ except ImportError:
     pass
 
 from src.utils.pylogger import RankedLogger
+from src.utils.row_manifest import load_row_manifest
 
 logger = RankedLogger(__name__)
 
@@ -39,7 +40,8 @@ class DatabaseService:
                  ssh_user: Optional[str] = None,
                  ssh_pkey: Optional[str] = None,
                  ssh_key: Optional[str] = None,
-                 ssh_password: Optional[str] = None):
+                 ssh_password: Optional[str] = None,
+                 row_manifest: Optional[str] = None):
         """
         Initialize the database service.
 
@@ -55,6 +57,8 @@ class DatabaseService:
             ssh_pkey: Path to SSH private key file (e.g. ~/.ssh/id_rsa)
             ssh_key: Raw SSH private key string or path
             ssh_password: SSH password (if not using key-based authentication)
+            row_manifest: Optional path to a row manifest (see ``src.utils.row_manifest``);
+                extracted tables are then limited to the rows it pins
         """
         self.host = host if host is not None else os.getenv("LEMURS_POSTGRES_HOST", "localhost")
         self.port = int(port if port is not None else os.getenv("LEMURS_POSTGRES_PORT", 5432))
@@ -69,6 +73,8 @@ class DatabaseService:
         self.ssh_pkey = ssh_pkey if ssh_pkey is not None else os.getenv("LEMURS_SSH_KEY_PATH")
         self.ssh_key = ssh_key if ssh_key is not None else os.getenv("LEMURS_SSH_KEY")
         self.ssh_password = ssh_password if ssh_password is not None else os.getenv("LEMURS_SSH_PASSWORD")
+
+        self.row_manifest = load_row_manifest(row_manifest)
 
         self.connection = None
         self.tunnel: Optional[SSHTunnelForwarder] = None
@@ -256,6 +262,8 @@ class DatabaseService:
                 query = f"SELECT * FROM {table_name}"
 
             df = pd.read_sql(query, self.connection)
+            if self.row_manifest is not None:
+                df = self.row_manifest.apply(table_name, df)
             return df
 
         except Exception as e:

@@ -1,0 +1,123 @@
+{
+ "description": "Database rows read by the RQ1/RQ2 sweeps in results/all_sweeps_results.csv (rerun with the corrected participant exclusion list).",
+ "database_state_as_of_utc": "2026-10-07T17:58:18",
+ "excluded_user_ids": [
+  1,
+  2,
+  3,
+  10,
+  12,
+  21,
+  22,
+  30,
+  43,
+  44,
+  53,
+  54,
+  55
+ ],
+ "participants_with_surveys": [
+  5,
+  6,
+  7,
+  8,
+  9,
+  11,
+  14,
+  15,
+  16,
+  17,
+  18,
+  19,
+  20,
+  23,
+  24,
+  25,
+  26,
+  27,
+  28,
+  29,
+  31,
+  32,
+  33,
+  34,
+  35,
+  36,
+  37,
+  38,
+  39,
+  40,
+  41,
+  42,
+  45,
+  46,
+  47,
+  48,
+  49,
+  50,
+  52
+ ],
+ "tables": {
+  "survey_response": {
+   "id_ranges": [
+    [
+     1,
+     2259
+    ]
+   ],
+   "rows": 2259,
+   "sha256": "77586d52ef2c72c509029ea47f685be203f96ab393d56a40fa6e4752b29a46a0",
+   "latest_timestamp": "2026-10-07 11:58:32.655000"
+  },
+  "answer": {
+   "id_ranges": [
+    [
+     1,
+     73736
+    ]
+   ],
+   "rows": 73736,
+   "sha256": "015e7e18b13db465d4aaa3e31fa569e9bff1f28bc41dc53f7b431479d0668080"
+  },
+  "question": {
+   "id_ranges": [
+    [
+     0,
+     69
+    ]
+   ],
+   "rows": 70,
+   "sha256": "66e5ea6b50f92a592f2ef7ec21719d671730fd500f8193b753db1ddebdca05c2"
+  },
+  "step": {
+   "id_ranges": [
+    [
+     1,
+     4712
+    ],
+    [
+     4745,
+     16171
+    ]
+   ],
+   "rows": 16139,
+   "sha256": "aa520947ada0fd916b1a902b21735c996303718ebd72686e6e3a9570a598c704",
+   "latest_end_timestamp": "2026-10-07 12:36:43.211000"
+  },
+  "distance": {
+   "id_ranges": [
+    [
+     1,
+     2363
+    ],
+    [
+     2396,
+     13302
+    ]
+   ],
+   "rows": 13270,
+   "sha256": "cbaa332301b8fe97f8779ccdd8b9951c850c28379c37553aecf4167e5934e390",
+   "latest_end_timestamp": "2026-10-07 12:36:43.211000"
+  }
+ }
+}

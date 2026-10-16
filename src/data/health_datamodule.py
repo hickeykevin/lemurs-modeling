@@ -71,6 +71,7 @@ class HealthDataModule(LightningDataModule):
         exclude_user_ids: Optional[List[int]] = None,
         prebuilt_cohort: Optional[Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]] = None,
         purge_hours: Optional[float] = None,
+        row_manifest: Optional[str] = None,
         swap_val_test: bool = False,
         symmetric_purge_diagnostic: bool = False,
     ) -> None:
@@ -114,6 +115,8 @@ class HealthDataModule(LightningDataModule):
                 cyclical time features in the sequence sampler.
             exclude_user_ids (Optional[List[int]]): Users dropped from every stream.
                 Defaults to CohortBuilder's test/discontinued accounts.
+            row_manifest (Optional[str]): Path to a row manifest pinning which database
+                rows are read (see ``src.utils.row_manifest``). None reads whole tables.
             purge_hours (Optional[float]): Only used when split_mode="longitudinal".
                 Width of the gap dropped around each user's train/val and
                 val/test boundary, so a retained sample's sampler window
@@ -200,6 +203,7 @@ class HealthDataModule(LightningDataModule):
                     enrollment_lead_days=self.hparams.enrollment_lead_days,
                     enrollment_trail_days=self.hparams.enrollment_trail_days,
                     exclude_user_ids=self.hparams.exclude_user_ids,
+                    row_manifest=self.hparams.row_manifest,
                 )
                 modality_dfs, master_df, demographics_df = builder.build()
 

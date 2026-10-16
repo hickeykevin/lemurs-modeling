@@ -31,6 +31,7 @@ class CohortBuilder:
         enrollment_trail_days: float = 1.0,
         daily_survey_ids: Optional[List[int]] = None,
         exclude_user_ids: Optional[List[int]] = None,
+        row_manifest: Optional[str] = None,
     ):
         """Initializes the CohortBuilder.
 
@@ -52,6 +53,8 @@ class CohortBuilder:
                 Defaults to ``[0, 1]`` (morning, afternoon).
             exclude_user_ids: Users dropped from every stream. Defaults to
                 ``DEFAULT_EXCLUDED_USER_IDS``; pass ``[]`` to keep all users.
+            row_manifest: Optional path to a row manifest pinning which database rows
+                are read (see ``src.utils.row_manifest``).
         """
         self.modalities = modalities
         self.modality_cols = modality_cols
@@ -67,6 +70,7 @@ class CohortBuilder:
         self.exclude_user_ids = (
             self.DEFAULT_EXCLUDED_USER_IDS if exclude_user_ids is None else list(exclude_user_ids)
         )
+        self.row_manifest = row_manifest
 
     def build(self) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]:
         """Orchestrates the entire cohort building pipeline.
@@ -81,7 +85,7 @@ class CohortBuilder:
                 - pd.DataFrame: Combined target survey labels (master dataframe).
                 - pd.DataFrame: Cleaned demographics dataframe.
         """
-        db = DatabaseService()
+        db = DatabaseService(row_manifest=self.row_manifest)
         if not db.connect():
             raise Exception("Failed to connect to the database.")
 
