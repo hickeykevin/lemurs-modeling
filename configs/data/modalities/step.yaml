@@ -1,6 +1,0 @@
-# @package data
-defaults:
-  - /data/preprocessors@preprocessors: [step]
-
-modalities:
-  - step

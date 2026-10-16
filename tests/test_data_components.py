@@ -7,7 +7,7 @@ from src.data.components.cohort_splitter import CohortSplitter, lookback_hours_f
 from src.data.components.demographics_processor import DemographicsProcessor
 from src.data.components.health_dataset import HealthDataset
 
-from src.data.components.samplers import OffsetSampler
+from tests.helpers.fixtures import OffsetSampler
 
 
 @pytest.fixture
@@ -717,49 +717,11 @@ def test_step_preprocessor():
     assert processed_df.loc[1, "app_source"] == "iPhone"
 
 
-def test_calorie_preprocessor():
-    from src.data.components.preprocessing import CaloriePreprocessor
-    
-    df = pd.DataFrame({
-        "app_user_id": [1, 1, 1, 2, 2],
-        "start_timestamp": [
-            "2026-01-01 10:00:00", # study period (keep)
-            "2026-01-01 10:00:00", # identical start/end
-            "2025-08-01 10:00:00", # before study start (drop)
-            "2026-01-01 10:00:00", # android conversion (>=3000 -> divide by 1000)
-            "2026-01-01 10:00:00"  # duplicate of previous android record
-        ],
-        "end_timestamp": [
-            "2026-01-01 10:05:00",
-            "2026-01-01 10:00:00", # identical start/end (drop)
-            "2025-08-01 10:05:00",
-            "2026-01-01 10:05:00",
-            "2026-01-01 10:05:00"
-        ],
-        "calories": [200.0, 100.0, 150.0, 3200.0, 3200.0],
-        "app_source": ["iPhone", "iPhone", "iPhone", "health.connect.android", "health.connect.android"]
-    })
-    
-    preprocessor = CaloriePreprocessor()
-    processed_df = preprocessor(df)
-    
-    # Expected remaining rows:
-    # 1. Row 0 (user 1, keep, calories = 200.0)
-    # 2. Row 3 (user 2 android, keep and convert 3200.0 -> 3)
-    # (Row 1 identical times dropped, Row 2 before study start dropped, Row 4 duplicate dropped)
-    assert len(processed_df) == 2
-    processed_df = processed_df.reset_index(drop=True)
-    assert processed_df.loc[0, "app_user_id"] == 1
-    assert processed_df.loc[0, "calories"] == 200.0
-    assert processed_df.loc[1, "app_user_id"] == 2
-    assert processed_df.loc[1, "calories"] == 3
-
-
 @patch('src.data.components.cohort_builder.DatabaseService')
 def test_cohort_builder_with_sleep_features(mock_db_class):
     """Tests CohortBuilder extracting sleep questions 54 and 55 as string and calculating features."""
     from src.data.components.cohort_builder import CohortBuilder
-    from src.data.components.label_aggregators import MeanAggregator
+    from tests.helpers.fixtures import MeanAggregator
 
     survey_df = pd.DataFrame({
         'id': [101, 102],
@@ -808,8 +770,8 @@ def test_cohort_builder_with_sleep_features(mock_db_class):
 def test_datamodule_with_sleep_features(mock_db_class):
     """Tests HealthDataModule setup and HealthDataset context dimension with use_sleep=True."""
     from src.data.health_datamodule import HealthDataModule
-    from src.data.components.label_aggregators import MeanAggregator
-    from src.data.components.samplers import OffsetSampler
+    from tests.helpers.fixtures import MeanAggregator
+    from tests.helpers.fixtures import OffsetSampler
 
     # Define 4 users to support train/val/test splits without empty categories
     step_df = pd.DataFrame({
@@ -948,8 +910,8 @@ def test_distance_preprocessor():
 def test_datamodule_with_distance_modality(mock_db_class):
     """Tests HealthDataModule setup with distance modality and DistancePreprocessor."""
     from src.data.health_datamodule import HealthDataModule
-    from src.data.components.label_aggregators import MeanAggregator
-    from src.data.components.samplers import OffsetSampler
+    from tests.helpers.fixtures import MeanAggregator
+    from tests.helpers.fixtures import OffsetSampler
     from src.data.components.preprocessing import DistancePreprocessor
 
     step_df = pd.DataFrame({

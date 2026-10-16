@@ -8,6 +8,6 @@ defaults:
 
 _target_: src.models.health_module.HealthLitModule
 compile: false
-auto_class_weights: false
+auto_class_weights: true # inverse-frequency CE weights from each fold's training split
 class_weights: null
 use_sequence_data: true

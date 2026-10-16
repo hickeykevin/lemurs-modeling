@@ -1,51 +1,34 @@
 # @package _global_
 
-# specify here default configuration
-# order of defaults determines the order in which configs override each other
+# Defaults are the paper's fixed protocol (cyclical walk-forward CV, step + distance, dual
+# scaler, hours slept, 120 h purge, pinned database rows). A run picks a model, optionally a
+# featurizer, and a sampler; see README.md.
 defaults:
   - _self_
-  - data: default
-  - model: default
-  - callbacks: default
-  # Evaluation strategy: single (default), user_cv, walk_forward, or cyclical.
-  # Must come AFTER callbacks so a plan that requires particular callbacks can
-  # override them; an explicit `callbacks=...` on the command line still wins
-  # over both. See docs/eval_schemes.md for which data config pairs with which
-  # plan.
-  - eval_plan: single
-  - logger: csv # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
+  - data: walk_forward_cyclic
+  - model: flaml_xgboost
+  - callbacks: walk_forward
+  - eval_plan: cyclical
+  - logger: csv # logger=wandb to log to Weights & Biases
   - trainer: cpu
   - paths: default
   - extras: default
   - hydra: default
 
-  # experiment configs allow for version control of specific hyperparameters
-  # e.g. best hyperparameters for given model and datamodule
-  - experiment: null
-
-  # config for hyperparameter optimization
-  - hparams_search: null
-
   # optional local config for machine/user specific settings
   # it's optional since it doesn't need to exist and is excluded from version control
   - optional local: default
 
-  # debugging config (enable through command line, e.g. `python train.py debug=default)
-  - debug: null
-
 # task name, determines output directory path
-task_name: "train"
+task_name: "rq2"
 
 # tags to help you identify your experiments
-# you can overwrite this in experiment configs
-# overwrite from command line with `python train.py tags="[first_tag, second_tag]"`
-tags: ["dev"]
+tags: ["rq2"]
 
 # set False to skip model training
 train: True
 
 # evaluate on test set, using best model weights achieved during training
-# lightning chooses best weights based on the metric specified in checkpoint callback
 test: False
 
 # simply provide checkpoint path to resume training

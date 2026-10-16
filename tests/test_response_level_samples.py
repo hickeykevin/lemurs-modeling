@@ -6,14 +6,9 @@ import pytest
 from unittest.mock import patch
 
 from src.data.components.cohort_builder import CohortBuilder
-from src.data.components.label_aggregators import MeanAggregator
-from src.data.components.samplers import (
-    BlockSampler,
-    IntervalAwareSampler,
-    LagSampler,
-    OffsetSampler,
-    RollingSampler,
-)
+from tests.helpers.fixtures import MeanAggregator
+from src.data.components.samplers import RollingSampler
+from tests.helpers.fixtures import OffsetSampler
 from src.data.health_datamodule import HealthDataModule
 
 
@@ -169,17 +164,10 @@ def test_window_bounds_reported_by_each_sensor_sampler():
     for sampler in [
         RollingSampler(lookback_hours=24),
         OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
-        BlockSampler(lookback_days=1),
-        IntervalAwareSampler(),
     ]:
         bounds = sampler.window_bounds(ts)
         assert bounds is not None, type(sampler).__name__
         assert bounds[0] < bounds[1]
-
-
-def test_lag_sampler_reports_no_window():
-    """LagSampler reads no sensor data, so coverage gating must skip it."""
-    assert LagSampler().window_bounds(pd.Timestamp("2026-04-30 12:00:00")) is None
 
 
 def test_uncovered_samples_dropped(two_survey_data):
@@ -196,7 +184,7 @@ def test_uncovered_samples_dropped(two_survey_data):
         dm = HealthDataModule(
             exclude_user_ids=[],
             aggregator=MeanAggregator(question_ids=[2], threshold=1.0),
-            sampler=IntervalAwareSampler(bin_edges_hours=[0, 6, 12]),
+            sampler=RollingSampler(lookback_hours=12, resample_freq="6h"),
             collapse_strategy="none",
             train_val_test_split=(0.5, 0.25, 0.25),
             use_demographics=False,
@@ -219,7 +207,7 @@ def test_coverage_gate_disabled_keeps_everything(two_survey_data):
         dm = HealthDataModule(
             exclude_user_ids=[],
             aggregator=MeanAggregator(question_ids=[2], threshold=1.0),
-            sampler=IntervalAwareSampler(bin_edges_hours=[0, 6, 12]),
+            sampler=RollingSampler(lookback_hours=12, resample_freq="6h"),
             collapse_strategy="none",
             train_val_test_split=(0.5, 0.25, 0.25),
             use_demographics=False,
@@ -242,7 +230,7 @@ def test_survey_context_appended_to_demographics_vector(two_survey_data):
         dm = HealthDataModule(
             exclude_user_ids=[],
             aggregator=MeanAggregator(question_ids=[2], threshold=1.0),
-            sampler=IntervalAwareSampler(bin_edges_hours=[0, 6, 12]),
+            sampler=RollingSampler(lookback_hours=12, resample_freq="6h"),
             collapse_strategy="none",
             train_val_test_split=(0.5, 0.25, 0.25),
             use_demographics=False,
@@ -265,7 +253,7 @@ def test_referent_scaling_uses_training_statistics_only(two_survey_data):
         dm = HealthDataModule(
             exclude_user_ids=[],
             aggregator=MeanAggregator(question_ids=[2], threshold=1.0),
-            sampler=IntervalAwareSampler(bin_edges_hours=[0, 6, 12]),
+            sampler=RollingSampler(lookback_hours=12, resample_freq="6h"),
             collapse_strategy="none",
             train_val_test_split=(0.5, 0.25, 0.25),
             use_demographics=False,

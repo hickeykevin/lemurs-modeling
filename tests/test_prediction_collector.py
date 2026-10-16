@@ -16,8 +16,8 @@ import pytest
 import torch
 from lightning import Trainer
 
-from src.data.components.label_aggregators import MeanAggregator
-from src.data.components.samplers import OffsetSampler
+from tests.helpers.fixtures import MeanAggregator
+from tests.helpers.fixtures import OffsetSampler
 from src.data.walk_forward_health_datamodule import WalkForwardHealthDataModule
 from src.models.components.simple_lstm import SimpleLSTM
 from src.models.health_module import HealthLitModule

@@ -5,59 +5,39 @@ description = "LEMURS modeling package"
 requires-python = ">=3.12"
 dependencies = [
     "torch>=2.0.0",
-    "torchvision>=0.15.0",
     "lightning>=2.0.0",
     "torchmetrics>=0.11.4",
     "hydra-core==1.3.2",
     "hydra-colorlog==1.2.0",
-    "hydra-optuna-sweeper==1.2.0",
     "wandb",
     "rootutils",
-    "pre-commit",
     "rich",
     "pytest",
     "pandas",
-    "jupyter>=1.1.1",
     "psycopg2-binary>=2.9.11",
+    "sshtunnel>=0.4.0",
     "scikit-learn>=1.8.0",
     "flaml[automl]>=2.5.0",
-    "streamlit>=1.58.0",
-    "sshtunnel>=0.4.0",
-    "matplotlib>=3.11.1",
-    "seaborn>=0.13.2",
-    "torchaudio>=2.11.0",
-    "av>=18.0.0",
-    "soundfile>=0.14.0",
-    "pycatch22"
+    "pycatch22",
 ]
 
 [project.optional-dependencies]
-# For model=wbm (src/models/components/wbm_net.py): the pretrained OpenMHC/WBM encoder.
-# `mamba-ssm` is CUDA-only -- install this extra on a GPU cluster node, not for local
-# (e.g. Mac) development. `uv sync --extra wbm`.
-wbm = [
-    "huggingface_hub>=0.24.0",
-    "causal-conv1d>=1.4.0",
-    "mamba-ssm>=2.2.0",
+# Foundation models (one extra each): `uv sync --extra tabpfn --extra tirex --extra chronos`.
+# model=flaml_tabpfn / flaml_tabpfn_ft: Prior Labs' TabPFN-3.5. Weights: non-commercial
+# licence (Prior-Labs/tabpfn_3_5 on Hugging Face).
+tabpfn = [
+    "tabpfn==9.1.0",
 ]
-# For model=chronos2 (src/models/components/chronos2_net.py): the pretrained/fine-tuned
-# OpenMHC/Chronos-2 encoder. Pure PyTorch -- unlike `wbm`, this runs fine on CPU (slowly)
-# for local development, not just on a GPU cluster node. `uv sync --extra chronos2`.
-chronos2 = [
-    "huggingface_hub>=0.24.0",
-    "chronos-forecasting==2.3.0",
-]
-# For model=tirex (src/models/components/tirex_net.py): NX-AI's TiRex (xLSTM) forecasting
-# model, used as a frozen feature extractor. The base package runs on CPU; the optional
-# `tirex-ts[cuda]` kernels are not required. `uv sync --extra tirex`.
+# model=tirex / tirex_ft: NX-AI's TiRex (xLSTM). Runs on CPU; the `tirex-ts[cuda]` kernels
+# are not required.
 tirex = [
     "huggingface_hub>=0.24.0",
     "tirex-ts==1.4.2",
 ]
-# For model=tabpfn: Prior Labs' TabPFN-3.5 tabular foundation model (in-context learning,
-# no training). Weights: non-commercial licence (Prior-Labs/tabpfn_3_5 on Hugging Face).
-tabpfn = [
-    "tabpfn==9.1.0",
+# model=chronos_bolt / chronos_bolt_ft: Amazon's Chronos-Bolt (mini).
+chronos = [
+    "huggingface_hub>=0.24.0",
+    "chronos-forecasting==2.3.0",
 ]
 
 
@@ -94,11 +74,5 @@ explicit = true
 
 [tool.uv.sources]
 torch = [
-  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-]
-torchvision = [
-  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-]
-torchaudio = [
   { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]

@@ -3,8 +3,8 @@ import pandas as pd
 import torch
 from unittest.mock import MagicMock, patch
 from src.data.health_datamodule import HealthDataModule
-from src.data.components.label_aggregators import MeanAggregator, MaxAggregator
-from src.data.components.samplers import OffsetSampler
+from tests.helpers.fixtures import MaxAggregator, MeanAggregator
+from tests.helpers.fixtures import OffsetSampler
 
 @pytest.fixture
 def dummy_data():
@@ -257,7 +257,7 @@ def test_rule_based_aggregator_mixed_numeric_and_yes_no_rules():
 def test_datamodule_normalization(dummy_data):
     """Tests that the datamodule correctly fits and applies a scaler."""
     from sklearn.preprocessing import StandardScaler
-    from src.data.components.samplers import OffsetSampler
+    from tests.helpers.fixtures import OffsetSampler
     
     with patch('src.data.components.cohort_builder.DatabaseService') as mock_db_class:
         mock_db = mock_db_class.return_value
@@ -332,7 +332,7 @@ def test_rolling_sampler():
 
 def test_offset_sampler():
     """Tests that OffsetSampler correctly handles offsets from midnight."""
-    from src.data.components.samplers import OffsetSampler
+    from tests.helpers.fixtures import OffsetSampler
     
     # 1. Create dummy data: 48 hours of steps
     timestamps = pd.date_range("2023-01-01", periods=48, freq="h")
@@ -465,7 +465,7 @@ def test_subject_scaler_normalization(mock_db_class):
     """Tests that SubjectScaler standardizes features independently for each user."""
     from sklearn.preprocessing import StandardScaler
     from src.data.components.scalers import SubjectScaler
-    from src.data.components.samplers import OffsetSampler
+    from tests.helpers.fixtures import OffsetSampler
 
     # Four users on deliberately different step scales, so per-subject z-scoring
     # has something to normalise away. Four rather than two because splitting is
@@ -542,140 +542,6 @@ def test_subject_scaler_normalization(mock_db_class):
             sample = ds[i]
             seq = sample["features"]
             assert torch.allclose(seq[:, :1], expected_seq, atol=1e-5)
-
-
-def test_regression_aggregator():
-    """Tests that RegressionAggregator sums and shifts Likert scale questions correctly."""
-    from src.data.components.label_aggregators import RegressionAggregator
-    
-    df = pd.DataFrame({
-        'survey_response_id': [1, 1, 2, 2, 3],
-        'question_id':        [2, 4, 2, 4, 2],
-        'answer':             [2, 3, 1, 5, 1]
-    })
-    
-    agg = RegressionAggregator(likert_ids=[2, 4], shift_likert=True)
-    result = agg(df)
-    
-    assert result.loc[result['survey_response_id'] == 1, 'answer'].values[0] == 3.0
-    assert result.loc[result['survey_response_id'] == 2, 'answer'].values[0] == 4.0
-    assert result.loc[result['survey_response_id'] == 3, 'answer'].values[0] == 0.0
-
-    # Test without shift
-    agg_no_shift = RegressionAggregator(likert_ids=[2, 4], shift_likert=False)
-    result_no_shift = agg_no_shift(df)
-    assert result_no_shift.loc[result_no_shift['survey_response_id'] == 1, 'answer'].values[0] == 5.0
-    assert result_no_shift.loc[result_no_shift['survey_response_id'] == 2, 'answer'].values[0] == 6.0
-    assert result_no_shift.loc[result_no_shift['survey_response_id'] == 3, 'answer'].values[0] == 1.0
-
-    # Test auto-skipping shift if 0 is already present in the dataset (already 0-indexed)
-    df_zero = pd.DataFrame({
-        'survey_response_id': [1, 1, 2],
-        'question_id':        [2, 4, 2],
-        'answer':             [0, 3, 1]  # contains a 0
-    })
-    agg_auto_skip = RegressionAggregator(likert_ids=[2, 4], shift_likert=True)
-    result_auto_skip = agg_auto_skip(df_zero)
-    assert result_auto_skip.loc[result_auto_skip['survey_response_id'] == 1, 'answer'].values[0] == 3.0  # 0 + 3 = 3 (no shift applied)
-    assert result_auto_skip.loc[result_auto_skip['survey_response_id'] == 2, 'answer'].values[0] == 1.0  # 1 (no shift applied)
-
-
-
-@patch('src.data.components.cohort_builder.DatabaseService')
-def test_regression_datamodule_and_model(mock_db_class, dummy_data):
-    """Tests that the datamodule yields float targets, model trains in regression mode, and callbacks run."""
-    from functools import partial
-    from src.callbacks.evaluation_callbacks import RegressionMetricsCallback
-    from src.data.components.label_aggregators import RegressionAggregator
-    from src.models.components.simple_lstm import SimpleLSTM
-    from src.models.health_module import HealthRegressionLitModule
-
-
-
-
-    
-    mock_db = mock_db_class.return_value
-    mock_db.connect.return_value = True
-    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table]
-    
-    # Answers in dummy_data for q2 and q4 are all 1 or 2 (which shift to 0 or 1).
-    aggregator = RegressionAggregator(likert_ids=[2, 4])
-    dm = HealthDataModule(
-        exclude_user_ids=[],
-        aggregator=aggregator,
-        sampler=OffsetSampler(start_offset_hours=-24, end_offset_hours=0),
-        modalities=["step"]
-    )
-    dm.setup()
-    
-    # 1. Check datamodule targets
-    train_ds = dm.data_train
-    sample = train_ds[0]
-    seq, target = sample["features"], sample["targets"]
-    assert target.dtype == torch.float32
-    
-    # 2. Check model steps in regression mode
-    net = SimpleLSTM(input_size=seq.shape[-1], hidden_size=8, num_layers=1, output_size=1)
-    
-    # Setup optimizer partial
-    optimizer = partial(torch.optim.Adam, lr=0.001)
-    
-    model = HealthRegressionLitModule(
-        net=net,
-        optimizer=optimizer
-    )
-    
-    # Simulate a training step
-    batch = {
-        "features": seq.unsqueeze(0),
-        "targets": target.unsqueeze(0),
-        "user_indices": torch.tensor([0]),
-    }
-    loss = model.training_step(batch, 0)
-    assert loss is not None
-    assert loss.dtype == torch.float32
-
-    # 3. Verify regression metrics callback
-    callback = RegressionMetricsCallback(frequency=1, num_bootstraps=5, sampling_strategy="multinomial")
-    
-    # Mock trainer and model logging
-    trainer = MagicMock()
-    trainer.sanity_checking = False
-    trainer.current_epoch = 1
-    
-    model.log = MagicMock()
-    
-    # Simulate epoch start
-    callback.on_validation_epoch_start(trainer, model)
-    
-    # Create outputs for a batch of size 2 with different target values (e.g. 1.0 and 2.0)
-    batch_preds = torch.tensor([1.5, 3.5])
-    batch_targets = torch.tensor([1.0, 2.0])
-    batch = (None, batch_targets, None)
-    outputs = {"loss": torch.tensor(0.5), "preds": batch_preds, "targets": batch_targets}
-    
-    # Simulate batch end
-    callback.on_validation_batch_end(trainer, model, outputs, batch, 0)
-    
-    # Simulate epoch end
-    callback.on_validation_epoch_end(trainer, model)
-    
-    # Assert model.log was called for standard val/mse and val/mae (via metrics collection),
-    # plus val/mse_non_min and val/mae_non_min
-    # The minimum target is 1.0. The non-minimum targets are targets > 1.0 (which is [2.0]).
-    # Corresponding prediction is 3.5.
-    # Expected non-minimum MSE is (3.5 - 2.0)^2 = 2.25.
-    # Expected non-minimum MAE is |3.5 - 2.0| = 1.5.
-    model.log.assert_any_call("val/mse_non_min", torch.tensor(2.25), on_step=False, on_epoch=True, prog_bar=True)
-    model.log.assert_any_call("val/mae_non_min", torch.tensor(1.5), on_step=False, on_epoch=True, prog_bar=True)
-
-    # Also verify test hooks
-    callback.on_test_epoch_start(trainer, model)
-    callback.on_test_batch_end(trainer, model, outputs, batch, 0)
-    callback.on_test_epoch_end(trainer, model)
-    
-    model.log.assert_any_call("test/mse_non_min_mean", torch.tensor(2.25), on_step=False, on_epoch=True, prog_bar=True)
-    model.log.assert_any_call("test/mae_non_min_mean", torch.tensor(1.5), on_step=False, on_epoch=True, prog_bar=True)
 
 
 @patch('src.data.components.cohort_builder.DatabaseService')
@@ -1014,83 +880,6 @@ def test_cohort_builder_no_collapsing(mock_db_class):
     assert len(collapsed_sr) == 2
     assert 101 in collapsed_sr['id'].tolist()
     assert 102 in collapsed_sr['id'].tolist()
-
-
-def test_sleep_aggregator_logic():
-    """Tests that SleepAggregator correctly parses times, computes durations, and classifies them."""
-    from src.data.components.label_aggregators import SleepAggregator
-    
-    # Create sample answers for SleepAggregator (questions 54 & 55)
-    # response 1: 10:30 PM (22.5) to 7:00 AM (7.0) -> 8.5 hours -> class 1
-    # response 2: 1:00 AM (1.0) to 8:00 AM (8.0) -> 7.0 hours -> class 1
-    # response 3: 11:30 PM (23.5) to 4:00 AM (4.0) -> 4.5 hours -> class 0
-    # response 4: 10:00 PM (22.0) to 9:00 AM (9.0) -> 11.0 hours -> class 2
-    # response 5: missing awake answer -> should be dropped
-    # response 6: malformed format -> should be dropped
-    df = pd.DataFrame({
-        'survey_response_id': [1, 1, 2, 2, 3, 3, 4, 4, 5, 6, 6],
-        'question_id':        [54, 55, 54, 55, 54, 55, 54, 55, 54, 54, 55],
-        'answer':             ["10:30 PM", "07:00 AM", "1:00 AM", "8:00 AM", "11:30 PM", "4:00 AM", "10:00 PM", "9:00 AM", "11:00 PM", "bad time", "07:00 AM"]
-    })
-    
-    agg = SleepAggregator(asleep_id=54, awake_id=55)
-    result = agg(df)
-    
-    # 5 and 6 should be dropped because of missing/malformed info
-    assert len(result) == 4
-    assert result.loc[result['survey_response_id'] == 1, 'answer'].values[0] == 1
-    assert result.loc[result['survey_response_id'] == 2, 'answer'].values[0] == 1
-    assert result.loc[result['survey_response_id'] == 3, 'answer'].values[0] == 0
-    assert result.loc[result['survey_response_id'] == 4, 'answer'].values[0] == 2
-
-
-@patch('src.data.components.cohort_builder.DatabaseService')
-def test_cohort_builder_with_sleep_aggregator(mock_db_class):
-    """Tests CohortBuilder integration with SleepAggregator, ensuring strings are not dropped."""
-    from src.data.components.cohort_builder import CohortBuilder
-    from src.data.components.label_aggregators import SleepAggregator
-
-    survey_df = pd.DataFrame({
-        'id': [101, 102],
-        'app_user_id': [10, 10], # Use active/non-dropped users
-        'timestamp': pd.to_datetime(['2025-10-01 08:00:00', '2025-10-01 09:00:00'])
-    })
-    
-    answer_df = pd.DataFrame([
-        # response 101 has fall asleep
-        {'survey_response_id': 101, 'question_id': 54, 'answer': "10:00 PM"},
-        # response 102 has wake up
-        {'survey_response_id': 102, 'question_id': 55, 'answer': "07:00 AM"},
-    ])
-    
-    # The two responses are on the same day for user 10, so they will be collapsed
-    # Into one daily response containing both question 54 and question 55 answers.
-    dummy_data = {"step": pd.DataFrame(), "survey_response": survey_df, "answer": answer_df}
-    
-    mock_db = mock_db_class.return_value
-    mock_db.connect.return_value = True
-    mock_db.extract_from_database.side_effect = lambda table: dummy_data[table].copy()
-    
-    agg = SleepAggregator(asleep_id=54, awake_id=55)
-    
-    builder = CohortBuilder(
-        modalities=[],
-        modality_cols={},
-        preprocessors=None,
-        aggregator=agg,
-        os_filter='both',
-        collapse_strategy='mean'
-    )
-    
-    # Collapsed daily responses should preserve the string values and resolve them together
-    collapsed_sr, collapsed_ans = builder._collapse_daily_responses(survey_df, answer_df, mock_db)
-    
-    # They should collapse to 1 survey response
-    assert len(collapsed_sr) == 1
-    # Both question 54 and 55 answers should exist in the collapsed answers
-    assert len(collapsed_ans) == 2
-    assert "10:00 PM" in collapsed_ans['answer'].values
-    assert "07:00 AM" in collapsed_ans['answer'].values
 
 
 @patch('src.data.components.cohort_builder.DatabaseService')

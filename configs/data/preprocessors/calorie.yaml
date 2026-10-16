@@ -1,2 +1,0 @@
-calorie:
-  _target_: src.data.components.preprocessing.CaloriePreprocessor

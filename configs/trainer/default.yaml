@@ -3,7 +3,7 @@ _target_: lightning.pytorch.trainer.Trainer
 default_root_dir: ${paths.output_dir}
 
 min_epochs: 1 # prevents early stopping
-max_epochs: 10
+max_epochs: 75 # 15 for the fine-tuned foundation models (tirex_ft, chronos_bolt_ft)
 
 accelerator: cpu
 devices: 1
@@ -18,4 +18,4 @@ check_val_every_n_epoch: 1
 # makes training slower but gives more reproducibility than just setting seeds
 deterministic: False
 
-enable_checkpointing: True
+enable_checkpointing: False

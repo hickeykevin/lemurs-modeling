@@ -1,9 +1,9 @@
 defaults:
   - _self_
   - aggregator: suicide_risk
-  - sampler: sweep_configs/offset_48h_6h
+  - sampler: sweep_configs/rolling_72h_6h # lookback x bin: one of the 20 rolling_* configs
   - scaler: dual
-  - modalities: step
+  - modalities: step_distance
 
 _target_: src.data.walk_forward_health_datamodule.WalkForwardHealthDataModule
 
@@ -23,7 +23,7 @@ random_state: ${seed}
 os_filter: both # both, ios, android
 
 collapse_strategy: none
-require_sensor_data: false
+require_sensor_data: true # only surveys whose window has sensor data
 use_survey_context: false
 survey_context_mode: none
 include_time_features: false
@@ -33,12 +33,16 @@ use_age: false
 use_gender: false
 use_lgbt: false
 use_device_source: false
-use_sleep: false
-sleep_feature_mode: none
+use_sleep: true # hours slept is the only non-sensor feature
+sleep_feature_mode: hours_only
 
-purge_hours: null # gap (hours) purged at each fold boundary; null derives it from the sampler's lookback
+purge_hours: 120.0 # gap (hours) purged at each fold boundary: the longest lookback, for every sampler
 
-exclude_user_ids: null
+exclude_user_ids: null # null uses CohortBuilder.DEFAULT_EXCLUDED_USER_IDS
+
+# Database rows the paper's runs read (see src/utils/row_manifest.py and results/README.md).
+# null reads the current database instead.
+row_manifest: ${paths.root_dir}/results/row_manifest_2026-10-07.json
 
 # Hyperparameters carried from W&B sweep umdhgse9 (1291 runs, split_mode=
 # longitudinal), specifically its #1 leaderboard run (6yssfkcp, mean val

@@ -157,6 +157,8 @@ configs/local/default.yaml
 
 # Lock files
 *.lock
+# uv.lock pins the package versions the runs used
+!uv.lock
 
 # any csv files
 *.csv
@@ -177,3 +179,11 @@ reports/
 *.tex
 *.html
 *key
+# Paper drafts and local analysis: kept out of the repo
+working_paper/
+notebooks/
+test.txt
+
+# Reference results and the database row manifest are tracked
+!results/
+!results/*.csv

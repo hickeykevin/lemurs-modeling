@@ -1,5 +1,5 @@
 """Wraps NX-AI's pretrained TiRex forecasting model as a frozen feature extractor `net` for
-``HealthLitModule`` (``model=tirex``), alongside ``Chronos2EncoderNet``.
+``HealthLitModule`` (``model=tirex``).
 
 TiRex (Auer et al., NeurIPS 2025, "TiRex: Zero-Shot Forecasting Across Long and Short
 Horizons with Enhanced In-Context Learning") is a 35M-parameter xLSTM (12 sLSTM blocks,
@@ -18,7 +18,7 @@ Two deliberate departures:
 * The package's optional sample-statistics features are standardised with the statistics
   of whatever batch is passed in (``TiRexEmbedding._normalize_stats``), which here would
   mix test-set statistics into training features. Instead the same per-modality input
-  statistics as ``Chronos2EncoderNet`` (``mean/std/min/max/last``) are appended raw, and
+  statistics (``input_stats``: ``mean/std/min/max/last``) are appended raw, and
   the trained head learns their scale.
 * ``layer_pooling`` can also average the blocks or keep only the last one, to keep the
   representation small (all 12 blocks x 512 = 6,144 dims per modality).
@@ -52,7 +52,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.models.components.chronos2_net import INPUT_STAT_NAMES, Chronos2EncoderNet
+from src.models.components.input_stats import INPUT_STAT_NAMES, input_stats
 
 __all__ = ["DEFAULT_TIREX_REPO_ID", "TIREX_EMBED_DIM", "TIREX_NUM_BLOCKS", "TiRexEncoderNet"]
 
@@ -313,9 +313,9 @@ class TiRexEncoderNet(nn.Module):
             series = self.encoder_input(x)
             features.append(self._embed(series) if self.freeze_encoder else self._embed_trainable(series))
         if self.append_input_stats:
-            features.append(Chronos2EncoderNet.input_stats(x_sensor))
+            features.append(input_stats(x_sensor))
             if self.second_block == "subject" and self.second_cols is not None:
-                features.append(Chronos2EncoderNet.input_stats(x[:, :, self.second_cols]))
+                features.append(input_stats(x[:, :, self.second_cols]))
         if self.append_time_features and self.time_cols is not None:
             features.append(x[:, -1, self.time_cols])
         if demographics is not None:

@@ -231,60 +231,6 @@ def test_classification_metrics_callback_test_stage():
     assert "test/balanced_accuracy_var" in logged_keys
 
 
-def test_regression_metrics_callback_test_stage(tmp_path):
-    from src.callbacks.evaluation_callbacks import RegressionMetricsCallback
-    
-    # Arrange
-    callback = RegressionMetricsCallback(num_bootstraps=5, sampling_strategy="multinomial")
-    
-    trainer = MagicMock(spec=Trainer)
-    trainer.loggers = []
-    trainer.log_dir = str(tmp_path)
-    
-    pl_module = MagicMock(spec=LightningModule)
-    pl_module.device = torch.device("cpu")
-    
-    # Act
-    # Simulating test batch end and epoch end
-    outputs = {
-        "preds": torch.tensor([1.0, 2.0, 3.0]),
-        "targets": torch.tensor([1.2, 1.8, 3.1])
-    }
-    
-    callback.on_test_epoch_start(trainer, pl_module)
-    callback.on_test_batch_end(trainer, pl_module, outputs, batch=None, batch_idx=0)
-    callback.on_test_epoch_end(trainer, pl_module)
-    
-    # Assert
-    logged_keys = [call[0][0] for call in pl_module.log.call_args_list]
-    
-    # Standard regression metrics
-    assert "test/mse_mean" in logged_keys
-    assert "test/mse_std" in logged_keys
-    assert "test/mse_var" in logged_keys
-    
-    assert "test/mae_mean" in logged_keys
-    assert "test/mae_std" in logged_keys
-    assert "test/mae_var" in logged_keys
-    
-    # Non-minimum bootstrapped metrics
-    assert "test/mse_non_min_mean" in logged_keys
-    assert "test/mse_non_min_std" in logged_keys
-    assert "test/mse_non_min_var" in logged_keys
-    
-    assert "test/mae_non_min_mean" in logged_keys
-    assert "test/mae_non_min_std" in logged_keys
-    assert "test/mae_non_min_var" in logged_keys
-
-    # Check file output
-    log_file = tmp_path / "regression_metrics.txt"
-    assert log_file.exists()
-    content = log_file.read_text()
-    assert "=== Overall Regression Metrics (Test Epoch) ===" in content
-    assert "MSE Mean:" in content
-    assert "=== Regression Metrics for Targets > 1.2000 (Test Epoch) ===" in content
-
-
 def test_confusion_matrix_callback_test_stage_no_logger():
     # Arrange
     callback = ConfusionMatrixCallback(frequency=1)

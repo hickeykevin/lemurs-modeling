@@ -12,8 +12,8 @@ tests and test_health_datamodule.py's base-class tests).
 import pandas as pd
 import torch
 
-from src.data.components.label_aggregators import MeanAggregator
-from src.data.components.samplers import OffsetSampler
+from tests.helpers.fixtures import MeanAggregator
+from tests.helpers.fixtures import OffsetSampler
 from src.data.indexed_health_datamodule import IndexedHealthDataModule
 
 

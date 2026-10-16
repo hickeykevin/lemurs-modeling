@@ -360,8 +360,8 @@ def test_flaml_end_to_end_walk_forward_pipeline_with_demographics(tmp_path):
     import torch
     from lightning import Trainer
     from src.callbacks.prediction_collector import PredictionCollectorCallback
-    from src.data.components.label_aggregators import MeanAggregator
-    from src.data.components.samplers import OffsetSampler
+    from tests.helpers.fixtures import MeanAggregator
+    from tests.helpers.fixtures import OffsetSampler
     from src.data.walk_forward_health_datamodule import WalkForwardHealthDataModule
 
     users = (1, 2, 3, 4)
@@ -801,7 +801,7 @@ def test_flaml_featurizer_auto_offset_sampler():
     """Verify that OffsetSampler's 2 time features are correctly auto-excluded."""
     import torch
     from src.data.components.tabular_features import SummaryStatsFeaturizer
-    from src.data.components.samplers import OffsetSampler
+    from tests.helpers.fixtures import OffsetSampler
 
     B, T = 10, 8
     # 2 modalities + 2 time features = 4 columns

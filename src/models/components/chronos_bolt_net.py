@@ -20,7 +20,7 @@ The package's ``ChronosBoltPipeline.embed`` runs under ``torch.no_grad``, so thi
 ``model.encode`` directly: frozen embeddings are cached per series (keyed on standardised values,
 see ``TiRexEncoderNet.series_keys``), and with ``freeze_encoder=False`` the last
 ``finetune_blocks`` encoder blocks train with the head at ``encoder_lr_scale`` x the optimizer lr.
-Runs on CPU or GPU. Requires the ``chronos2`` extra (``chronos-forecasting``).
+Runs on CPU or GPU. Requires the ``chronos`` extra (``chronos-forecasting``).
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 
-from src.models.components.chronos2_net import INPUT_STAT_NAMES, Chronos2EncoderNet
+from src.models.components.input_stats import INPUT_STAT_NAMES, input_stats
 from src.models.components.tirex_net import TiRexEncoderNet
 
 __all__ = ["DEFAULT_BOLT_MODEL_ID", "BOLT_EMBED_DIMS", "BOLT_NUM_BLOCKS", "ChronosBoltEncoderNet"]
@@ -163,7 +163,7 @@ class ChronosBoltEncoderNet(nn.Module):
         try:
             from chronos import ChronosBoltPipeline
         except ImportError as e:
-            raise ImportError("ChronosBoltEncoderNet needs `chronos-forecasting`: `uv sync --extra chronos2`.") from e
+            raise ImportError("ChronosBoltEncoderNet needs `chronos-forecasting`: `uv sync --extra chronos`.") from e
         pipeline = ChronosBoltPipeline.from_pretrained(
             self.model_id, device_map="cuda" if device.type == "cuda" else "cpu",
             torch_dtype=getattr(torch, self.torch_dtype, torch.float32),
@@ -244,9 +244,9 @@ class ChronosBoltEncoderNet(nn.Module):
                 self.model.to(x.device)  # in place: optimizer references to its parameters stay valid
             features.append(self._embed(self.encoder_input(x)))
         if self.append_input_stats:
-            features.append(Chronos2EncoderNet.input_stats(x_sensor))
+            features.append(input_stats(x_sensor))
             if self.second_block == "subject" and self.second_cols is not None:
-                features.append(Chronos2EncoderNet.input_stats(x[:, :, self.second_cols]))
+                features.append(input_stats(x[:, :, self.second_cols]))
         if self.append_time_features and self.time_cols is not None:
             features.append(x[:, -1, self.time_cols])
         if demographics is not None:

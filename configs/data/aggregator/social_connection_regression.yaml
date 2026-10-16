@@ -1,4 +1,0 @@
-_target_: src.data.components.label_aggregators.RegressionAggregator
-likert_ids: [34, 35]
-shift_likert: true
-num_classes: 1
